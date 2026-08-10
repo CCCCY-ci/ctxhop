@@ -1,67 +1,100 @@
-# Multi-Language Coding Style and Architecture Guidelines (Coding Standards)
+# 代码风格与架构规范（AgentSync）
 
-This document defines the coding styles and architectural design conventions for the ElsevierTrackor project. These rules enforce **high cohesion, low coupling**, **readability**, **reusability**, and **maintainability**.
-
----
-
-## 1. Core Architecture Design Principles
-
-* **High Cohesion, Low Coupling**: Each module, package, or component must focus on a single responsibility. Reduce direct dependencies between components and interact using clean, well-defined interfaces or APIs.
-* **Reusability and Readability**: Avoid duplicate code (DRY - Don't Repeat Yourself). Use self-explanatory naming conventions for variables, functions, and classes. Document complex algorithms or custom business logic with clear comments.
-* **Maintainability**: Keep logic simple and easy to reason about. Favor composing small, single-purpose functions instead of writing long, monolithic routines.
+本项目是**纯 Go 命令行工具**：没有 HTTP 服务、没有数据库、没有前端、没有服务端。
+所有规则围绕一个前提展开——**这个程序会写用户 Agent 的数据目录，写错就是不可逆的损失**。
 
 ---
 
-## 2. Go Backend Coding Standards (Go Backend Guidelines)
+## 1. 分层与依赖方向
 
-The backend is built using **Go 1.22 + Gin + GORM** and follows Clean Architecture principles.
+目录结构对应 PRD §8.1，依赖严格单向，**内层不得反向依赖外层**：
 
-### 2.1 Directory Structure & Layering
+```
+cmd/agentsync/          CLI 入口：参数解析、交互、输出格式化。不含业务逻辑
+  └─> internal/syncer/  同步编排：推送、拉取、版本判定、分叉处理
+        ├─> internal/adapter/   Agent 适配层（每个 Agent 一个实现）
+        ├─> internal/remote/    存储后端（每个后端一个实现）
+        ├─> internal/crypto/    密钥派生与对象加解密
+        ├─> internal/project/   Git 项目识别与跨设备映射
+        └─> internal/config/    配置与凭据读写
+```
 
-Code is organized into separate layers, with dependency flow strictly one-way (outer to inner):
+### 1.1 硬约束
 
-* **Controller / Handler Layer** (`internal/api/handler/`): Responsible for parsing incoming HTTP requests (input binding and validation) and writing HTTP responses. No business logic belongs in this layer.
-* **Usecase / Service Layer** (`internal/usecase/` or `internal/service/`): Coordinates core business logic. Communicates with external subsystems (databases, caches, third-party APIs) through abstract interfaces.
-* **Repository / Model Layer** (`internal/model/` or `internal/db/`): Manages data persistence operations and direct database queries. Database entity models are defined in this layer.
+* `adapter` 与 `remote` **不得互相引用**，也不得引用 `syncer`。它们是叶子层。
+* `adapter` 不得知道任何加密、远端或同步概念；它只认识本地磁盘上的 Agent 数据。
+* `remote` 不得知道会话、项目、Agent 的存在；它只搬运不透明字节。
+* 跨层通信只能通过接口和纯数据结构，不得传递具体实现类型。
 
-### 2.2 Coding Standards
-1. **Error Handling**:
-   * **Never ignore errors**: Writing statements like `_ = db.Save(&user)` is strictly forbidden.
-   * **Explicit error propagation**: Always return errors to the calling function. Wrap errors using the `%w` verb to maintain the context of the error:
-     ```go
-     if err != nil {
-         return fmt.Errorf("failed to fetch paper %d: %w", paperID, err)
-     }
-     ```
-2. **Concurrency & Thread Safety**:
-   * Any resource shared across multiple goroutines (e.g., in-memory maps, rate-limiting caches) must be protected by a `sync.Mutex` or `sync.RWMutex`, or synchronized using Channels.
-   * All asynchronous goroutines must receive a `context.Context` to handle graceful timeouts and cascading cancellation.
-3. **Database Operations (GORM)**:
-   * Sensitive information (e.g., scraping Tracking Links) must be encrypted using GORM hooks (Encryption Hooks) before being written to the database.
-   * Multi-statement database operations must be wrapped in transactions using `db.Transaction(func(tx *gorm.DB) error { ... })` to ensure ACID compliance.
+### 1.2 新增 Agent 或后端
+
+必须只新增一个包并实现对应接口，**不得修改 `syncer` 的任何逻辑**。
+如果新增支持需要改动同步层，说明接口抽象错了，先改接口。
 
 ---
 
-## 3. React / TypeScript Coding Standards (Admin Dashboard Guidelines)
+## 2. 错误处理
 
-The admin panel is built using **React 18 + TypeScript + Vite + Vanilla CSS**.
+1. **禁止忽略错误。** `_ = f.Close()` 这类写法一律不允许。确实可忽略时，必须写注释说明为什么安全。
+2. **必须用 `%w` 包装并补充上下文**：
 
-### 3.1 Type Safety
-* **Avoid `any`**: All data structures, API responses, and component Props must have explicit `interface` or `type` definitions. If a type is unknown, use `unknown` and perform runtime type checks.
-* Enable TypeScript's `strict` mode to prevent common `null` and `undefined` runtime reference errors.
-
-### 3.2 Component Design & State Management
-* **Single Responsibility**: If a React component grows beyond 250 lines or manages too many unrelated states, decompose it into smaller sub-components.
-* **Custom Hooks**: Extract complex stateful logic and side effects (e.g., API requests, polling timers) from components into custom Hooks (e.g., `usePaperStatus`) to keep rendering logic clean.
-* **Style Isolation**: Structure Vanilla CSS using modular naming conventions or CSS Modules to prevent global class selector pollution.
+   ```go
+   if err != nil {
+       return fmt.Errorf("rewrite session %s: %w", ref.NativeID, err)
+   }
+   ```
+3. **面向用户的错误必须说明下一步该做什么**，而不只是描述失败。
+   反例：`connection failed`
+   正例：`cannot reach bucket "x": check endpoint and credentials with 'agentsync doctor'`
+4. **哨兵错误用 `errors.Is` 判断**，不得比较字符串。后端的"对象不存在"必须映射为 `remote.ErrNotFound`——把网络故障当成"对象不存在"会让同步层误判其他设备没有数据。
+5. **无法确认安全的情况一律中止并报错，不得猜测或自动修复**（BR-12）。
 
 ---
 
-## 4. WeChat Mini-Program Coding Standards (Frontend Guidelines)
+## 3. 文件系统操作
 
-The frontend mini-program uses native **JavaScript (Glass-easel component framework) + CSS**.
+这是本项目最危险的部分，规则最严。
 
-### 4.1 Core Guidelines
-* **Global State Isolation**: Do not store temporary variables in the global `globalData` object in `app.js`.
-* **Lifecycle Awareness**: Perform initialization and cleanup tasks in the appropriate page or component lifecycle callbacks (e.g., `onLoad`, `onUnload`, `attached`, `detached`) to prevent memory leaks.
-* **API Wrapper**: All network requests must pass through a unified Request wrapper. Centralize logic for token expiration, network error handling, and error toast alerts.
+1. **写入 Agent 数据目录必须原子**：先写同目录下的临时文件，`fsync`，再 `rename` 覆盖。中断只能留下旧状态或新状态（BR-11）。
+2. **不得锁定、移动或修改 Agent 正在使用的文件**。读取一律只读打开。
+3. **读取可能正在被写入的文件时，必须返回完整可解析的状态**。宁可少返回数据，也不得返回截断的记录。
+4. **路径处理统一用 `path/filepath`**，禁止手工拼接分隔符。跨平台改写逻辑必须显式处理分隔符、大小写敏感性、非 ASCII 与空格。
+5. **临时文件必须落在目标同一卷**，否则 `rename` 不是原子的。
+6. 任何写入前，必须能回答："如果这一步断电，用户的 Agent 还能用吗？"
+
+---
+
+## 4. 并发
+
+1. 跨 goroutine 共享的状态必须用 `sync.Mutex` / `sync.RWMutex` 保护，或改用 channel 传递。
+2. **所有可能阻塞的函数必须接受 `context.Context` 作为第一个参数**，并真正响应取消。
+3. 网络操作必须有超时，**不得无限等待**。后端不可达时快速失败（§11.2）。
+4. 不得在库代码里 `go func()` 后不管——启动者必须能等待其结束。
+
+---
+
+## 5. 安全相关的编码规则
+
+1. **明文不得离开本机**（P6）。任何写向 `remote` 的字节必须已加密。
+2. **日志与诊断输出不得包含**：会话正文、文件内容、绝对路径、项目名、Git 远端地址、凭据。
+   `agentsync doctor` 的输出必须默认就能安全地贴到公开 issue 里（BR-09）。
+3. **凭据不得以明文写入配置文件**，不得出现在进程参数里。
+4. **不得引入任何形式的遥测、崩溃上报或版本检查请求**（P7）。除用户配置的存储后端外，程序不得主动访问任何网络地址。这条没有例外，Code Review 必须检查。
+5. 密钥材料用完应尽快清零，不得写入日志或错误信息。
+
+---
+
+## 6. 依赖管理
+
+1. **CGO_ENABLED=0 是硬约束**。任何需要 cgo 的依赖一律不得引入（尤其注意 SQLite 绑定，必须用纯 Go 实现）。
+2. **新增第三方依赖需要理由**。标准库能做的事不引入依赖。加密、压缩、路径处理优先用标准库。
+3. 引入依赖前检查其许可证与 Apache-2.0 是否兼容。
+
+---
+
+## 7. 命名与注释
+
+1. **代码注释、文档注释、标识符一律用英文**——这是公开的 Apache-2.0 仓库，面向国际贡献者。（PRD 与 `.claude/rules/` 用中文，不受此限。）
+2. 导出的类型和函数必须有以名字开头的文档注释。
+3. **注释解释"为什么"，不解释"做了什么"**。尤其是那些看起来可以简化、实则不能的地方——必须写明约束来源，并引用 PRD 条款号，例如 `(§9.3, BR-10)`。
+4. 函数保持短小单一职责。超过 60 行通常意味着该拆了。

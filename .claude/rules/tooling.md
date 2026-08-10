@@ -1,72 +1,73 @@
-# AI Agent Tooling and Integration Standards (Tooling Rules)
-
-This document defines the rules for tool selection, browser automation, and AI workflows within the ElsevierTrackor project. These rules ensure maximum efficiency, prevent tool duplication, and protect the development flow.
+# 工具与协作规范（AgentSync）
 
 ---
 
-## 1. Tool Prioritization
+## 1. 工具优先级
 
-When performing file searches, repository analysis, or interacting with remote services, you must prioritize the tools already configured in the environment. Do not install alternatives or write redundant scripts.
+优先使用环境中已有的工具，不重复造轮子、不额外安装替代品。
 
-* **Code Search**: Always use **Ripgrep** (`rg` / the native `grep_search` tool) for fast pattern matching across directories. Avoid writing custom Node/Python scripts for parsing files.
-* **Code Navigation**: Utilize the **CodeGraph** index for semantic navigation and code relationship mapping.
-* **GitHub Interoperability**: Use the **GitHub CLI** (`gh`) for git-host interactions (e.g., creating PRs, checking issue status, managing releases) instead of calling the GitHub API manually via scripts.
-* **Pre-existing Skills**: Prioritize using the installed project skills (e.g., document parsing, automated art, data extraction tools) when executing related workflows.
-
----
-
-## 2. Browser Automation Constraints (Strict Chrome MCP Only)
-
-To prevent environment pollution and ensure execution stability, we restrict browser-based tasks to a single, verified toolset:
-
-> [!WARNING]
-> **When a web browser is required (for page navigation, screenshot capture, DOM parsing, or frontend testing), you are ONLY permitted to use the Chrome DevTools MCP server tools.**
-
-* **Prohibited Tools**: Using **Playwright** (or any other standalone headless browser driver/library) is **strictly forbidden** for browsing operations in this repository.
-* **Approved Workflow**: Interact with the locally running Chrome instance via the devtools MCP tools (e.g., `mcp__chrome-devtools__navigate_page`, `mcp__chrome-devtools__evaluate_script`, `mcp__chrome-devtools__take_screenshot`).
+| 场景 | 使用 |
+|---|---|
+| 代码搜索 | Ripgrep (`rg`) / 原生 grep 工具，不写脚本解析文件 |
+| 文件查找 | glob 工具，不用 `find -exec` |
+| GitHub 交互 | GitHub CLI (`gh`)，不手工调 API |
+| 浏览器操作 | **仅限 Chrome DevTools MCP**，禁止 Playwright 等独立 headless 驱动 |
 
 ---
 
-## 3. Code Review Guidelines
+## 2. Go 工具链
 
-Code reviews must be used strategically to protect developer productivity and maintain a high-quality main branch.
+提交前必须通过：
 
-* **Code Review Timing**: Code reviews must be performed **at the Pull Request (PR) stage, immediately before merging** into the main branch.
-* **Prohibited Timing**: **Do not** run code review plugins, workflows, or trigger comprehensive code reviews during active coding (Phase 2 of the development lifecycle). Doing so disrupts implementation flow and generates noisy feedback.
-* **Objective**: Focus reviews on structural design, conformance to code styles, error handling correctness, and test coverage verification before final integration.
+```bash
+gofmt -l .              # 无输出
+go vet ./...            # 通过
+go test -race ./...     # 通过
+./scripts/build.sh      # 六平台编译通过
+```
 
----
-
-## 4. UI/UX Design & Aesthetics (ui-ux-pro-max)
-
-* **UI/UX Design Skill**: When designing frontend components, mockups, dashboards, or addressing layout aesthetics, you are encouraged to use the **ui-ux-pro-max** skill.
-* **Aesthetic Standard**: Use it to enforce modern layout rules, responsive design systems, and visually striking components matching the project's premium design goals.
-
----
-
-## 5. Multi-Agent Development and Progress Reporting Standards
-
-To ensure systematic and controlled execution of complex coding tasks, development should follow a hierarchical multi-agent collaboration model:
-* **Role Division**:
-  * **Main Agent (Coordinator)**: Acts as the project manager and architect. Leads the planning, sets direction, designs specs, controls progress, and performs final verification. The Main Agent does not directly write heavy implementation code, leaving concrete execution to sub-agents.
-  * **Sub-Agents (Executors)**: Dedicated to specific, scoped coding, research, or testing tasks as delegated by the Main Agent.
-* **Coordination & Progress Monitoring**:
-  * **Sub-Agent Delegation**: Delegate concrete implementation tasks to specialized sub-agents with clear, decoupled instructions and narrow scope.
-  * **Periodic Progress Reporting**: The Main Agent must actively monitor sub-agents' status and periodically report execution progress and milestones back to the user, keeping the workflow transparent and under control.
+* **格式化只用 `gofmt`**，不引入其他格式化器。
+* 静态检查可用 `staticcheck`，但其结论不得凌驾于本规范之上。
+* **不得引入需要 cgo 的工具或依赖**（见 code_style.md §6）。
 
 ---
 
-## 6. Guidelines for User Consultation and Decision Making (Interactive Clarification)
+## 3. Code Review 时机
 
-To resolve design ambiguities, clarify underspecified requirements, or assist the user when they seek recommendations, you must leverage the `ask_question` tool:
-* **Trigger Conditions**: Call the `ask_question` tool in the following scenarios:
-  * When critical implementation details or design options require user feedback/selection.
-  * When the user's requirements are ambiguous or key choices are open-ended.
-  * When the user explicitly requests recommendations or lacks initial ideas for a solution.
-* **Best Practices**:
-  * Formulate concise, distinct options written as the user's direct response (rather than describing the agent's actions).
-  * If the agent has a recommendation, list it first and prefix it with `(Recommended)`.
-  * Avoid using the tool for trivial yes/no questions; use standard text communication instead.
+* **在 PR 阶段、合并前**执行 Code Review。
+* **不要在编码过程中**触发完整 Code Review——会打断实现节奏并产生噪音。
+* Review 重点：分层是否被破坏、错误处理是否正确、文件写入是否原子、有无明文外泄、有无网络请求、测试是否覆盖失败路径。
 
+### 3.1 本项目的 Review 红线
 
+以下任意一条命中即不得合并：
 
+- [ ] 引入了遥测、崩溃上报或任何非用户配置的网络请求
+- [ ] 明文或凭据可能离开本机
+- [ ] 诊断/日志输出包含绝对路径、项目名或会话内容
+- [ ] 对 Agent 数据目录的非原子写入
+- [ ] 引入 cgo 依赖
+- [ ] 真实会话数据进入仓库
+- [ ] `adapter` 或 `remote` 反向依赖上层
+
+---
+
+## 4. 子 Agent 的使用
+
+**默认不使用子 Agent。** 本项目当前阶段任务边界清晰、上下文集中，拆分给冷启动的子 Agent 通常得不偿失。
+
+仅在用户明确要求时使用。使用时必须给出足够自包含的任务描述，并向用户汇报结果。
+
+---
+
+## 5. 需要用户决策时
+
+遇到以下情况，用提问工具让用户选择，而不是自己假设：
+
+* 关键实现细节或设计方案有多个合理选项，且选择会导致明显不同的结果
+* 需求存在歧义，不同理解会做出不同的东西
+* 用户明确征求建议
+
+反之，**有明显默认答案的选择直接做，不要问**——说明你选了什么、为什么，然后继续。
+
+提问时把推荐项放第一位并标注"（推荐）"。

@@ -1,51 +1,46 @@
-# Git Version Control and Branching Standards (Git Rules)
-
-This document defines the branching model, commit message specifications, and Pull Request (PR) workflow for the ElsevierTrackor project. These rules ensure a clean, traceable repository history while safeguarding the absolute stability of the main branch.
+# Git 分支与提交规范（AgentSync）
 
 ---
 
-## 1. Branching Strategy
+## 1. 分支策略
 
-### 1.1 Protected Main Branch
-* **Branch Name**: `main` (or `master`).
-* **Core Principle**: The main branch reflects production-ready code and must remain **deployable at all times**.
-* **Constraints**: **Direct commits to the main branch are strictly prohibited.** Code can only be merged into the main branch via Pull Requests (PRs) that have passed all automated tests, manual acceptance, and code review.
+### 1.1 受保护的 main
 
-### 1.2 Development and Fix Branches
-All new features and bug fixes must be developed in dedicated branches created from the latest `main` branch. Branch names must use the following prefixes:
+* `main` 必须始终可构建、可发布。
+* **禁止直接向 main 提交**（仓库初始化提交除外）。所有改动通过 PR 合入。
 
-| Branch Prefix | Use Case | Example |
-| :--- | :--- | :--- |
-| `feature/` | Development of new features and requirements | `feature/user-notification-settings` |
-| `bugfix/` | Resolving bugs identified during testing, QA, or normal operations | `bugfix/crawler-elsevier-selector-fix` |
-| `hotfix/` | Emergency hotfixes for critical production issues (branched from `main`, merged back immediately) | `hotfix/session-leak-redis-limit` |
-| `refactor/` | Code refactoring that does not alter any business functionality or API behavior | `refactor/api-response-wrapper` |
+### 1.2 分支命名
 
-### 1.3 分支必须从最新的 `origin/main` 切出（不要从本地 `main`）
+| 前缀 | 用途 | 示例 |
+|---|---|---|
+| `feature/` | 新功能 | `feature/s3-remote-driver` |
+| `fix/` | 缺陷修复 | `fix/path-rewrite-unc-prefix` |
+| `refactor/` | 不改变行为的重构 | `refactor/extract-shard-reader` |
+| `docs/` | 只改文档 | `docs/prd-conflict-semantics` |
+| `poc/` | 可行性验证，不要求达到生产质量 | `poc/claude-code-cross-device` |
+
+### 1.3 必须从最新的 `origin/main` 切出
 
 > [!WARNING]
-> **永远从最新的远端 `origin/main` 创建分支，而不是本地 `main`。** 本地 `main` 可能落后/领先/分叉，带着**尚未推送、尚未验收**的本地提交。从这种本地 `main` 切分支，会把那些无关提交一起带进你的 PR；**squash 合并会把分支上所有非 base 提交打包成一个 commit**，于是一堆未验收的活被连同你的功能一起合并并触发 CI 部署到 prod。（本规则源于一次真实事故：一个 captcha PR 因基点错误，连带把 27 个未推送提交一起部署了。）
+> **永远从 `origin/main` 创建分支，而不是本地 `main`。**
+> 本地 `main` 可能落后、领先或分叉，带着尚未推送、尚未验收的提交。从它切分支会把无关提交带进 PR，而 squash 合并会把分支上所有非 base 提交打包成一个 commit 合入。
 
-强制做法：
 ```bash
 git fetch origin
-git checkout -b feature/your-feature-name origin/main   # 直接以 origin/main 为基点
+git checkout -b feature/your-feature origin/main
 ```
-**推送/开 PR 前必须自检提交范围**，确认只含本次预期改动：
+
+推送或开 PR 前必须自检提交范围：
+
 ```bash
-git log --oneline origin/main..HEAD   # 只应看到本次功能的提交；混入无关提交 = 基点错了
+git log --oneline origin/main..HEAD   # 只应看到本次功能的提交
 ```
-若发现混入无关/未验收提交，**先停下**，把分支 rebase 到 `origin/main` 或重切，不要直接合并。
+
+发现混入无关提交，**先停下**，rebase 到 `origin/main` 或重切分支。
 
 ---
 
-## 2. Commit Message Convention (Angular Specification)
-
-Every commit message **must** strictly adhere to the **Angular Team Commit Specification**. Commits without a type prefix or descriptive header are prohibited.
-
-### 2.1 Commit Message Format
-
-A complete commit message consists of three parts: a **Header** (required), a **Body** (optional), and a **Footer** (optional).
+## 2. 提交信息（Angular 规范）
 
 ```text
 <type>(<scope>): <subject>
@@ -56,104 +51,75 @@ A complete commit message consists of three parts: a **Header** (required), a **
 ```
 
 > [!IMPORTANT]
-> **Every commit must start with a `<type>` prefix. The Header (the first line) must not exceed 50 characters.**
+> 每个提交必须有 `<type>` 前缀，Header（首行）不超过 50 字符。
 
-### 2.2 Header Components
+### 2.1 Type
 
-#### 2.2.1 Type (Mandatory)
-You must use one of the following official Angular commit types:
+`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`
 
-* `feat`: A new feature
-* `fix`: A bug fix
-* `docs`: Documentation-only changes
-* `style`: Code formatting changes (white-space, formatting, missing semi-colons, etc.; no logic change)
-* `refactor`: A code change that neither fixes a bug nor adds a feature
-* `perf`: A code change that improves performance or user experience
-* `test`: Adding missing tests or correcting existing tests
-* `build`: Changes that affect the build system or external dependencies (e.g., npm, webpack, go mod updates)
-* `ci`: Changes to CI configuration files and scripts (e.g., GitHub Actions, GitLab CI)
-* `chore`: Other auxiliary changes that do not modify src or test files (e.g., config changes, task logs)
-* `revert`: Reverts a previous commit
+### 2.2 Scope（推荐填写）
 
-#### 2.2.2 Scope (Optional)
-Identifies the specific module or area affected by the commit. In a monorepo, specifying the scope is highly recommended. Examples:
-`backend`, `admin`, `frontend`, `crawler`, `db`.
+按包名：`adapter` `remote` `crypto` `syncer` `project` `config` `cli` `repo` `docs`
 
-#### 2.2.3 Subject (Mandatory)
-* A concise summary of the changes.
-* Do not capitalize the first letter of the description.
-* Do not end the subject line with a period.
+### 2.3 Subject
 
----
+简明描述；首字母不大写；结尾不加句号。
 
-### 2.3 Body & Footer Components (Optional)
+### 2.4 Body
 
-* **Body**: Explains the motivation behind the change and describes the implementation details. It is **highly recommended** for complex refactoring or significant logical updates.
-* **Footer**: Used for the following scenarios:
-  1. **Breaking Changes**: Must start with `BREAKING CHANGE: ` followed by a detailed description of what has changed and migration instructions.
-  2. **Referencing/Closing Issues**: Mention related bug IDs or tasks, e.g., `Closes #123` or `Fixes #456`.
+**复杂改动必须写 Body，解释"为什么"而不是"改了什么"**（改了什么看 diff 就行）。
+涉及 PRD 约束的改动，在 Body 中引用条款号。
 
----
+### 2.5 示例
 
-### 2.4 Complete Examples
-
-#### Example 1: Standard Feature with Scope
 ```text
-feat(backend): add resend email notification channel for admin alerts
+feat(adapter): rewrite absolute paths on claude code restore
+
+Session bodies embed the source machine's working directory in several
+places, and the project directory name itself encodes the absolute path.
+A plain copy therefore lands in a project the agent cannot resolve.
+
+Paths outside the project root are left untouched rather than guessed
+(§9.3, BR-10).
 ```
 
-#### Example 2: Bug Fix with Body
 ```text
-fix(crawler): fix target selector parsing for Wiley publisher
+fix(remote): map s3 NoSuchKey to ErrNotFound
 
-The publisher changed the class name of the tracking status container from '.status-box' to '.status-container-new'. Updated the crawler selector to keep parsing stable.
-```
-
-#### Example 3: Refactoring with Breaking Changes in Footer
-```text
-refactor(api): change user login response structure
-
-BREAKING CHANGE: The `user_token` field in the response is now renamed to `token` for consistency across services.
+Transport failures were surfacing as "not found", which made the sync
+layer conclude the other device had pushed nothing and skip a fast
+forward.
 ```
 
 ---
 
-## 3. Pull Request (PR) Standard Workflow
+## 3. PR 流程
 
-To maintain code quality and integrate future CI/CD processes, all changes must follow this standard workflow:
+1. 从 `origin/main` 切分支
+2. 按 Spec 开发（见 workflow.md），本地测试达标
+3. `git commit`（本地提交）
+4. **用户确认后**才 `git push`
+5. 开 PR，说明改动动机与验证方式
+6. Code Review 通过后 **Squash and Merge**，删除分支
+7. 发布节点在 main 上打 SemVer tag（`v0.1.0`）
 
-```mermaid
-graph TD
-    A[Create branch from main] --> B[Local development & Spec design]
-    B --> C[Run local tests: achieve 90%+ coverage]
-    C --> D[Push branch to remote repository]
-    D --> E[Open PR to main branch]
-    E --> F[PR code review & Smoke testing]
-    F --> G[Merge PR and delete branch]
-    G --> H[Tag release and deploy]
-```
+### 3.1 PR 前自检清单
 
-### 3.1 Step-by-Step Guide
-1. **Branch Creation**: Create a branch off the latest **`origin/main`**（见 §1.3，**不要**依赖可能分叉的本地 `main`）:
-   ```bash
-   git fetch origin
-   git checkout -b feature/your-feature-name origin/main
-   ```
-2. **Local Development**: Write your code according to style rules, author the feature `spec` document, and prepare test cases.
-3. **Local Testing**: Run unit and integration tests to ensure code coverage meets the 90%+ target.
-4. **Push Changes**: Commit using the Angular standard and push to remote:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-5. **Version Bump Before PR**: When the user says to "push", "create PR", "push 上去创建 PR", or equivalent, update the WeChat Mini Program version before pushing unless the user explicitly says not to.
-   * Source of truth: `frontend/utils/env.js`, constant `APP_VERSION`.
-   * Default rule: increment the patch version by 1 (for example, `2.0.8` -> `2.0.9`).
-   * Explicit override: if the user specifies a target version, use that exact version instead of auto-incrementing.
-   * Commit the version bump as part of the PR branch before pushing.
-6. **Open a PR**: Create a Pull Request from `feature/your-feature-name` to `main` on the repository hosting platform.
-   * The PR title or body must include the Mini Program version from `frontend/utils/env.js` (for example, `Version: v2.0.9`).
-7. **Acceptance and Merging**:
-   * Verify all tests pass, edge cases are addressed, and no security vulnerabilities exist.
-   * Merge the PR (we recommend `Squash and Merge` to keep the main branch history clean).
-8. **Release Tagging**:
-   * Tag major merges on the main branch using Semantic Versioning (e.g., `v1.2.0`) to mark stable deployments.
+- [ ] `gofmt -l .` 无输出
+- [ ] `go vet ./...` 通过
+- [ ] `go test -race -cover ./...` 通过且覆盖率达标
+- [ ] `./scripts/build.sh` 六平台全部编译通过
+- [ ] 无新增 cgo 依赖
+- [ ] 无遥测、无对外网络请求
+- [ ] 无真实会话数据、无凭据、无绝对路径进入仓库
+- [ ] 受影响的文档已同步更新
+
+---
+
+## 4. 关于推送
+
+本仓库的 push **不会触发任何生产部署**（没有服务端）。但仍然遵守：
+
+> **未经用户明确确认，不执行 `git push`。**
+
+原因是 push 到公开仓库不可撤销——一旦推上去，泄露的内容会进入 Git 历史和各种镜像。

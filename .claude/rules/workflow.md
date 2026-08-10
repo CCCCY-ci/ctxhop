@@ -1,113 +1,102 @@
-# Standard Development and Spec Design Workflow (Workflow Rules)
-
-This document details the "Spec-First" design process and the "Test-Directed Development" methodology for the ElsevierTrackor project. These rules ensure that all development is structured, pre-designed, and verified, enforcing that code is built to satisfy tests.
+# 开发流程规范（AgentSync）
 
 ---
 
-## 1. Core Mindset: Test-Directed Development
+## 1. 核心心态：为测试而设计
 
-We adhere to the following development philosophy:
-> [!IMPORTANT]
-> **We build code to pass the tests, rather than writing tests to pass the code.**
+> **先设计边界，再写实现；代码为通过测试而写，而不是测试为通过代码而写。**
 
-* **Proactive Boundary Analysis**: Before writing the first line of implementation, you must explicitly design for all edge cases, error conditions, and successful execution paths.
-* **Inherent Robustness**: Code should be designed from the start to handle unexpected inputs, network timeouts, database connection drops, and other errors, rather than patching code later simply to satisfy test coverage.
+写第一行实现之前，必须先想清楚：失败路径有哪些？中断会发生什么？Agent 正在写这个文件怎么办？后端半路挂了怎么办？
 
----
-
-## 2. Core Process: Spec-First Development
-
-For all non-trivial features or structural modifications, **never write code immediately**. You must first author a functional specification document `[feature-name]-spec.md` under the `/docs/specs/` directory (create this folder if it does not exist).
-
-A standard Spec document must cover the following areas:
-
-### 2.1 Requirements and Functional Scope
-* **Functional Description**: What problem does this new feature solve? What is the user journey?
-* **Interaction Flow**: Define UI interaction flows (e.g., page navigation in the WeChat Mini-Program, confirmation dialogs in the Admin panel).
-
-### 2.2 Database and Data Flow Design
-* **Schema Modifications**: Define new tables, columns, indexes, types, constraints, and default values.
-* **Data Flow**: Detail data serialization and flow from the client API request through the Controller (Handler) -> Business logic (Usecase) -> Data persistence (Repository/DB).
-
-### 2.3 Test Cases and Boundary Design
-* **Happy Path**: List inputs and expected outputs for standard successful scenarios.
-* **Edge Cases and Failure Scenarios**:
-  * **Input Validation**: Minimum/maximum character lengths, empty inputs, null validations, special character injections, out-of-range numerical bounds.
-  * **Concurrency & Timing**: Double-submit requests (idempotency checks), high-frequency request limits (rate limiting).
-  * **External Dependency Failures**: What happens when Redis is unavailable? What happens if third-party APIs time out or return 500s (e.g., publisher page DOM changes, Aliyun Captcha validation failures, Resend email dispatch issues)?
+本项目的默认假设是**一切都会失败**：网络会断、进程会被杀、Agent 会更新、文件会损坏、用户会同时开两台机器。
 
 ---
 
-## 3. Standard Development Lifecycle
-
-The implementation of any feature must cycle through the following five standard phases:
-
-```text
-┌────────────────┐      ┌────────────────┐      ┌────────────────┐      ┌────────────────┐      ┌────────────────┐
-│  1. Design     │ ──>  │  2. Coding     │ ──>  │  3. Testing    │ ──>  │  4. Acceptance │ ──>  │   5. PR &      │
-│  (Write Spec)  │      │ (Implement)    │      │ (Local Tests)  │      │ (Smoke Tests)  │      │   Release      │
-└────────────────┘      └────────────────┘      └────────────────┘      └────────────────┘      └────────────────┘
-```
-
-### 3.1 Phase 1: Design
-* Clarify requirements and write the feature `spec` document in `docs/specs/`.
-* Define test cases and map out how to achieve 90%+ code coverage.
-* Review the architecture to ensure high cohesion and low coupling.
-
-### 3.2 Phase 2: Coding (Implementation)
-* Write the code according to the Spec, checking against the defined boundary conditions as you implement each component.
-* Write local test code (note that test files are kept local and **not committed** to Git; see the [Testing guidelines](file:///d:/AntigravityProjects/ElsevierTrackor/.claude/rules/testing.md)).
-
-### 3.3 Phase 3: Testing
-* Run unit and integration tests locally, check test reports, and review code coverage.
-* If coverage is below 90% or a boundary test fails, optimize the implementation until all tests pass.
-
-### 3.4 Phase 4: Acceptance
-* Execute smoke tests (Smoke Test) or perform manual end-to-end user flow verification.
-* Verify extreme scenarios and boundary states to guarantee that the system behavior aligns perfectly with the Spec definition.
-
-### 3.5 Phase 5: PR & Release
+## 2. PoC 门控
 
 > [!WARNING]
-> **Push 触发 CI/CD 自动部署**：任何 `git push` 到远端仓库都会触发 GitHub Actions，自动打包并重启生产服务器。**严禁在用户明确确认本地验收通过前执行 push。**
+> **不得实现可行性尚未验证的功能。**
 
-标准流程：
-1. 开发完成后立即 `git commit`（本地提交，**不 push**）。
-2. 用户在本地完成验收测试（Smoke Test / 真机调试）。
-3. 用户明确说"可以提交" / "push" / "发 PR"后，执行 `git push` 并创建 Pull Request。
-4. 在远端仓库完成 Code Review，通过后合并到 main 分支，CI/CD 自动部署。
+PRD §17 定义了四个 PoC。规则：
 
----
+* **PoC-1（跨设备跨路径恢复）未通过前**，不得实现 `syncer` 的恢复逻辑——整个产品的前提取决于它。
+* **PoC-2（工作区指纹）未通过前**，不得实现一致性检查的产品化逻辑。
+* **PoC-4（Codex）未通过前**，不得编写任何向 Codex 本地状态写入的代码。
 
-## 4. Command Execution and Scripting Standard (Unified Shell)
-
-To ensure cross-platform compatibility and maintain clean scripts across local development and CI/CD environments, all commands, documentation references, and shell scripts **must be unified on Bash**.
-
-### 4.1 Shell Selection: Bash over PowerShell
-
-| Aspect | Bash (Unified Standard) | PowerShell |
-| :--- | :--- | :--- |
-| **Cross-Platform** | Yes (Linux, macOS, Windows via Git Bash/WSL) | Primarily Windows-focused (requires installation on Linux/macOS) |
-| **CI/CD Compatibility** | Native (Default runner shell on GitHub Actions/GitLab CI) | Requires explicit runner setup |
-| **Syntax** | POSIX-compliant, industry standard for web/Go | Verbose, object-oriented syntax |
-
-### 4.2 Guidelines for Commands
-
-1. **Path Separators**: Always use forward slashes (`/`) for paths (e.g., `cd backend/cmd/server`), which Bash interprets correctly on all platforms. Avoid backslashes (`\`).
-2. **Environment Variables**: Reference variables using the `$VARIABLE_NAME` syntax (e.g., `APP_ENV=prod go run main.go`) instead of `$env:VARIABLE_NAME`.
-3. **Common Utilities**: Use standard GNU/Linux commands (e.g., `rm -rf`, `mkdir -p`, `grep`, `cat`) instead of PowerShell cmdlets (`Remove-Item`, `New-Item`, `Select-String`).
-4. **Local Execution on Windows**: Developers working on Windows must run commands inside a Bash environment (e.g., Git Bash, VS Code integrated Git Bash terminal, or WSL) to ensure they match documented instructions.
+PoC 代码走 `poc/` 分支，**不要求达到生产质量**，但结论必须写进 `docs/specs/`。
+PoC 的产出是**知识**，不是可复用的代码——不要为了复用而把 PoC 写得很重。
 
 ---
 
-## 5. Documentation Synchronization Rules
+## 3. Spec-First
 
-To prevent codebase implementation from diverging from reference materials, all code modifications must adhere to this rule:
-* **Synchronous Updates**: Whenever any code is modified, you must synchronously update all affected or involved documentation in the same change/commit. This includes but is not limited to:
-  * Key overview documents like [CLAUDE.md](file:///d:/AntigravityProjects/ElsevierTrackor/CLAUDE.md).
-  * Specifications in the `docs/specs/` directory.
-  * API documentation, configuration examples, and database schema definitions.
-  * README files and code comments detailing changed logic.
-* **Consistency Check**: Before committing or opening a PR, verify that all modified or new paths, settings, parameters, and behaviors are fully documented.
+非平凡的功能或结构性改动，**先写 Spec 再写代码**。Spec 放在 `docs/specs/[feature-name]-spec.md`。
 
+Spec 至少覆盖：
 
+### 3.1 需求与范围
+* 解决什么问题，对应 PRD 的哪些条款
+* 用户看到的行为（CLI 输出、交互、错误信息）
+
+### 3.2 设计
+* 涉及哪些包，跨层调用关系
+* 新增/修改的接口与数据结构
+* **存储布局变化**（如涉及远端格式，必须说明兼容与迁移方式）
+
+### 3.3 失败与边界设计
+* 正常路径的输入输出
+* 中断、并发、后端故障、数据损坏、环境差异下的行为
+* **明确写出"此时绝不能做什么"**（例如：绝不写入、绝不覆盖、绝不删除）
+
+### 3.4 测试计划
+* 对应 testing.md 的测试类型与用例清单
+* 如何达到覆盖率要求
+
+---
+
+## 4. 开发生命周期
+
+```
+1. 设计（写 Spec）→ 2. 实现 → 3. 测试 → 4. 验收 → 5. PR
+```
+
+* **阶段 1**：写 Spec，设计测试用例，检查分层是否合理
+* **阶段 2**：按 Spec 实现，边写边对照边界条件；**此阶段不跑 Code Review**，避免打断实现节奏
+* **阶段 3**：本地跑 `go test -race -cover ./...`，覆盖率不达标或边界用例失败则继续改
+* **阶段 4**：真机验收——在真实的 Agent 数据上跑一遍（用副本，不用原始目录）
+* **阶段 5**：用户确认后 push、开 PR、Code Review、合并
+
+---
+
+## 5. Shell 统一用 Bash
+
+所有命令、脚本、文档示例统一使用 Bash（Windows 上用 Git Bash）。
+
+* 路径用正斜杠 `/`
+* 环境变量用 `$VAR`
+* 用 `rm -rf`、`mkdir -p`、`grep` 等标准工具，不用 PowerShell cmdlet
+* 脚本放 `scripts/`，必须有 `set -euo pipefail`
+
+---
+
+## 6. 文档同步
+
+改代码必须在同一次改动中同步更新受影响的文档：
+
+* `docs/AgentSync PRD v2.0（无服务端开源版）.md` —— 行为或范围发生变化时
+* `docs/specs/` —— 对应功能的 Spec
+* `README.md` —— 用户可见的能力、状态、构建方式发生变化时
+* 代码注释中引用的 PRD 条款号
+
+**PRD 是产品的事实来源。** 如果实现与 PRD 冲突，先改 PRD 再改代码，而不是让代码悄悄偏离文档。
+
+---
+
+## 7. 真实数据处理纪律
+
+调查 Agent 会话结构时：
+
+1. **永远在副本上操作**，不直接读写用户真实的 Agent 数据目录。
+2. 副本放临时目录或 `/testdata/real/`（已被 `.gitignore` 覆盖）。
+3. 分析结论写进 Spec 时，**必须脱敏**：不写真实路径、项目名、对话内容。
+4. 提交前再确认一次 `git diff --cached` 中没有真实数据。
