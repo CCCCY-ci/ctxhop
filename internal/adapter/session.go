@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,6 +122,11 @@ func ReadSessionFile(path string) (SessionData, error) {
 type Layout struct {
 	// Home is the agent's data directory, normally ~/.claude.
 	Home string
+
+	// version overrides how the agent's version is discovered. Nil means ask
+	// the agent itself. It exists so that detection can be tested without
+	// depending on an agent being installed on the machine running the tests.
+	version func(context.Context) string
 }
 
 // ProjectsDir is where per-project session directories live.

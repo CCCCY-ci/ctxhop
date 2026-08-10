@@ -219,7 +219,36 @@ Agent 可能正在追加写入，最后一行可能只写了一半。
 
 ### 4.9 `HookInstaller`
 
-在 Claude Code 的设置中注册会话结束时调用 `agentsync push` 的 hook。必须幂等，必须只增删自己的条目，不得影响用户已有 hook。
+在 Claude Code 的**用户级** `~/.claude/settings.json` 中注册 `SessionEnd` hook，调用 `agentsync push`。
+
+配置结构（已实测确认，`SessionEnd` 分组**不需要** `matcher`）：
+
+```json
+{"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": "..."}]}]}}
+```
+
+要求：
+
+* **幂等**：重复安装不产生重复条目；可执行文件移动后更新命令而非新增。
+* **只动自己的条目**。识别方式是命令中的 `--agentsync-hook` 标记，而非可执行文件名或路径——这样二进制改名或移动后仍能认出，也绝不会误删用户自己写的 hook。
+* **不解析的设置文件一律拒绝写入**，不得覆盖——那会销毁我们从未看见的配置。
+* 写入必须原子（这是用户的文件）。
+* 卸载后不留空容器（BR-13）。
+
+#### 命令行引用（实测发现）
+
+> **Windows 上 Claude Code 通过 PowerShell 执行 hook 命令。**
+> PowerShell 中开头的带引号字符串只是字符串表达式，其后的参数会触发解析错误
+> （实测报 `UnexpectedToken: push`）。**必须使用调用操作符 `&`**：
+>
+> ```
+> Windows: & "C:\path\agentsync.exe" push --agentsync-hook
+> POSIX:     "/usr/local/bin/agentsync" push --agentsync-hook
+> ```
+>
+> 引用必须是 **shell 引用**而非 Go 的 `%q`——后者会把 Windows 路径的反斜杠转义成 `C:\\path\\`，任何 shell 都解析不了。含双引号的路径一律拒绝安装，因为各 shell 的转义规则不同，拿不准的命令行比没有 hook 更糟。
+
+写入 `settings.json` 时必须关闭 JSON 的 HTML 转义，否则 Windows 命令里的 `&` 会变成 `\u0026`——功能上仍可用，但用户需要阅读和编辑这个文件。
 
 ---
 
@@ -322,4 +351,6 @@ Agent 可能正在追加写入，最后一行可能只写了一半。
 ### 已解决
 
 * **slug 编码规则**：已从 Agent 实现中读出并实测确认，见 §2。跨平台一致，无需单独验证 POSIX。
+* **`CLAUDE_CONFIG_DIR` 可用**：实测确认它能把 Agent 数据目录整体重定位（临时目录下生成了 `projects`/`sessions`/`backups`）。这使得**在单台机器上模拟第二台设备**成为可能——用不同的数据目录 + 不同的项目路径，可以在没有第二台机器的情况下端到端验证恢复流程（记为 PoC-1b）。
+* **Hook 配置结构与命令行引用**：均已在真实会话上验证，见 §4.9。
 * **令牌与用户内容冲突**：不再视为错误。令牌只写入白名单位置，因此其他位置出现同样的字符是用户内容，本地化时原样保留。否则任何讨论 AgentSync 自身的会话都将无法恢复——包括开发它时产生的那些。

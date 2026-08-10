@@ -90,7 +90,9 @@ func (l Layout) writeSession(path string, records [][]byte) error {
 		return fmt.Errorf("create session directory: %w", err)
 	}
 
-	return writeFileAtomic(dir, path, records)
+	return writeFileAtomic(path, func(w io.Writer) error {
+		return writeRecords(w, records)
+	})
 }
 
 // writeRecords renders records as JSONL: one record per line, every line
@@ -119,14 +121,18 @@ func writeRecords(w io.Writer, records [][]byte) error {
 	return nil
 }
 
-// writeFileAtomic writes records through a temporary file in the same
-// directory, then renames it into place.
+// writeFileAtomic publishes whatever write produces, through a temporary file
+// in the same directory, then renames it into place.
 //
 // The temporary file must share the destination's directory: rename is only
 // atomic within a filesystem, and a temp directory can easily be on another
 // volume. The suffix keeps it out of the way of the agent, which only reads
 // `.jsonl` files (BR-11).
-func writeFileAtomic(dir, path string, records [][]byte) (err error) {
+//
+// Everything that writes into the agent's data directory goes through here, so
+// that the atomicity guarantee has exactly one implementation to get right.
+func writeFileAtomic(path string, write func(io.Writer) error) (err error) {
+	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
@@ -153,7 +159,7 @@ func writeFileAtomic(dir, path string, records [][]byte) (err error) {
 		}
 	}()
 
-	if err = writeRecords(tmp, records); err != nil {
+	if err = write(tmp); err != nil {
 		return err
 	}
 
