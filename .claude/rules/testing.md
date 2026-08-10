@@ -1,11 +1,17 @@
 # 测试规范（AgentSync）
 
 > [!IMPORTANT]
-> **测试代码必须提交到 Git。**
-> 这是本项目与其他项目规则的一处明确差异。原因：
-> 1. 这是 Apache-2.0 公开仓库，外部贡献者必须能验证自己的改动；
-> 2. PRD §18 要求跨平台矩阵的集成测试自动化，测试不进仓库就没有 CI；
-> 3. 本项目最大的风险是写坏用户的 Agent 数据，测试是唯一的防线。
+> **测试代码与测试数据一律不提交到 Git。**
+> `**/*_test.go`、`**/testdata/`、覆盖率产物、fuzz 语料全部由 `.gitignore` 覆盖。
+>
+> **测试本身仍然是强制的**，只是留在本地：不写测试、或测试不通过，同样不允许提 PR。
+
+理由：外部贡献者未必认可我们的测试用例，可以自行编写；本地验证已足够。
+
+由此产生的两条操作要求：
+
+* **没有 CI。** 跨平台回归只能在本地手动执行，PR 前必须亲自跑完整套。
+* **本地测试文件是不可再生资产。** 它们不在版本控制里，换机器或清理工作区就会丢失，需自行备份。
 
 ---
 
@@ -24,19 +30,30 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 
 **`-race` 是必须的**，不是可选项。
 
+### 1.1 `-race` 的工具链前提
+
+`-race` 需要 cgo，cgo 需要本机有 C 编译器。开发机上已安装 MinGW-w64 GCC（WinLibs，POSIX 线程 + UCRT），通过 `winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT` 获得，已在用户级 PATH 中。
+
+若 `go test -race` 报 `cgo: C compiler "gcc" not found`，说明 shell 继承的是安装前的旧环境，重开终端即可。
+
+注意这与 `CGO_ENABLED=0` 不冲突：那条约束针对**发布的二进制**（保证静态链接与一条命令交叉编译），不针对测试运行。发布产物仍必须以 `CGO_ENABLED=0` 构建。
+
 ---
 
 ## 2. 测试数据：绝对禁止使用真实会话
 
 > [!WARNING]
-> **不得把任何真实的 Agent 会话文件放进 `testdata/`，即使是自己的。**
-> 会话正文可能包含源代码、终端输出、内网地址、API Key。一旦提交进公开仓库，就是永久泄露。
+> **不得把任何真实的 Agent 会话文件用作测试夹具，即使是自己的。**
+> 会话正文可能包含源代码、终端输出、内网地址、API Key。
+
+测试数据虽然不进仓库，这条仍然成立——本地夹具会被复制、粘贴进 issue、写进文档，一旦扩散同样不可撤销。
 
 规则：
 
-1. `testdata/` 中的会话必须是**手工构造的合成数据**，结构真实、内容虚构。
-2. 需要基于真实会话调查结构时，工作副本放在 `.gitignore` 覆盖的 `/testdata/real/` 或临时目录，**永不提交**。
-3. 提交前检查：`git diff --cached` 里不得出现真实路径、真实项目名、真实对话内容。
+1. 夹具必须是**手工构造的合成数据**，结构真实、内容虚构。
+2. 需要基于真实会话调查结构时，工作副本放在 `/testdata/real/` 或临时目录，用完即删。
+3. **绝对路径、真实项目名同样不得进入仓库**——包括源码注释、文档与 PR 描述。分析结论写进 `docs/specs/` 时必须脱敏。
+4. 提交前检查：`git diff --cached` 里不得出现真实路径、真实项目名、真实对话内容。
 
 ---
 
@@ -51,7 +68,7 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 跨设备路径改写（§9.3）是最容易悄悄出错的部分，必须用黄金文件覆盖：
 
 * 输入：某平台上的合成会话 + 源/目标项目路径
-* 输出：改写后的会话，与 `testdata/golden/` 比对
+* 输出：改写后的会话，与内联的期望值比对（记录是单行 JSON，内联比独立文件更易读、diff 更直观）
 * 必须覆盖：Windows↔POSIX 分隔符、盘符、大小写差异、含空格路径、非 ASCII 路径、项目外的绝对路径（必须保持原样不被改写）
 
 ### 3.3 集成测试
@@ -85,13 +102,25 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 
 ## 5. `.gitignore` 中与测试相关的条目
 
-只忽略**产物**，不忽略测试代码：
+测试代码、测试数据与全部产物一律忽略：
 
 ```text
-*.test          # 编译出的测试二进制
-*.out           # 覆盖率数据
-coverage.html
-/testdata/real/ # 真实会话的本地工作副本，永不提交
+**/*_test.go        # 测试代码
+**/testdata/        # 测试夹具，含黄金文件
+**/testdata/fuzz/   # fuzz 语料：crasher 会嵌入触发它的原始输入
+*.test              # 编译出的测试二进制
+*.out *.prof        # 覆盖率与性能数据
+coverage.*
+*.jsonl             # 任何会话文件
 ```
 
-`*_test.go`、`testdata/`（合成部分）、`golden/` **必须提交**。
+### 5.1 已跟踪文件的清理
+
+`.gitignore` 不会让已被跟踪的文件停止跟踪。若发现测试文件已入库：
+
+```bash
+git rm --cached $(git ls-files '*_test.go')   # 取消跟踪，保留本地文件
+git commit -m "chore(repo): untrack test files"
+```
+
+**注意历史不会因此清除。** 若这些提交尚未合入 `main`，用 **Squash and Merge** 即可——压缩后的单个提交只包含最终树状态，测试文件不会进入 `main` 的历史；随后删除分支。若已经在 `main` 上，则需要重写历史，代价高得多，所以要在合并前处理。

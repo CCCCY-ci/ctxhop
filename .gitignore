@@ -9,27 +9,69 @@
 *.dll
 *.so
 *.dylib
+*.a
 
-# === Go ===
+# === Test code and data ===
+# Tests stay local and are never committed.
+**/*_test.go
+**/testdata/
+**/__snapshots__/
 *.test
 *.out
-coverage.html
+*.prof
+*.pprof
+coverage.*
+!coverage.md
+
+# Fuzzing corpora, including crashers, which can embed whatever input
+# triggered them.
+**/testdata/fuzz/
+/fuzz/
+
+# === Go tooling ===
 vendor/
+go.work
+go.work.sum
 
-# === Local development ===
+# === Secrets and local configuration ===
+# Nothing resembling a credential may ever be committed: this repository is
+# meant to be public, and git history is permanent.
 .env
+.env.*
 *.local
-/scratch/
-
-# === Never commit real credentials or real session data ===
-# Session fixtures used by tests must be synthetic and explicitly whitelisted.
-*.credentials.json
 config.local.*
-/testdata/real/
+*.credentials.json
+*credentials*
+*secret*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+.netrc
 
-# === Editors / OS ===
+# === Real agent data ===
+# Working copies taken from a real installation while investigating. Session
+# bodies can contain source code, terminal output and API keys.
+/testdata/real/
+*.jsonl
+/scratch/
+/tmp/
+
+# === Editors and OS ===
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 .DS_Store
+.AppleDouble
 Thumbs.db
+ehthumbs.db
 desktop.ini
+
+# === Claude Code local state ===
+# Project rules under .claude/rules/ are tracked deliberately; per-machine
+# settings are not.
+.claude/settings.local.json
+.claude/*.local.json
