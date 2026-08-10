@@ -11,7 +11,7 @@ import (
 // terminal output and credentials, and this is a public repository.
 var (
 	winSpace = PathSpace{
-		ProjectRoot: `D:\CodeWorkSpace\Example`,
+		ProjectRoot: `D:\Workspace\Example`,
 		AgentHome:   `C:\Users\alice\.claude`,
 	}
 	posixSpace = PathSpace{
@@ -39,13 +39,13 @@ func TestCanonicalizeTokenizesPaths(t *testing.T) {
 		{
 			name:  "cwd equal to project root becomes a bare token",
 			space: winSpace,
-			in:    `{"type":"user","cwd":"D:\\CodeWorkSpace\\Example"}`,
+			in:    `{"type":"user","cwd":"D:\\Workspace\\Example"}`,
 			want:  `{"cwd":"${AS_PROJECT}","type":"user"}`,
 		},
 		{
 			name:  "path under the project keeps a slash-separated remainder",
 			space: winSpace,
-			in:    `{"file_path":"D:\\CodeWorkSpace\\Example\\src\\a.go"}`,
+			in:    `{"file_path":"D:\\Workspace\\Example\\src\\a.go"}`,
 			want:  `{"file_path":"${AS_PROJECT}/src/a.go"}`,
 		},
 		{
@@ -69,13 +69,13 @@ func TestCanonicalizeTokenizesPaths(t *testing.T) {
 		{
 			name:  "prefix match is case insensitive",
 			space: winSpace,
-			in:    `{"cwd":"d:\\codeworkspace\\example\\src"}`,
+			in:    `{"cwd":"d:\\workspace\\example\\src"}`,
 			want:  `{"cwd":"${AS_PROJECT}/src"}`,
 		},
 		{
 			name:  "windows separators are interchangeable",
 			space: winSpace,
-			in:    `{"cwd":"D:/CodeWorkSpace/Example/src"}`,
+			in:    `{"cwd":"D:/Workspace/Example/src"}`,
 			want:  `{"cwd":"${AS_PROJECT}/src"}`,
 		},
 		{
@@ -99,19 +99,19 @@ func TestCanonicalizeTokenizesPaths(t *testing.T) {
 		{
 			name:  "sibling directory sharing a prefix is not matched",
 			space: winSpace,
-			in:    `{"cwd":"D:\\CodeWorkSpace\\Example2\\src"}`,
-			want:  `{"cwd":"D:\\CodeWorkSpace\\Example2\\src"}`,
+			in:    `{"cwd":"D:\\Workspace\\Example2\\src"}`,
+			want:  `{"cwd":"D:\\Workspace\\Example2\\src"}`,
 		},
 		{
 			name:  "non-allowlisted field is never rewritten",
 			space: winSpace,
-			in:    `{"text":"I edited D:\\CodeWorkSpace\\Example\\src\\a.go for you"}`,
-			want:  `{"text":"I edited D:\\CodeWorkSpace\\Example\\src\\a.go for you"}`,
+			in:    `{"text":"I edited D:\\Workspace\\Example\\src\\a.go for you"}`,
+			want:  `{"text":"I edited D:\\Workspace\\Example\\src\\a.go for you"}`,
 		},
 		{
 			name:  "nested arrays inherit the field name",
 			space: winSpace,
-			in:    `{"message":{"content":[{"input":{"file_path":"D:\\CodeWorkSpace\\Example\\a.go"}}]}}`,
+			in:    `{"message":{"content":[{"input":{"file_path":"D:\\Workspace\\Example\\a.go"}}]}}`,
 			want:  `{"message":{"content":[{"input":{"file_path":"${AS_PROJECT}/a.go"}}]}}`,
 		},
 		{
@@ -136,10 +136,10 @@ func TestCanonicalizeTokenizesPaths(t *testing.T) {
 // record produces identical bytes regardless of how it was written.
 func TestCanonicalizeIsDeterministic(t *testing.T) {
 	variants := []string{
-		`{"cwd":"D:\\CodeWorkSpace\\Example","type":"user","n":1}`,
-		`{"type":"user","n":1,"cwd":"D:\\CodeWorkSpace\\Example"}`,
-		`{  "n" : 1 ,  "type" : "user" ,  "cwd" : "D:\\CodeWorkSpace\\Example"  }`,
-		`{"cwd":"D:/CodeWorkSpace/Example","n":1,"type":"user"}`,
+		`{"cwd":"D:\\Workspace\\Example","type":"user","n":1}`,
+		`{"type":"user","n":1,"cwd":"D:\\Workspace\\Example"}`,
+		`{  "n" : 1 ,  "type" : "user" ,  "cwd" : "D:\\Workspace\\Example"  }`,
+		`{"cwd":"D:/Workspace/Example","n":1,"type":"user"}`,
 	}
 
 	want := canonical(t, winSpace, variants[0])
@@ -154,7 +154,7 @@ func TestCanonicalizeIsDeterministic(t *testing.T) {
 // platforms: two machines holding the same logical record must agree.
 func TestCanonicalizeAcrossMachinesAgrees(t *testing.T) {
 	fromWindows := canonical(t, winSpace,
-		`{"cwd":"D:\\CodeWorkSpace\\Example","file_path":"D:\\CodeWorkSpace\\Example\\src\\a.go"}`)
+		`{"cwd":"D:\\Workspace\\Example","file_path":"D:\\Workspace\\Example\\src\\a.go"}`)
 	fromPosix := canonical(t, posixSpace,
 		`{"cwd":"/Users/bob/Projects/Example","file_path":"/Users/bob/Projects/Example/src/a.go"}`)
 
@@ -186,9 +186,9 @@ func TestCanonicalizeReportsUnknownPathFields(t *testing.T) {
 	c := NewCanonicalizer(winSpace)
 
 	records := []string{
-		`{"someNewField":"D:\\CodeWorkSpace\\Example\\src\\a.go"}`,
-		`{"cwd":"D:\\CodeWorkSpace\\Example"}`,
-		`{"text":"mentions D:\\CodeWorkSpace\\Example mid-sentence"}`,
+		`{"someNewField":"D:\\Workspace\\Example\\src\\a.go"}`,
+		`{"cwd":"D:\\Workspace\\Example"}`,
+		`{"text":"mentions D:\\Workspace\\Example mid-sentence"}`,
 		`{"otherContainer":{"C:\\Users\\alice\\.claude\\x":1}}`,
 	}
 	for _, r := range records {
@@ -220,13 +220,13 @@ func TestLocalize(t *testing.T) {
 			name:  "bare token becomes the root",
 			space: winSpace,
 			in:    `{"cwd":"${AS_PROJECT}"}`,
-			want:  `{"cwd":"D:\\CodeWorkSpace\\Example"}`,
+			want:  `{"cwd":"D:\\Workspace\\Example"}`,
 		},
 		{
 			name:  "remainder takes the target separator",
 			space: winSpace,
 			in:    `{"file_path":"${AS_PROJECT}/src/a.go"}`,
-			want:  `{"file_path":"D:\\CodeWorkSpace\\Example\\src\\a.go"}`,
+			want:  `{"file_path":"D:\\Workspace\\Example\\src\\a.go"}`,
 		},
 		{
 			name:  "posix target keeps forward slashes",
@@ -249,8 +249,8 @@ func TestLocalize(t *testing.T) {
 		{
 			name:  "untokenized values are untouched",
 			space: posixSpace,
-			in:    `{"text":"I edited D:\\CodeWorkSpace\\Example\\a.go"}`,
-			want:  `{"text":"I edited D:\\CodeWorkSpace\\Example\\a.go"}`,
+			in:    `{"text":"I edited D:\\Workspace\\Example\\a.go"}`,
+			want:  `{"text":"I edited D:\\Workspace\\Example\\a.go"}`,
 		},
 	}
 
@@ -353,8 +353,8 @@ func TestCanonicalizeIgnoresProseThatBeginsWithAPath(t *testing.T) {
 	// entirely, so prose starting with a path must not trigger it.
 	c := NewCanonicalizer(winSpace)
 	records := []string{
-		`{"text":"D:\\CodeWorkSpace\\Example\\src\\a.go has a bug in it"}`,
-		`{"command":"D:\\CodeWorkSpace\\Example\\build.exe --release"}`,
+		`{"text":"D:\\Workspace\\Example\\src\\a.go has a bug in it"}`,
+		`{"command":"D:\\Workspace\\Example\\build.exe --release"}`,
 	}
 	for _, r := range records {
 		if _, err := c.Record([]byte(r)); err != nil {
@@ -371,7 +371,7 @@ func TestUnknownPathFieldAtTopLevelIsRedacted(t *testing.T) {
 	// it under an empty name would be meaningless, and the value itself is a
 	// path we must not put in diagnostics.
 	c := NewCanonicalizer(winSpace)
-	if _, err := c.Record([]byte(`"D:\\CodeWorkSpace\\Example\\a.go"`)); err != nil {
+	if _, err := c.Record([]byte(`"D:\\Workspace\\Example\\a.go"`)); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestUnknownPathFieldsNeverLeakContent(t *testing.T) {
 	// Findings reach `agentsync doctor`, whose output must be safe to paste
 	// into a public issue: no paths, project names or session content (BR-09).
 	c := NewCanonicalizer(winSpace)
-	in := `{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\x.md":"D:\\CodeWorkSpace\\Example\\y"}}`
+	in := `{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\x.md":"D:\\Workspace\\Example\\y"}}`
 	if _, err := c.Record([]byte(in)); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestLocalizeRejectsInvalidJSON(t *testing.T) {
 // equivalent on the same machine, and that crossing machines only changes the
 // paths.
 func TestRoundTrip(t *testing.T) {
-	original := `{"cwd":"D:\\CodeWorkSpace\\Example","message":{"content":[{"input":{"file_path":"D:\\CodeWorkSpace\\Example\\src\\a.go"}}]},"n":42}`
+	original := `{"cwd":"D:\\Workspace\\Example","message":{"content":[{"input":{"file_path":"D:\\Workspace\\Example\\src\\a.go"}}]},"n":42}`
 
 	canon, err := NewCanonicalizer(winSpace).Record([]byte(original))
 	if err != nil {
@@ -497,8 +497,8 @@ func equivalentJSON(t *testing.T, a, b string) bool {
 }
 
 func FuzzCanonicalize(f *testing.F) {
-	f.Add(`{"cwd":"D:\\CodeWorkSpace\\Example"}`)
-	f.Add(`{"a":[1,2,{"file_path":"D:\\CodeWorkSpace\\Example\\x"}]}`)
+	f.Add(`{"cwd":"D:\\Workspace\\Example"}`)
+	f.Add(`{"a":[1,2,{"file_path":"D:\\Workspace\\Example\\x"}]}`)
 	f.Add(`{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\x":{}}}`)
 	f.Add(`[]`)
 	f.Add(`"bare string"`)

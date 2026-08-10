@@ -343,7 +343,7 @@ func TestWriteSessionReportsUnusableHome(t *testing.T) {
 func TestWriteSessionOutputIsReadableByOurOwnReader(t *testing.T) {
 	l := Layout{Home: t.TempDir()}
 
-	canon, err := NewCanonicalizer(winSpace).Record([]byte(`{"cwd":"D:\\CodeWorkSpace\\Example","n":1}`))
+	canon, err := NewCanonicalizer(winSpace).Record([]byte(`{"cwd":"D:\\Workspace\\Example","n":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}

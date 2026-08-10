@@ -39,8 +39,8 @@ if (slug.length > 200) slug = slug.slice(0, 200) + "-" + Math.abs(hash(path)).to
 因此**不只是分隔符**：`_`、`.`、空格、以及每一个非 ASCII 字符都各变成一个 `-`。实测样本：
 
 ```
-D:\CodeWorkSpace\poc_slug test.v2_名字
-→ D--CodeWorkSpace-poc-slug-test-v2---
+D:\Workspace\poc_slug test.v2_名字
+→ D--Workspace-poc-slug-test-v2---
 ```
 
 该规则由 JavaScript 实现，因此**跨平台一致**，POSIX 路径的 `/` 同样落入"非字母数字"分支，无需单独验证。
@@ -93,7 +93,7 @@ PRD §9.6 的版本判定依赖"本地是远端的严格前缀"。但会话内�
 令牌之后的剩余路径统一使用正斜杠：
 
 ```
-"cwd": "D:\\CodeWorkSpace\\VSCodeProjects\\Example"   →  "${AS_PROJECT}"
+"cwd": "D:\\Workspace\\Projects\\Example"   →  "${AS_PROJECT}"
 "file_path": "D:\\...\\Example\\src\\a.go"            →  "${AS_PROJECT}/src/a.go"
 ```
 

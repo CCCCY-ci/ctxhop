@@ -133,8 +133,8 @@ func TestReadSessionFile(t *testing.T) {
 
 func TestEncodeProjectSlug(t *testing.T) {
 	tests := map[string]string{
-		`D:\CodeWorkSpace\VSCodeProjects\AgentSync`: "D--CodeWorkSpace-VSCodeProjects-AgentSync",
-		"/Users/bob/Projects/Example":               "-Users-bob-Projects-Example",
+		`D:\Workspace\Projects\AgentSync`: "D--Workspace-Projects-AgentSync",
+		"/Users/bob/Projects/Example":     "-Users-bob-Projects-Example",
 
 		// Every non-alphanumeric character becomes a dash, not just the
 		// separators. Getting this wrong points us at a directory the agent
@@ -149,7 +149,7 @@ func TestEncodeProjectSlug(t *testing.T) {
 
 		// Observed directly from the agent: a path mixing an underscore, a
 		// space, a dot and two CJK characters, each becoming one dash.
-		`D:\CodeWorkSpace\poc_slug test.v2_名字`: "D--CodeWorkSpace-poc-slug-test-v2---",
+		`D:\Workspace\poc_slug test.v2_名字`: "D--Workspace-poc-slug-test-v2---",
 	}
 	for in, want := range tests {
 		if got := EncodeProjectSlug(in); got != want {

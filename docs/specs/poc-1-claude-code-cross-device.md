@@ -39,8 +39,8 @@ PRD §17 把 PoC-1 定为"不通过产品就不成立"的门控项。要回答�
 会话文件位于 `~/.claude/projects/<slug>/<session-id>.jsonl`，其中 slug 由项目绝对路径编码而来：
 
 ```
-D:\CodeWorkSpace\VSCodeProjects\ElsevierTrackor
-→ D--CodeWorkSpace-VSCodeProjects-ElsevierTrackor
+D:\Workspace\Projects\SampleApp
+→ D--Workspace-Projects-SampleApp
 ```
 
 规则：`:` 与 `\` 均替换为 `-`（因此 `D:\` 产生连续两个 `-`）。
