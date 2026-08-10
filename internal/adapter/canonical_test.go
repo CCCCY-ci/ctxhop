@@ -334,10 +334,34 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTokenizePrefersTheMoreSpecificRoot pins down what happens when one root
+// is nested inside the other, which is the case whenever the agent's data
+// directory sits under the project. Matching the shorter root first would
+// tokenize such a path as the project and lose the distinction.
+func TestTokenizePrefersTheMoreSpecificRoot(t *testing.T) {
+	nested := PathSpace{
+		ProjectRoot: `D:\Work`,
+		AgentHome:   `D:\Work\tools\.claude`,
+	}
+
+	got := canonical(t, nested, `{"file_path":"D:\\Work\\tools\\.claude\\x.md"}`)
+	if want := `{"file_path":"${AS_AGENT_HOME}/x.md"}`; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+
+	// A path under the project but outside the agent directory still resolves
+	// to the project.
+	got = canonical(t, nested, `{"file_path":"D:\\Work\\src\\a.go"}`)
+	if want := `{"file_path":"${AS_PROJECT}/src/a.go"}`; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
 func TestSeparatorFor(t *testing.T) {
 	tests := map[string]string{
 		`D:\a\b`:         `\`,
 		`\\server\share`: `\`,
+		`relative\path`:  `\`,
 		"/Users/bob":     "/",
 		"":               "/",
 	}

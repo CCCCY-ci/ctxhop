@@ -82,6 +82,34 @@ func TestReadRecordsRejectsCorruptionInTheMiddle(t *testing.T) {
 	}
 }
 
+// erroringReader yields some data and then fails, standing in for a file on a
+// disconnected drive or a filesystem error partway through a read.
+type erroringReader struct {
+	data []byte
+	done bool
+}
+
+func (e *erroringReader) Read(p []byte) (int, error) {
+	if e.done {
+		return 0, errors.New("input/output error")
+	}
+	e.done = true
+	return copy(p, e.data), nil
+}
+
+func TestReadRecordsPropagatesReadFailures(t *testing.T) {
+	// A read failure is not the same as a short session: we must not quietly
+	// treat whatever arrived as the whole file, because the sync layer would
+	// then push a truncated session as if it were complete.
+	_, err := ReadRecords(&erroringReader{data: []byte("{\"a\":1}\n")})
+	if err == nil {
+		t.Fatal("expected an error, got none")
+	}
+	if !strings.Contains(err.Error(), "read session") {
+		t.Errorf("error should name the failing step, got %v", err)
+	}
+}
+
 func TestReadSessionFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "s.jsonl")
