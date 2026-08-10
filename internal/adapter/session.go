@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // ErrCorruptSession reports a record that is fully written but unparseable.
@@ -28,6 +30,10 @@ type SessionData struct {
 	// DroppedTail reports that trailing bytes were left out because they were
 	// not yet a finished record. It is normal, not an error.
 	DroppedTail bool
+
+	// Skipped counts malformed records passed over. Only a lenient read
+	// produces a non-zero value; a strict read fails instead.
+	Skipped int
 }
 
 // ReadRecords reads the complete records of a JSONL session.
@@ -41,6 +47,23 @@ type SessionData struct {
 // A malformed record that *is* terminated is different: it was fully written
 // and is genuinely corrupt, so it fails loudly rather than being skipped.
 func ReadRecords(r io.Reader) (SessionData, error) {
+	return readRecords(r, true)
+}
+
+// ReadRecordsLenient reads what it can, counting malformed records instead of
+// failing on them.
+//
+// Listing sessions uses this: a session whose middle is damaged - which is
+// exactly what a kill during a write leaves behind, since the agent appends
+// after the partial line - must still appear in the listing. Dropping it would
+// make the session vanish from the user's view and never be backed up. Anything
+// that will be pushed uses the strict read instead, because a shard is
+// immutable once written (spec §4.2, §6.4).
+func ReadRecordsLenient(r io.Reader) (SessionData, error) {
+	return readRecords(r, false)
+}
+
+func readRecords(r io.Reader, strict bool) (SessionData, error) {
 	var out SessionData
 	br := bufio.NewReader(r)
 
@@ -60,7 +83,10 @@ func ReadRecords(r io.Reader) (SessionData, error) {
 			// Trailing bytes with no newline: a write in progress.
 			out.DroppedTail = true
 		case !json.Valid([]byte(trimmed)):
-			return SessionData{}, fmt.Errorf("%w: record %d", ErrCorruptSession, len(out.Records)+1)
+			if strict {
+				return SessionData{}, fmt.Errorf("%w: record %d", ErrCorruptSession, len(out.Records)+1)
+			}
+			out.Skipped++
 		default:
 			out.Records = append(out.Records, []byte(trimmed))
 		}
@@ -80,7 +106,9 @@ func ReadSessionFile(path string) (SessionData, error) {
 	if err != nil {
 		return SessionData{}, fmt.Errorf("open session: %w", err)
 	}
-	defer f.Close()
+	// Read-only handle: a failure to close cannot lose data, and there is
+	// nothing the caller could do about it (code_style §2.1).
+	defer f.Close() //nolint:errcheck
 
 	data, err := ReadRecords(f)
 	if err != nil {
@@ -110,20 +138,77 @@ func (l Layout) SessionFile(projectRoot, sessionID string) string {
 	return filepath.Join(l.SessionDir(projectRoot), sessionID+".jsonl")
 }
 
+// slugMaxLen is the length past which Claude Code truncates a slug and appends
+// a hash of the original path.
+const slugMaxLen = 200
+
 // EncodeProjectSlug derives the directory name Claude Code uses for a project
-// from its absolute path, by replacing `:` and `\` with `-`.
+// from its absolute path.
 //
-// There is deliberately no decoder. The encoding is lossy - a `-` in a slug may
-// have come from a separator, from a drive colon, or from a directory whose
-// name really contains one - so reversing it would guess. Callers that need to
-// know which project a session belongs to read `cwd` from the session itself,
-// which is authoritative; the slug is only ever used to locate files (spec §2).
+// The rule is: replace every character that is not an ASCII letter or digit
+// with `-`, and if the result exceeds slugMaxLen, keep the first slugMaxLen
+// characters and append `-` plus a base-36 hash of the original path.
+//
+// This must match the agent exactly. An encoder that is merely close produces a
+// directory the agent never reads: discovery then finds nothing and silently
+// backs up no sessions, and a restore reports success while `--resume` cannot
+// see the session. Both failures are silent, which is why this is reproduced
+// character for character rather than approximated.
+//
+// Everything operates on UTF-16 code units because the agent's implementation
+// is JavaScript: a character outside the basic multilingual plane is two code
+// units there and therefore becomes two dashes, not one.
+//
+// There is deliberately no decoder. The encoding is heavily lossy - `my_app`,
+// `my-app` and `my.app` all produce the same slug - so reversing it would be
+// guessing. Callers that need to know which project a session belongs to read
+// `cwd` from the session itself, which is authoritative (spec §2).
 func EncodeProjectSlug(projectRoot string) string {
-	slug := strings.TrimRight(projectRoot, `/\`)
-	slug = strings.ReplaceAll(slug, ":", "-")
-	slug = strings.ReplaceAll(slug, `\`, "-")
-	slug = strings.ReplaceAll(slug, "/", "-")
-	return slug
+	units := utf16.Encode([]rune(projectRoot))
+
+	slug := make([]byte, len(units))
+	for i, u := range units {
+		switch {
+		case u >= 'a' && u <= 'z', u >= 'A' && u <= 'Z', u >= '0' && u <= '9':
+			slug[i] = byte(u)
+		default:
+			slug[i] = '-'
+		}
+	}
+
+	if len(slug) <= slugMaxLen {
+		return string(slug)
+	}
+	return string(slug[:slugMaxLen]) + "-" + slugHash(units)
+}
+
+// slugHash reproduces the agent's path hash: a 32-bit `hash*31 + unit`
+// accumulation that wraps, rendered in base 36.
+func slugHash(units []uint16) string {
+	var h int32
+	for _, u := range units {
+		h = h<<5 - h + int32(u)
+	}
+
+	// Widen before taking the absolute value: the most negative int32 has no
+	// positive counterpart, and JavaScript's Math.abs yields 2147483648 there
+	// because its numbers are floats.
+	abs := int64(h)
+	if abs < 0 {
+		abs = -abs
+	}
+	return strconv.FormatInt(abs, 36)
+}
+
+// sameProject reports whether two absolute paths denote the same project,
+// using the comparison rules of the platform they belong to.
+func sameProject(a, b string) bool {
+	a = strings.TrimRight(a, `/\`)
+	b = strings.TrimRight(b, `/\`)
+	if len(a) != len(b) {
+		return false
+	}
+	return samePathPrefix(a, b)
 }
 
 // summary is what a scan of a session's records yields.
@@ -261,7 +346,14 @@ func (l Layout) DiscoverSessions(projectRoot string) ([]SessionRef, error) {
 
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		// No directory means no sessions for this project, which is normal.
+		// Windows reports "path not found" both when the directory is absent
+		// and when a file sits in its place, so the error alone cannot tell
+		// them apart. Absent is normal - the project has no sessions yet - but
+		// occupied would otherwise be reported as "no sessions", telling the
+		// user their sessions are accounted for when they were never seen.
+		if info, statErr := os.Stat(dir); statErr == nil && !info.IsDir() {
+			return nil, errors.New("list sessions: a file occupies this project's session directory; remove it and retry")
+		}
 		return nil, nil
 	}
 	if err != nil {
@@ -282,7 +374,8 @@ func (l Layout) DiscoverSessions(projectRoot string) ([]SessionRef, error) {
 	return refs, nil
 }
 
-// describe builds a SessionRef, reporting false when the file cannot be used.
+// describe builds a SessionRef, reporting false when the file cannot be used or
+// does not belong to this project.
 func (l Layout) describe(dir, name, projectRoot string) (SessionRef, bool) {
 	path := filepath.Join(dir, name)
 
@@ -291,12 +384,36 @@ func (l Layout) describe(dir, name, projectRoot string) (SessionRef, bool) {
 		return SessionRef{}, false
 	}
 
-	data, err := ReadSessionFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionRef{}, false
+	}
+	// Read-only handle: a failure to close cannot lose data, and there is
+	// nothing the caller could do about it (code_style §2.1).
+	defer f.Close() //nolint:errcheck
+
+	data, err := ReadRecordsLenient(f)
 	if err != nil {
 		return SessionRef{}, false
 	}
 
+	// Tolerating damage in the middle is not the same as inventing a session
+	// out of a file with nothing readable in it: that has no content to sync
+	// and nothing to show but a placeholder title.
+	if len(data.Records) == 0 {
+		return SessionRef{}, false
+	}
+
 	s := summarize(data.Records)
+
+	// The slug is lossy enough that different projects share one: `my_app`,
+	// `my-app` and `my.app` all encode identically. The session's own `cwd` is
+	// authoritative, so a session that names a different project is another
+	// project's and must not be listed here - otherwise it would be pushed
+	// under the wrong project, or a restore would install into the wrong one.
+	if s.cwd != "" && !sameProject(s.cwd, projectRoot) {
+		return SessionRef{}, false
+	}
 	created, updated := s.created, s.updated
 	if created.IsZero() {
 		created = info.ModTime()

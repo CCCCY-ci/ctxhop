@@ -267,29 +267,133 @@ func TestLocalize(t *testing.T) {
 	}
 }
 
-func TestLocalizeRefusesSuspiciousTokens(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-	}{
-		{"token mid-value", `{"cwd":"prefix${AS_PROJECT}/src"}`},
-		{"token in a field we never tokenize", `{"text":"${AS_PROJECT}/src"}`},
-		{"token in a key of a plain object", `{"other":{"${AS_PROJECT}/x":1}}`},
+func TestLocalizeRefusesAMisplacedTokenInATokenizedField(t *testing.T) {
+	// In a field we do tokenize, a marker anywhere but the start means the
+	// record did not come from our canonicaliser.
+	if _, err := Localize([]byte(`{"cwd":"prefix${AS_PROJECT}/src"}`), winSpace); err == nil {
+		t.Fatal("expected an error, got none")
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Localize([]byte(tt.in), winSpace); err == nil {
+func TestLocalizeFailsFromInsideNestedStructures(t *testing.T) {
+	// A bad value buried in an array must abort the whole record. Localising
+	// the rest and dropping this one would write a session that half refers to
+	// another machine, which is worse than not restoring at all (BR-10).
+	nested := []string{
+		`{"message":{"content":[{"input":{"cwd":"pre${AS_PROJECT}/x"}}]}}`,
+		`{"a":[[{"file_path":"mid${AS_AGENT_HOME}/y"}]]}`,
+	}
+	for _, in := range nested {
+		t.Run(in, func(t *testing.T) {
+			if _, err := Localize([]byte(in), winSpace); err == nil {
 				t.Fatal("expected an error, got none")
 			}
 		})
 	}
 }
 
+func TestLocalizeLeavesTokenLikeContentAlone(t *testing.T) {
+	// Tokens are only ever written into allowlisted positions, so the same
+	// characters elsewhere are user content. Refusing there would make any
+	// session that discusses AgentSync itself impossible to restore - including
+	// the ones produced while building it.
+	tests := []string{
+		`{"text":"${AS_PROJECT}/src is the token we use"}`,
+		`{"other":{"${AS_PROJECT}/x":1}}`,
+		`{"message":{"content":[{"text":"set root to ${AS_AGENT_HOME}"}]}}`,
+	}
+
+	for _, in := range tests {
+		t.Run(in, func(t *testing.T) {
+			out, err := Localize([]byte(in), winSpace)
+			if err != nil {
+				t.Fatalf("Localize: %v", err)
+			}
+			if !strings.Contains(string(out), "${AS_") {
+				t.Errorf("content was rewritten: %s", out)
+			}
+		})
+	}
+}
+
 func TestLocalizeRequiresTargetPath(t *testing.T) {
-	_, err := Localize([]byte(`{"cwd":"${AS_PROJECT}"}`), PathSpace{})
+	// Refused up front, not only when a token happens to appear: localising
+	// against an unknown root cannot produce a session the agent will resolve.
+	if _, err := Localize([]byte(`{"n":1}`), PathSpace{}); err == nil {
+		t.Fatal("expected an error when no project root is configured")
+	}
+
+	_, err := Localize([]byte(`{"realParentDir":"${AS_AGENT_HOME}/x"}`),
+		PathSpace{ProjectRoot: `D:\Work`})
 	if err == nil {
-		t.Fatal("expected an error when no target root is configured")
+		t.Fatal("expected an error when the agent home is needed but unset")
+	}
+}
+
+func TestLocalizeUsesEachRootsOwnSeparator(t *testing.T) {
+	// The agent directory can look nothing like the project path. Deriving one
+	// separator from the project alone yields `C:\Users\alice\.claude/backups`.
+	mixed := PathSpace{
+		ProjectRoot: "/mnt/d/Work/Example",
+		AgentHome:   `C:\Users\alice\.claude`,
+	}
+
+	out, err := Localize([]byte(`{"cwd":"${AS_PROJECT}/src","realParentDir":"${AS_AGENT_HOME}/backups"}`), mixed)
+	if err != nil {
+		t.Fatalf("Localize: %v", err)
+	}
+	want := `{"cwd":"/mnt/d/Work/Example/src","realParentDir":"C:\\Users\\alice\\.claude\\backups"}`
+	if string(out) != want {
+		t.Errorf("got  %s\nwant %s", out, want)
+	}
+}
+
+func TestCanonicalizeIgnoresProseThatBeginsWithAPath(t *testing.T) {
+	// The finding this guards downgrades compatibility, which stops sync
+	// entirely, so prose starting with a path must not trigger it.
+	c := NewCanonicalizer(winSpace)
+	records := []string{
+		`{"text":"D:\\CodeWorkSpace\\Example\\src\\a.go has a bug in it"}`,
+		`{"command":"D:\\CodeWorkSpace\\Example\\build.exe --release"}`,
+	}
+	for _, r := range records {
+		if _, err := c.Record([]byte(r)); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	if got := c.UnknownPathFields(); len(got) != 0 {
+		t.Errorf("prose was reported as schema drift: %v", got)
+	}
+}
+
+func TestUnknownPathFieldAtTopLevelIsRedacted(t *testing.T) {
+	// A record that is a bare JSON string has no field name at all. Reporting
+	// it under an empty name would be meaningless, and the value itself is a
+	// path we must not put in diagnostics.
+	c := NewCanonicalizer(winSpace)
+	if _, err := c.Record([]byte(`"D:\\CodeWorkSpace\\Example\\a.go"`)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	got := c.UnknownPathFields()
+	if len(got) != 1 || got[0] != "<redacted>" {
+		t.Errorf("got %v, want [<redacted>]", got)
+	}
+}
+
+func TestUnknownPathFieldsNeverLeakContent(t *testing.T) {
+	// Findings reach `agentsync doctor`, whose output must be safe to paste
+	// into a public issue: no paths, project names or session content (BR-09).
+	c := NewCanonicalizer(winSpace)
+	in := `{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\x.md":"D:\\CodeWorkSpace\\Example\\y"}}`
+	if _, err := c.Record([]byte(in)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	for _, f := range c.UnknownPathFields() {
+		if strings.ContainsAny(f, `:\/`) {
+			t.Errorf("finding leaks a path: %q", f)
+		}
 	}
 }
 

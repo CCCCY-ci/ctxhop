@@ -21,9 +21,37 @@ var ErrSessionExists = errors.New("adapter: session already exists")
 // ErrInvalidRecord reports a record that would break the file's line structure.
 var ErrInvalidRecord = errors.New("adapter: record is not a single line")
 
+// ErrInvalidSessionID reports an identifier that must not be joined onto a path.
+var ErrInvalidSessionID = errors.New("adapter: session id is not a safe filename")
+
+// checkSessionID rejects identifiers that would escape the project's directory.
+//
+// A native id arrives as metadata from another device. Joined onto a path
+// unchecked, one containing a separator or `..` walks straight out of
+// ~/.claude/projects and MkdirAll obligingly builds the way. This is the only
+// code path that writes into the agent's data directory, so it refuses anything
+// it cannot confirm is a plain filename (BR-12).
+func checkSessionID(id string) error {
+	if id == "" || id == "." || id == ".." {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+		}
+	}
+	return nil
+}
+
 // WriteSession installs a new session, failing if one with that id is already
 // present.
 func (l Layout) WriteSession(projectRoot, sessionID string, records [][]byte) error {
+	if err := checkSessionID(sessionID); err != nil {
+		return err
+	}
 	path := l.SessionFile(projectRoot, sessionID)
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%w: %s", ErrSessionExists, sessionID)
@@ -37,6 +65,9 @@ func (l Layout) WriteSession(projectRoot, sessionID string, records [][]byte) er
 // asserting that replacing is correct, which for a session log means the new
 // content extends the old rather than diverging from it (BR-03).
 func (l Layout) ReplaceSession(projectRoot, sessionID string, records [][]byte) error {
+	if err := checkSessionID(sessionID); err != nil {
+		return err
+	}
 	return l.writeSession(l.SessionFile(projectRoot, sessionID), records)
 }
 
@@ -101,15 +132,24 @@ func writeFileAtomic(dir, path string, records [][]byte) (err error) {
 		return fmt.Errorf("create temporary file: %w", err)
 	}
 	tmpName := tmp.Name()
+	closed := false
 
 	// Any failure from here on must leave nothing behind. The agent's data
 	// directory is not ours to litter.
 	defer func() {
-		if err != nil {
-			tmp.Close()
-			if rmErr := os.Remove(tmpName); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				err = errors.Join(err, fmt.Errorf("remove temporary file: %w", rmErr))
+		if err == nil {
+			return
+		}
+		if !closed {
+			// Reported rather than dropped: a close that fails can mean the
+			// written bytes never landed, which is worth knowing even though
+			// the file is about to be removed anyway.
+			if closeErr := tmp.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close temporary file: %w", closeErr))
 			}
+		}
+		if rmErr := os.Remove(tmpName); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove temporary file: %w", rmErr))
 		}
 	}()
 
@@ -129,6 +169,7 @@ func writeFileAtomic(dir, path string, records [][]byte) (err error) {
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("close session: %w", err)
 	}
+	closed = true
 
 	if err = os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("install session: %w", err)

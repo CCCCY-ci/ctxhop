@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func TestReadRecordsKeepsOnlyFinishedRecords(t *testing.T) {
@@ -133,13 +134,109 @@ func TestReadSessionFile(t *testing.T) {
 func TestEncodeProjectSlug(t *testing.T) {
 	tests := map[string]string{
 		`D:\CodeWorkSpace\VSCodeProjects\AgentSync`: "D--CodeWorkSpace-VSCodeProjects-AgentSync",
-		`D:\CodeWorkSpace\Example\`:                 "D--CodeWorkSpace-Example",
 		"/Users/bob/Projects/Example":               "-Users-bob-Projects-Example",
-		`D:/CodeWorkSpace/Example`:                  "D--CodeWorkSpace-Example",
+
+		// Every non-alphanumeric character becomes a dash, not just the
+		// separators. Getting this wrong points us at a directory the agent
+		// never reads, and both resulting failures - nothing backed up, a
+		// restore the agent cannot see - are silent.
+		`D:\Work\my_app`: "D--Work-my-app",
+		`D:\Work\my.app`: "D--Work-my-app",
+		`D:\Work\my app`: "D--Work-my-app",
+
+		// A trailing separator is part of the path, not trimmed away.
+		`D:\Work\Example\`: "D--Work-Example-",
+
+		// Observed directly from the agent: a path mixing an underscore, a
+		// space, a dot and two CJK characters, each becoming one dash.
+		`D:\CodeWorkSpace\poc_slug test.v2_名字`: "D--CodeWorkSpace-poc-slug-test-v2---",
 	}
 	for in, want := range tests {
 		if got := EncodeProjectSlug(in); got != want {
 			t.Errorf("EncodeProjectSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestEncodeProjectSlugHashesLongPaths(t *testing.T) {
+	long := `D:\` + strings.Repeat("segment\\", 40) + "end"
+	slug := EncodeProjectSlug(long)
+
+	if len(slug) <= slugMaxLen {
+		t.Fatalf("expected a truncated slug, got %d characters", len(slug))
+	}
+	if got := slug[:slugMaxLen]; strings.ContainsAny(got, `:\/.`) {
+		t.Errorf("prefix still contains raw path characters: %q", got)
+	}
+	if slug[slugMaxLen] != '-' {
+		t.Errorf("expected a dash before the hash, got %q", slug[slugMaxLen])
+	}
+
+	// The hash distinguishes paths that share their first 200 characters, which
+	// is the entire reason it exists.
+	other := EncodeProjectSlug(long + "x")
+	if slug == other {
+		t.Error("paths sharing a truncated prefix produced the same slug")
+	}
+	if slug[:slugMaxLen] != other[:slugMaxLen] {
+		t.Error("expected the truncated prefixes to match")
+	}
+}
+
+func TestSlugHashMatchesTheAgentsArithmetic(t *testing.T) {
+	// hash*31 + code unit, wrapping at 32 bits, rendered in base 36. Spot
+	// values computed from the same definition the agent uses.
+	tests := map[string]string{
+		"":  "0",
+		"a": "2p",
+		"D": "1w",
+	}
+	for in, want := range tests {
+		if got := slugHash(utf16.Encode([]rune(in))); got != want {
+			t.Errorf("slugHash(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// Inputs whose accumulated hash goes negative must come out as the absolute
+	// value, matching Math.abs, and never carry a minus sign into a directory
+	// name. Values cross-checked against the agent's own arithmetic.
+	negative := map[string]string{
+		"abcdefghij": "ahnmmz",
+		"zzzzzzzzzz": "q59vb4",
+	}
+	for in, want := range negative {
+		got := slugHash(utf16.Encode([]rune(in)))
+		if got != want {
+			t.Errorf("slugHash(%q) = %q, want %q", in, got, want)
+		}
+		if strings.Contains(got, "-") {
+			t.Errorf("slugHash(%q) leaked a sign: %q", in, got)
+		}
+	}
+
+	// A long input must still produce a value, i.e. the wraparound does not
+	// blow up.
+	if got := slugHash(utf16.Encode([]rune(strings.Repeat("x", 500)))); got == "" {
+		t.Error("expected a hash for a long path")
+	}
+}
+
+func TestSameProject(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{`D:\Work\Example`, `D:\Work\Example`, true},
+		{`D:\Work\Example`, `d:/work/example`, true},
+		{`D:\Work\Example\`, `D:\Work\Example`, true},
+		{`D:\Work\Example`, `D:\Work\Ex`, false},
+		{`D:\Work\Example`, `D:\Work\Example2`, false},
+		{"/Users/bob/x", "/Users/bob/x", true},
+		{"/Users/bob/x", "/users/bob/x", false},
+	}
+	for _, tt := range tests {
+		if got := sameProject(tt.a, tt.b); got != tt.want {
+			t.Errorf("sameProject(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 		}
 	}
 }
@@ -368,6 +465,119 @@ func TestDiscoverSessions(t *testing.T) {
 	}
 	if byID["aaa"].CreatedAt.IsZero() || byID["aaa"].UpdatedAt.IsZero() {
 		t.Error("timestamps not populated")
+	}
+}
+
+func TestDiscoverSessionsSkipsAnotherProjectsSessions(t *testing.T) {
+	// `my_app` and `my.app` encode to the same slug, so their sessions share a
+	// directory. The session's own cwd decides which project it belongs to;
+	// without that check the wrong project's sessions get pushed, and a restore
+	// lands in the wrong place.
+	home := t.TempDir()
+	l := Layout{Home: home}
+	const mine = `D:\Work\my_app`
+	const theirs = `D:\Work\my.app`
+
+	if EncodeProjectSlug(mine) != EncodeProjectSlug(theirs) {
+		t.Fatal("expected these paths to collide; the test is not exercising anything")
+	}
+
+	dir := l.SessionDir(mine)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, cwd string) {
+		t.Helper()
+		rec := `{"type":"user","cwd":"` + strings.ReplaceAll(cwd, `\`, `\\`) + `","message":{"content":"hi"}}` + "\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("mine.jsonl", mine)
+	write("theirs.jsonl", theirs)
+
+	refs, err := l.DiscoverSessions(mine)
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("got %d sessions, want 1: %+v", len(refs), refs)
+	}
+	if refs[0].NativeID != "mine" {
+		t.Errorf("listed the wrong project's session: %s", refs[0].NativeID)
+	}
+}
+
+func TestDiscoverSessionsKeepsPartlyDamagedSessions(t *testing.T) {
+	// A kill during a write leaves a partial line, and the agent then appends
+	// after it - producing a malformed record in the middle. Dropping the whole
+	// session would make it disappear from the user's view and never be backed
+	// up, so listing tolerates it while anything that pushes stays strict.
+	home := t.TempDir()
+	l := Layout{Home: home}
+	const root = `D:\Work\Damaged`
+
+	dir := l.SessionDir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"type":"ai-title","aiTitle":"Still visible"}` + "\n" +
+		`{"type":"user","message":{"content":"tru` + "\n" +
+		`{"type":"user","message":{"content":"after the damage"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "x.jsonl"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := l.DiscoverSessions(root)
+	if err != nil {
+		t.Fatalf("DiscoverSessions: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("a damaged session vanished from the listing: %+v", refs)
+	}
+	if refs[0].Title != "Still visible" {
+		t.Errorf("title = %q", refs[0].Title)
+	}
+
+	// The strict read still refuses the same file, because pushing it would
+	// make the damage permanent.
+	if _, err := ReadSessionFile(filepath.Join(dir, "x.jsonl")); !errors.Is(err, ErrCorruptSession) {
+		t.Errorf("strict read should refuse damaged content, got %v", err)
+	}
+}
+
+func TestReadRecordsLenientCountsWhatItSkipped(t *testing.T) {
+	data, err := ReadRecordsLenient(strings.NewReader("{\"a\":1}\nbroken\n{\"b\":2}\nalso broken\n"))
+	if err != nil {
+		t.Fatalf("ReadRecordsLenient: %v", err)
+	}
+	if len(data.Records) != 2 {
+		t.Errorf("got %d records, want 2", len(data.Records))
+	}
+	if data.Skipped != 2 {
+		t.Errorf("Skipped = %d, want 2", data.Skipped)
+	}
+}
+
+func TestDiscoverSessionsReportsAnUnreadableDirectory(t *testing.T) {
+	// A missing directory means "no sessions yet" and is normal. Anything else
+	// is a real problem and must not be reported as an empty project, or the
+	// user would be told their sessions are safe when they were never seen.
+	home := t.TempDir()
+	l := Layout{Home: home}
+	const root = `D:\Work\Blocked`
+
+	dir := l.SessionDir(root)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A file where the session directory belongs.
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := l.DiscoverSessions(root); err == nil {
+		t.Fatal("expected an error, got none")
 	}
 }
 

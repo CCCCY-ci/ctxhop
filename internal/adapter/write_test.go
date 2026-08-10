@@ -204,6 +204,65 @@ func TestWriteSessionRejectsUnreadableTarget(t *testing.T) {
 	}
 }
 
+func TestWriteSessionRejectsUnsafeSessionIDs(t *testing.T) {
+	// A native id arrives as metadata from another device. Joined onto a path
+	// unchecked, these walk straight out of the project's directory - and
+	// MkdirAll would build the way there.
+	unsafe := []string{
+		"..",
+		"../escape",
+		`..\escape`,
+		"sub/dir",
+		`sub\dir`,
+		"",
+		".",
+		"has space",
+		"quote\"mark",
+	}
+
+	for _, id := range unsafe {
+		t.Run(id, func(t *testing.T) {
+			home := t.TempDir()
+			l := Layout{Home: home}
+
+			err := l.WriteSession(testProject, id, records(`{"a":1}`))
+			if !errors.Is(err, ErrInvalidSessionID) {
+				t.Fatalf("got %v, want ErrInvalidSessionID", err)
+			}
+			if err := l.ReplaceSession(testProject, id, records(`{"a":1}`)); !errors.Is(err, ErrInvalidSessionID) {
+				t.Fatalf("ReplaceSession: got %v, want ErrInvalidSessionID", err)
+			}
+
+			// Nothing may have been created anywhere under the home directory.
+			var created []string
+			_ = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					created = append(created, p)
+				}
+				return nil
+			})
+			if len(created) != 0 {
+				t.Errorf("a rejected id created files: %v", created)
+			}
+		})
+	}
+}
+
+func TestWriteSessionAcceptsRealisticSessionIDs(t *testing.T) {
+	l := Layout{Home: t.TempDir()}
+
+	for _, id := range []string{
+		"1ec04445-8626-4962-bded-d17fe30a8128",
+		"abc123",
+		"with_underscore",
+		"with.dot",
+	} {
+		if err := l.WriteSession(testProject, id, records(`{"a":1}`)); err != nil {
+			t.Errorf("WriteSession(%q): %v", id, err)
+		}
+	}
+}
+
 // failingWriter fails once it has accepted limit bytes, standing in for a disk
 // that fills up or a device that disappears partway through a write.
 type failingWriter struct {

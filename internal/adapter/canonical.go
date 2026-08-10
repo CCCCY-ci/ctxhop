@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -126,8 +127,10 @@ func (c *Canonicalizer) key(parentField, k string) string {
 		}
 		return k
 	}
-	if _, ok := c.tokenize(k); ok {
-		c.unknown[parentField+".<key>"] = true
+	if isBarePath(k) {
+		if _, ok := c.tokenize(k); ok {
+			c.report(parentField + ".<key>")
+		}
 	}
 	return k
 }
@@ -145,13 +148,56 @@ func (c *Canonicalizer) text(field, s string) string {
 		return s
 	}
 
-	// Only a value that *starts with* one of our roots is reported. Prose and
-	// terminal output quote paths mid-string constantly, and flagging those
-	// would downgrade compatibility on every session.
-	if _, ok := c.tokenize(s); ok {
-		c.unknown[field] = true
+	if isBarePath(s) {
+		if _, ok := c.tokenize(s); ok {
+			c.report(field)
+		}
 	}
 	return s
+}
+
+// report records a schema finding, but only under a name that is safe to show.
+//
+// Findings surface in `agentsync doctor`, whose output must be safe to paste
+// into a public issue - no paths, project names or session content (BR-09).
+// Keys of a path-keyed container are themselves absolute paths, so a name that
+// is not a plain identifier is replaced rather than leaked.
+func (c *Canonicalizer) report(field string) {
+	if !isFieldName(field) {
+		field = "<redacted>"
+	}
+	c.unknown[field] = true
+}
+
+func isFieldName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '.' || r == '<' || r == '>':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isBarePath reports whether a value is plausibly a path and nothing else.
+//
+// The finding it gates downgrades compatibility, which stops the agent from
+// syncing entirely, so the test errs towards silence. Prose routinely begins
+// with a path - a pasted filename followed by a question, a shell command in a
+// tool argument - and treating those as schema drift would kill sync for
+// ordinary sessions.
+//
+// Requiring the value to contain no whitespace means paths containing spaces go
+// unreported. That is an acceptable trade: detection is statistical across
+// every record of every session, so a genuinely new path field will show up on
+// some space-free path quickly, whereas a false positive is immediately fatal.
+func isBarePath(s string) bool {
+	return s != "" && !strings.ContainsAny(s, " \t\r\n")
 }
 
 // tokenize replaces a leading path prefix with its token. The longer root is
@@ -205,11 +251,18 @@ func replaceRoot(s, root, token string) (string, bool) {
 // session that still refers to another machine's paths must never reach the
 // agent's data directory (BR-10).
 func Localize(raw []byte, space PathSpace) ([]byte, error) {
+	// Refuse before touching the record rather than only when a token turns up.
+	// Localising against an unknown project root cannot produce a session the
+	// agent will resolve, so there is nothing useful to return (spec §5).
+	if space.ProjectRoot == "" {
+		return nil, errors.New("localize: no project root configured")
+	}
+
 	v, err := decode(raw)
 	if err != nil {
 		return nil, err
 	}
-	l := &localizer{space: space, sep: separatorFor(space.ProjectRoot)}
+	l := &localizer{space: space}
 	out, err := l.walk("", v)
 	if err != nil {
 		return nil, err
@@ -219,7 +272,6 @@ func Localize(raw []byte, space PathSpace) ([]byte, error) {
 
 type localizer struct {
 	space PathSpace
-	sep   string
 }
 
 func (l *localizer) walk(field string, v any) (any, error) {
@@ -258,9 +310,19 @@ func (l *localizer) walk(field string, v any) (any, error) {
 	}
 }
 
-// text substitutes a leading token. allowed reports whether this position is
-// one where a token is expected at all.
-func (l *localizer) text(field, s string, allowed bool) (string, error) {
+// text substitutes a leading token. tokenized reports whether this position is
+// one the canonicaliser would have written a token into.
+//
+// A token elsewhere is left alone rather than rejected. We only ever write
+// tokens into allowlisted positions, so the same characters appearing in a
+// message body or a command line are user content that happens to look like
+// our marker - and refusing there would make any session that discusses
+// AgentSync itself impossible to restore.
+func (l *localizer) text(field, s string, tokenized bool) (string, error) {
+	if !tokenized {
+		return s, nil
+	}
+
 	for _, tok := range []struct {
 		token string
 		root  string
@@ -271,13 +333,10 @@ func (l *localizer) text(field, s string, allowed bool) (string, error) {
 		if !strings.Contains(s, tok.token) {
 			continue
 		}
-		if !allowed {
-			return "", fmt.Errorf("localize: %s in unexpected field %q", tok.token, field)
-		}
 		if !strings.HasPrefix(s, tok.token) {
-			// A token anywhere but the start means the record was not produced
-			// by our canonicaliser, or user content collided with the literal
-			// token. Either way, guessing is worse than refusing.
+			// In a field we do tokenize, a marker anywhere but the start means
+			// the record did not come from our canonicaliser. Guessing what it
+			// meant is worse than refusing to write it.
 			return "", fmt.Errorf("localize: %s not at start of value in field %q", tok.token, field)
 		}
 		if tok.root == "" {
@@ -288,7 +347,10 @@ func (l *localizer) text(field, s string, allowed bool) (string, error) {
 		if rest == "" {
 			return tok.root, nil
 		}
-		return tok.root + strings.ReplaceAll(rest, "/", l.sep), nil
+		// The separator follows the root being substituted, not the project's.
+		// An agent directory can sit on a different-looking path from the
+		// project, and mixing the two produces `C:\Users\x\.claude/backups`.
+		return tok.root + strings.ReplaceAll(rest, "/", separatorFor(tok.root)), nil
 	}
 	return s, nil
 }
