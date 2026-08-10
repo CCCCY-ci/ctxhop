@@ -1,0 +1,14 @@
+# Normalize line endings: LF in the repository, native in the working tree.
+* text=auto eol=lf
+
+# Shell scripts must always be LF, including on Windows checkouts.
+*.sh text eol=lf
+
+# Go source is always LF.
+*.go text eol=lf
+
+# Do not touch binary or fixture content.
+*.png binary
+*.jpg binary
+*.age binary
+*.jsonl -text

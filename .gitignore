@@ -1,0 +1,35 @@
+# === Build output ===
+# Anchored to the repository root: a bare "agentsync" would also match the
+# cmd/agentsync source directory.
+/dist/
+/build/
+/agentsync
+/agentsync.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# === Go ===
+*.test
+*.out
+coverage.html
+vendor/
+
+# === Local development ===
+.env
+*.local
+/scratch/
+
+# === Never commit real credentials or real session data ===
+# Session fixtures used by tests must be synthetic and explicitly whitelisted.
+*.credentials.json
+config.local.*
+/testdata/real/
+
+# === Editors / OS ===
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
