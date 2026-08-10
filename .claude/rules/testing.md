@@ -18,11 +18,19 @@
 | `cmd/agentsync` | 不设硬性要求，但每个命令至少有一个端到端用例 |
 
 ```bash
-go test -race -cover ./...
+go test -cover ./...
 go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 ```
 
-**`-race` 是必须的**，不是可选项。
+### 1.1 关于 `-race`
+
+`-race` **需要 cgo，而 cgo 需要本机有 C 编译器**。本项目的开发机（Windows，无 gcc）无法运行竞态检测，因此：
+
+* **本地**：`go test -cover ./...`，不带 `-race`。
+* **CI**：在 Linux runner 上必须带 `-race` 运行，那里工具链齐备。
+* 涉及并发的代码（daemon、同步编排）合并前必须有一次带 `-race` 的 CI 通过记录。
+
+注意这与 `CGO_ENABLED=0` 不冲突：那条约束针对**发布的二进制**（静态链接与交叉编译），不针对测试运行。
 
 ---
 
