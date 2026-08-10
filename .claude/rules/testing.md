@@ -18,19 +18,19 @@
 | `cmd/agentsync` | 不设硬性要求，但每个命令至少有一个端到端用例 |
 
 ```bash
-go test -cover ./...
+go test -race -cover ./...
 go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 ```
 
-### 1.1 关于 `-race`
+**`-race` 是必须的**，不是可选项。
 
-`-race` **需要 cgo，而 cgo 需要本机有 C 编译器**。本项目的开发机（Windows，无 gcc）无法运行竞态检测，因此：
+### 1.1 `-race` 的工具链前提
 
-* **本地**：`go test -cover ./...`，不带 `-race`。
-* **CI**：在 Linux runner 上必须带 `-race` 运行，那里工具链齐备。
-* 涉及并发的代码（daemon、同步编排）合并前必须有一次带 `-race` 的 CI 通过记录。
+`-race` 需要 cgo，cgo 需要本机有 C 编译器。开发机上已安装 MinGW-w64 GCC（WinLibs，POSIX 线程 + UCRT），通过 `winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT` 获得，已在用户级 PATH 中。
 
-注意这与 `CGO_ENABLED=0` 不冲突：那条约束针对**发布的二进制**（静态链接与交叉编译），不针对测试运行。
+若 `go test -race` 报 `cgo: C compiler "gcc" not found`，说明 shell 继承的是安装前的旧环境，重开终端即可。
+
+注意这与 `CGO_ENABLED=0` 不冲突：那条约束针对**发布的二进制**（保证静态链接与一条命令交叉编译），不针对测试运行。发布产物仍必须以 `CGO_ENABLED=0` 构建。
 
 ---
 
