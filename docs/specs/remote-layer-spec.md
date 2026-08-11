@@ -193,11 +193,19 @@ endpoint、region、bucket、access key、secret key、路径前缀、寻址方�
 
 ## 10. 实现顺序
 
-1. 键校验与共用的契约测试骨架
-2. `dir` driver
-3. SigV4 签名（含测试向量）
-4. `s3` driver
-5. `Prober` 自检（`init` 阶段验证连通性与读写删权限）
+1. ~~键校验与共用的契约测试骨架~~ ✅
+2. ~~`dir` driver~~ ✅
+3. ~~SigV4 签名（含测试向量）~~ ✅ 一次通过 AWS 公布的 GET Object 示例
+4. ~~`s3` driver~~ ✅ 与 `dir` 跑同一套契约测试
+5. ~~`Prober` 自检~~ ✅ 两个 driver 各自实现
+
+**未启用退路**：SigV4 自实现按预期工作，没有引入 `minio-go`。项目依然零第三方依赖，二进制 1.6MB。
+
+### 10.1 实现中确定的两件事
+
+**对象整体读入内存后再签名。** 签名需要预先知道载荷哈希，流式上传则需要 chunked 签名，而分片大小本就由上层控制得很小，因此不划算。设了 256MB 上限，防止畸形或恶意的列举导致无界分配。
+
+**`Content-Length`、`User-Agent`、`Authorization` 不参与签名。** Go 会在签名之后重写前两者，签了就永远对不上。
 
 ---
 
