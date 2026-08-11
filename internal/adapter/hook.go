@@ -46,7 +46,11 @@ func hookCommand(executable string) (string, error) {
 	if executable == "" {
 		return "", errors.New("adapter: no executable path for the hook")
 	}
-	if strings.ContainsAny(executable, "\"\r\n") {
+	// The path lands inside a double-quoted string, and both PowerShell and sh
+	// interpolate `$` and backtick there. Both are legal in a path, and the
+	// result of getting it wrong is a hook that silently invokes the wrong
+	// executable - so automatic backups stop with no visible symptom.
+	if strings.ContainsAny(executable, "\"$`\r\n") {
 		return "", fmt.Errorf("adapter: executable path cannot be quoted safely: %q", executable)
 	}
 
@@ -82,10 +86,23 @@ func (l Layout) InstallHook(executable string) error {
 		return err
 	}
 
-	groups := hookGroups(settings)
+	// Refuse if the file holds something valid but shaped differently from what
+	// we model. Writing our entry there would overwrite a value we never
+	// understood, and settings we cannot account for are exactly the case where
+	// stopping beats guessing (BR-12).
+	groups, err := hookGroups(settings)
+	if err != nil {
+		return err
+	}
 
-	if replaceOurCommand(groups, command) {
+	switch replaceOurCommand(groups, command) {
+	case replacedOurs:
 		return l.saveSettings(settings)
+	case leftUserCopy:
+		// A command carrying our marker that we did not write - the user
+		// wrapped it in a launcher or a logger. It already runs us, so the
+		// hook is installed; rewriting it would throw their change away.
+		return nil
 	}
 
 	groups = append(groups, map[string]any{
@@ -106,12 +123,26 @@ func (l Layout) RemoveHook() error {
 		return err
 	}
 
-	groups, changed := withoutOurCommand(hookGroups(settings))
+	// Unlike installing, an unrecognised shape is no obstacle here: there is
+	// nothing of ours inside something we do not model, so leaving it alone is
+	// the correct outcome rather than a refusal.
+	groups, _ := hookGroups(settings)
+
+	kept, changed := withoutOurCommand(groups)
 	if !changed {
 		return nil
 	}
-	setHookGroups(settings, groups)
+	setHookGroups(settings, kept)
 	pruneEmpty(settings)
+
+	// A document emptied by our own removal means the file exists only because
+	// we created it, and leaving an empty one behind is still a trace (BR-13).
+	if len(settings) == 0 {
+		if err := os.Remove(l.SettingsPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove agent settings: %w", err)
+		}
+		return nil
+	}
 	return l.saveSettings(settings)
 }
 
@@ -121,7 +152,8 @@ func (l Layout) HookInstalled() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, item := range hookItems(hookGroups(settings)) {
+	groups, _ := hookGroups(settings)
+	for _, item := range hookItems(groups) {
 		if isOurs(item) {
 			return true, nil
 		}
@@ -157,6 +189,13 @@ func (l Layout) loadSettings() (map[string]any, error) {
 
 // saveSettings writes the settings back atomically. An interrupted write must
 // never leave the user without a settings file.
+//
+// Known limitation: this is a read-modify-write with no lock, because the file
+// format offers nowhere to hold one and the agent does not coordinate. If the
+// agent or an editor writes settings.json between our read and our rename, that
+// change is lost - cleanly, since the rename is atomic, but lost. The window is
+// milliseconds and the operation is user-initiated, so it is accepted rather
+// than defended against with a lock protocol nobody else honours.
 func (l Layout) saveSettings(settings map[string]any) error {
 	// HTML escaping off: the command line contains `&` on Windows, and a
 	// settings file full of & is something the user has to read and edit.
@@ -172,20 +211,57 @@ func (l Layout) saveSettings(settings map[string]any) error {
 	if err := os.MkdirAll(l.Home, 0o755); err != nil {
 		return fmt.Errorf("create agent directory: %w", err)
 	}
+
+	// Publishing through a temporary file would otherwise replace the file's
+	// mode with the 0600 of a freshly created temp file. Changing how the
+	// user's settings are readable is a permanent trace of our having been
+	// there, which uninstalling could not undo (BR-13).
+	var mode os.FileMode
+	if info, err := os.Stat(l.SettingsPath()); err == nil {
+		mode = info.Mode().Perm()
+	}
+
 	return writeFileAtomic(l.SettingsPath(), func(w io.Writer) error {
+		if mode != 0 {
+			if f, ok := w.(*os.File); ok {
+				if err := f.Chmod(mode); err != nil {
+					return fmt.Errorf("preserve settings file mode: %w", err)
+				}
+			}
+		}
 		_, err := w.Write(data)
 		return err
 	})
 }
 
-// hookGroups returns the entries registered for our event, or nil.
-func hookGroups(settings map[string]any) []any {
-	hooks, ok := settings["hooks"].(map[string]any)
-	if !ok {
-		return nil
+// ErrUnexpectedSettings reports settings that parse as JSON but are shaped
+// differently from what this adapter models.
+var ErrUnexpectedSettings = errors.New("adapter: agent settings have an unexpected shape")
+
+// hookGroups returns the entries registered for our event.
+//
+// Absent containers are normal and yield nil. A container that is present but
+// not the shape we expect is an error: writing our entry over it would discard
+// a value we never understood, and the file belongs to the user.
+func hookGroups(settings map[string]any) ([]any, error) {
+	raw, ok := settings["hooks"]
+	if !ok || raw == nil {
+		return nil, nil
 	}
-	groups, _ := hooks[hookEvent].([]any)
-	return groups
+	hooks, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: \"hooks\" is not an object", ErrUnexpectedSettings)
+	}
+
+	rawGroups, ok := hooks[hookEvent]
+	if !ok || rawGroups == nil {
+		return nil, nil
+	}
+	groups, ok := rawGroups.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q is not a list", ErrUnexpectedSettings, hookEvent)
+	}
+	return groups, nil
 }
 
 func setHookGroups(settings map[string]any, groups []any) {
@@ -223,19 +299,58 @@ func isOurs(item map[string]any) bool {
 	return strings.Contains(command, hookMarker)
 }
 
-// replaceOurCommand updates an existing entry in place, reporting whether one
-// was found. This is what makes reinstalling after a move a no-op rather than a
-// duplicate.
-func replaceOurCommand(groups []any, command string) bool {
-	found := false
+// installOutcome describes what InstallHook found already in place.
+type installOutcome int
+
+const (
+	// notFound means no command carries our marker.
+	notFound installOutcome = iota
+	// replacedOurs means an entry we generated was updated in place.
+	replacedOurs
+	// leftUserCopy means a command carries our marker but is not in the form
+	// we generate, so the user has customised it and it was left alone.
+	leftUserCopy
+)
+
+// replaceOurCommand updates an entry we previously generated, which is what
+// makes reinstalling after a move an update rather than a duplicate.
+//
+// A marked command in any other form is somebody's customised wrapper. It still
+// invokes us, so the hook counts as installed, but rewriting it would silently
+// discard their change.
+func replaceOurCommand(groups []any, command string) installOutcome {
+	outcome := notFound
+
 	for _, item := range hookItems(groups) {
-		if isOurs(item) {
-			item["command"] = command
-			item["type"] = "command"
-			found = true
+		if !isOurs(item) {
+			continue
 		}
+		if !looksGenerated(item) {
+			if outcome == notFound {
+				outcome = leftUserCopy
+			}
+			continue
+		}
+		item["command"] = command
+		item["type"] = "command"
+		outcome = replacedOurs
 	}
-	return found
+	return outcome
+}
+
+// looksGenerated reports whether a command has the shape this tool writes:
+// an optional call operator, a quoted path, then exactly our arguments.
+func looksGenerated(item map[string]any) bool {
+	command, _ := item["command"].(string)
+	command = strings.TrimPrefix(command, "& ")
+	if !strings.HasPrefix(command, `"`) {
+		return false
+	}
+	end := strings.Index(command[1:], `"`)
+	if end < 0 {
+		return false
+	}
+	return command[end+2:] == " push "+hookMarker
 }
 
 // withoutOurCommand strips our entries, dropping groups left empty.

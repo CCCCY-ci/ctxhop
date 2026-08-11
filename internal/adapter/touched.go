@@ -81,8 +81,8 @@ func collectToolUses(rec map[string]any, projectRoot string, seen map[string]boo
 		if !ok {
 			continue
 		}
-		path, ok := input["file_path"].(string)
-		if !ok || path == "" {
+		path := toolPath(input)
+		if path == "" {
 			continue
 		}
 
@@ -96,6 +96,26 @@ func collectToolUses(rec map[string]any, projectRoot string, seen map[string]boo
 		name, _ := block["name"].(string)
 		seen[rel] = seen[rel] || writeTools[name]
 	}
+}
+
+// pathKeys are the tool arguments that name a file.
+//
+// `file_path` covers most tools, but not all of them: NotebookEdit takes
+// `notebook_path`. Reading only `file_path` meant a session that edited a
+// notebook produced no entry at all - not even a read - so the consistency
+// check would report the workspace clean and the user would resume against a
+// stale notebook. That is exactly the miss this package exists to prevent, so
+// new tools must be checked for their own spelling of this argument.
+var pathKeys = []string{"file_path", "notebook_path"}
+
+// toolPath returns the file a tool call names, or "".
+func toolPath(input map[string]any) string {
+	for _, key := range pathKeys {
+		if path, ok := input[key].(string); ok && path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 // projectRelative converts an absolute path into one relative to the project

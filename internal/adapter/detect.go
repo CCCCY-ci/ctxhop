@@ -5,16 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
-
-// versionTimeout bounds the one subprocess this package ever starts. The agent
-// must keep working whether or not we do, so a hung `--version` can never hold
-// up anything of ours (§4 P2).
-const versionTimeout = 5 * time.Second
 
 // verifiedVersions lists the agent versions this adapter has been checked
 // against.
@@ -32,10 +25,17 @@ var verifiedVersions = map[string]bool{
 // DefaultHome returns the agent's data directory for this machine.
 //
 // CLAUDE_CONFIG_DIR relocates it; the agent honours that variable, so anything
-// that ignored it would read and write the wrong place entirely.
+// that ignored it would read and write the wrong place entirely. A relative
+// value is resolved here, because the agent resolves it against its own working
+// directory and ours is not the same - leaving it relative would point us at a
+// different directory than the one actually in use.
 func DefaultHome() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
-		return dir, nil
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve CLAUDE_CONFIG_DIR: %w", err)
+		}
+		return abs, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -47,6 +47,13 @@ func DefaultHome() (string, error) {
 // Detect locates Claude Code on this machine and grades our compatibility with
 // it. It returns ErrNotInstalled when the agent is absent, which is an expected
 // outcome and not a failure (§9.2).
+//
+// The agent's own executable is deliberately never run - not even for
+// `--version`. Starting it would hand our "no network traffic we did not ask
+// for" guarantee to somebody else's startup path, which does things like check
+// for updates (§4 P7). The version is read from what the agent wrote instead,
+// which is also the more useful figure: what matters for grading is the version
+// that produced the records we are about to parse.
 func (l Layout) Detect(ctx context.Context) (Installation, error) {
 	if l.Home == "" {
 		return Installation{}, errors.New("adapter: no agent home configured")
@@ -59,12 +66,12 @@ func (l Layout) Detect(ctx context.Context) (Installation, error) {
 	case err != nil:
 		return Installation{}, fmt.Errorf("inspect agent directory: %w", err)
 	case !info.IsDir():
-		return Installation{}, fmt.Errorf("adapter: agent data path is not a directory")
+		return Installation{}, errors.New("adapter: agent data path is not a directory")
 	}
 
 	lookup := l.version
 	if lookup == nil {
-		lookup = agentVersion
+		lookup = l.versionFromNewestSession
 	}
 
 	inst := Installation{DataDir: l.Home}
@@ -73,33 +80,71 @@ func (l Layout) Detect(ctx context.Context) (Installation, error) {
 	return inst, nil
 }
 
-// agentVersion asks the agent to report itself, returning "" if it cannot.
+// versionFromNewestSession reads the agent version recorded in the most
+// recently modified session, or "" if there is nothing to read.
 //
-// This is the only place the agent's executable is ever run, and only with
-// --version: we never drive the agent, only read what it leaves on disk.
-func agentVersion(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
-	defer cancel()
+// Only one file is opened however many sessions exist: finding the newest is a
+// directory walk, and the answer is the same whichever recent session is used.
+func (l Layout) versionFromNewestSession(ctx context.Context) string {
+	newest, err := l.newestSessionFile(ctx)
+	if err != nil || newest == "" {
+		return ""
+	}
 
-	out, err := exec.CommandContext(ctx, "claude", "--version").Output()
+	f, err := os.Open(newest)
 	if err != nil {
 		return ""
 	}
-	return parseVersion(string(out))
+	// Read-only handle: a failure to close cannot lose data (code_style §2.1).
+	defer f.Close() //nolint:errcheck
+
+	data, err := ReadRecordsLenient(f)
+	if err != nil {
+		return ""
+	}
+	return summarize(data.Records).version
 }
 
-// parseVersion pulls a dotted version out of the agent's `--version` output,
-// which carries extra words around it.
-func parseVersion(out string) string {
-	for _, field := range strings.Fields(out) {
-		if strings.Count(field, ".") >= 2 && strings.IndexFunc(field, isDigit) == 0 {
-			return field
+// newestSessionFile walks the project directories for the most recently
+// modified session file.
+func (l Layout) newestSessionFile(ctx context.Context) (string, error) {
+	projects, err := os.ReadDir(l.ProjectsDir())
+	if err != nil {
+		// No projects directory simply means nothing has been recorded yet.
+		return "", nil //nolint:nilerr
+	}
+
+	var newest string
+	var newestTime int64
+
+	for _, project := range projects {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if !project.IsDir() {
+			continue
+		}
+
+		dir := filepath.Join(l.ProjectsDir(), project.Name())
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if t := info.ModTime().UnixNano(); t > newestTime {
+				newestTime, newest = t, filepath.Join(dir, entry.Name())
+			}
 		}
 	}
-	return ""
+	return newest, nil
 }
-
-func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 // gradeVersion classifies a version, returning the level and a reason safe to
 // print in diagnostics.
@@ -108,10 +153,15 @@ func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 // refusing everything on each release would leave users stranded far more often
 // than it would protect them; what an unknown version restricts is writing,
 // because writing is the operation that can destroy data (spec §4.8).
+//
+// A version we could not determine at all grades no less strictly than one we
+// merely do not recognise. Grading the case with the least information as the
+// most permissive would invert the whole point: a caller asking "may I restore
+// without confirmation?" would be told yes precisely when we know least.
 func gradeVersion(version string) (Compatibility, string) {
 	switch {
 	case version == "":
-		return CompatUnknown, "could not determine the agent version"
+		return CompatLimited, "agent version could not be determined; backup continues, restoring needs confirmation"
 	case verifiedVersions[version]:
 		return CompatFull, "agent version is verified"
 	default:

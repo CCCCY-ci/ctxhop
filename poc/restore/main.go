@@ -146,8 +146,12 @@ func run(fromRoot, fromHome, toRoot, toHome, writeTo, id string) error {
 			return fmt.Errorf("recanonicalize record %d on the target: %w", i+1, err)
 		}
 		if string(again) != string(canonical[i]) {
-			return fmt.Errorf("record %d does not survive the round trip:\n  before %s\n  after  %s",
-				i+1, redact(string(canonical[i]), fromRoot, toRoot), redact(string(again), fromRoot, toRoot))
+			// Report where they diverge, never the records themselves. This is
+			// the output most likely to be pasted into a document or an issue,
+			// and a record holds conversation text, tool output and file
+			// contents.
+			return fmt.Errorf("record %d does not survive the round trip: differs at byte %d (%d bytes before, %d after)",
+				i+1, firstDifference(canonical[i], again), len(canonical[i]), len(again))
 		}
 	}
 	fmt.Printf("round trip: all %d records canonicalize identically on the target\n", len(localized))
@@ -176,6 +180,21 @@ func run(fromRoot, fromHome, toRoot, toHome, writeTo, id string) error {
 	}
 	fmt.Printf("read back: %d records, intact\n", len(back.Records))
 	return nil
+}
+
+// firstDifference returns the index of the first differing byte, or the length
+// of the shorter input when one is a prefix of the other.
+func firstDifference(a, b []byte) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
 }
 
 // redact replaces the machine's real paths with labels, so the output stays
