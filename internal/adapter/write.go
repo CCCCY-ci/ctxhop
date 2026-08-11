@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
 )
 
 // ErrSessionExists reports that the target session is already present.
@@ -90,7 +92,7 @@ func (l Layout) writeSession(path string, records [][]byte) error {
 		return fmt.Errorf("create session directory: %w", err)
 	}
 
-	return writeFileAtomic(path, func(w io.Writer) error {
+	return atomicfile.Write(path, func(w io.Writer) error {
 		return writeRecords(w, records)
 	})
 }
@@ -117,68 +119,6 @@ func writeRecords(w io.Writer, records [][]byte) error {
 	}
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flush session: %w", err)
-	}
-	return nil
-}
-
-// writeFileAtomic publishes whatever write produces, through a temporary file
-// in the same directory, then renames it into place.
-//
-// The temporary file must share the destination's directory: rename is only
-// atomic within a filesystem, and a temp directory can easily be on another
-// volume. The suffix keeps it out of the way of the agent, which only reads
-// `.jsonl` files (BR-11).
-//
-// Everything that writes into the agent's data directory goes through here, so
-// that the atomicity guarantee has exactly one implementation to get right.
-func writeFileAtomic(path string, write func(io.Writer) error) (err error) {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-	tmpName := tmp.Name()
-	closed := false
-
-	// Any failure from here on must leave nothing behind. The agent's data
-	// directory is not ours to litter.
-	defer func() {
-		if err == nil {
-			return
-		}
-		if !closed {
-			// Reported rather than dropped: a close that fails can mean the
-			// written bytes never landed, which is worth knowing even though
-			// the file is about to be removed anyway.
-			if closeErr := tmp.Close(); closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("close temporary file: %w", closeErr))
-			}
-		}
-		if rmErr := os.Remove(tmpName); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			err = errors.Join(err, fmt.Errorf("remove temporary file: %w", rmErr))
-		}
-	}()
-
-	if err = write(tmp); err != nil {
-		return err
-	}
-
-	// Durability before visibility. Without this the rename could publish a
-	// name whose contents have not reached disk, so a power cut would leave a
-	// truncated session under the real filename - the exact state BR-11 exists
-	// to prevent. Skipping the parent directory's own fsync is deliberate: if
-	// the rename itself is lost, the previous file is still intact, and either
-	// outcome is a state the agent can use.
-	if err = tmp.Sync(); err != nil {
-		return fmt.Errorf("sync session: %w", err)
-	}
-	if err = tmp.Close(); err != nil {
-		return fmt.Errorf("close session: %w", err)
-	}
-	closed = true
-
-	if err = os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install session: %w", err)
 	}
 	return nil
 }

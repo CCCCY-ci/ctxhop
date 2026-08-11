@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
 	"runtime"
 	"strings"
 )
@@ -221,7 +223,7 @@ func (l Layout) saveSettings(settings map[string]any) error {
 		mode = info.Mode().Perm()
 	}
 
-	return writeFileAtomic(l.SettingsPath(), func(w io.Writer) error {
+	return atomicfile.Write(l.SettingsPath(), func(w io.Writer) error {
 		if mode != 0 {
 			if f, ok := w.(*os.File); ok {
 				if err := f.Chmod(mode); err != nil {
