@@ -24,6 +24,9 @@ const versionTimeout = 5 * time.Second
 // agent releases (spec §4.8).
 var verifiedVersions = map[string]bool{
 	"2.1.226": true,
+	// Verified end to end by PoC-1b: read, canonicalise, localise, install and
+	// resume natively.
+	"2.1.227": true,
 }
 
 // DefaultHome returns the agent's data directory for this machine.
