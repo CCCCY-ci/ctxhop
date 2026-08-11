@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -27,6 +28,10 @@ const defaultTimeout = 30 * time.Second
 // so they stay small. The limit exists so a corrupt or hostile listing cannot
 // make us allocate without bound.
 const maxObjectSize = 256 << 20
+
+// maxListPages bounds a listing so a provider that keeps returning a
+// continuation token cannot loop forever.
+const maxListPages = 10_000
 
 // S3Config describes one S3-compatible bucket.
 type S3Config struct {
@@ -168,22 +173,53 @@ func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*h
 	return resp, nil
 }
 
-// checkStatus turns a response status into an error, mapping only a genuine
-// 404 to ErrNotFound.
+// s3Error is the error document S3 returns alongside a failing status.
+type s3Error struct {
+	Code string `xml:"Code"`
+}
+
+// errorCode reads the provider's error code, or "" if there is none. Only a
+// bounded amount is read, and only the code is used - the document also carries
+// the key and a request id, which must not reach diagnostics.
+func errorCode(resp *http.Response) string {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	if err != nil {
+		return ""
+	}
+	var doc s3Error
+	if xml.Unmarshal(body, &doc) != nil {
+		return ""
+	}
+	return doc.Code
+}
+
+// checkStatus turns a response status into an error.
+//
+// Only a missing *object* becomes ErrNotFound. A 404 also answers a missing or
+// misnamed bucket and a wrong endpoint, and reporting those as "object not
+// found" would tell the sync layer the other device pushed nothing - which is
+// how a fast-forward turns into a fork - while telling the user nothing about
+// the configuration that is actually wrong.
+//
+// A HEAD request carries no body, so a bucket-level 404 cannot be told apart
+// there. That is acceptable: the bucket is verified by Probe during setup, and
+// Stat is only reached afterwards.
 func (s *S3) checkStatus(resp *http.Response, key string) error {
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
-	case resp.StatusCode == http.StatusNotFound:
+	}
+
+	code := errorCode(resp)
+
+	switch {
+	case resp.StatusCode == http.StatusNotFound && (code == "" || code == "NoSuchKey"):
 		return fmt.Errorf("%w: %s", ErrNotFound, key)
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("storage rejected the request with %s: check the bucket name and endpoint with 'agentsync doctor'", code)
 	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("access denied for %q: check the credentials and the bucket policy with 'agentsync doctor'", key)
+		return errors.New("access denied: check the credentials and the bucket policy with 'agentsync doctor'")
 	default:
-		// The body can carry the provider's explanation, but it can also carry
-		// a request id and the key. Only the code and a short reason are
-		// surfaced.
-		return fmt.Errorf("storage returned %s for %q: retry, or check the bucket with 'agentsync doctor'",
-			resp.Status, key)
+		return fmt.Errorf("storage returned %s: retry, or check the bucket with 'agentsync doctor'", resp.Status)
 	}
 }
 
@@ -296,15 +332,28 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 	var out []ObjectInfo
 	token := ""
 
-	for {
-		u := s.urlFor("")
-		q := url.Values{}
-		q.Set("list-type", "2")
-		q.Set("prefix", s.objectKey(prefix))
-		if token != "" {
-			q.Set("continuation-token", token)
+	for page := 0; ; page++ {
+		// A provider that keeps handing back a token would otherwise loop
+		// forever, growing the result without bound; the client timeout
+		// applies per request, not to the loop.
+		if page >= maxListPages {
+			return nil, fmt.Errorf("listing %q did not finish after %d pages: check the bucket with 'agentsync doctor'",
+				prefix, maxListPages)
 		}
-		u.RawQuery = q.Encode()
+
+		u := s.urlFor("")
+		params := [][2]string{
+			{"list-type", "2"},
+			{"prefix", s.objectKey(prefix)},
+		}
+		if token != "" {
+			params = append(params, [2]string{"continuation-token", token})
+		}
+		// Built with the same encoding the signature uses. url.Values.Encode
+		// writes a space as "+" while the canonical form uses "%20", so a
+		// prefix containing a space would be signed differently from how it is
+		// sent and rejected with SignatureDoesNotMatch.
+		u.RawQuery = encodeQuery(params)
 
 		resp, err := s.do(ctx, http.MethodGet, u, nil)
 		if err != nil {
@@ -326,48 +375,70 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 			return nil, fmt.Errorf("parse listing: %w", err)
 		}
 		for _, item := range result.Contents {
-			out = append(out, ObjectInfo{
-				Key:     s.stripPrefix(item.Key),
-				Size:    item.Size,
-				ModTime: item.LastModified,
-			})
+			key := s.stripPrefix(item.Key)
+			// A listing is another place an external string becomes a key.
+			// Ours are always valid, so anything else was written by something
+			// other than us and is not ours to hand upwards.
+			if ValidateKey(key) != nil {
+				continue
+			}
+			out = append(out, ObjectInfo{Key: key, Size: item.Size, ModTime: item.LastModified})
 		}
 
-		// Stopping at the first page would hide every shard past the first
-		// thousand, which the sync layer would read as a gap in the session.
-		if !result.IsTruncated || result.NextContinuationToken == "" {
+		if !result.IsTruncated {
 			return out, nil
+		}
+		// Truncated with nowhere to continue from. Returning what arrived would
+		// look exactly like the end of the bucket, and the sync layer would
+		// read the missing shards as a gap in the session rather than as a
+		// listing that was cut short.
+		if result.NextContinuationToken == "" {
+			return nil, fmt.Errorf("listing %q was truncated without a continuation token: the storage provider's response is incomplete", prefix)
 		}
 		token = result.NextContinuationToken
 	}
 }
 
+// encodeQuery renders parameters the way the signature expects them.
+func encodeQuery(params [][2]string) string {
+	sorted := make([][2]string, len(params))
+	copy(sorted, params)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i][0] < sorted[j][0] })
+
+	parts := make([]string, len(sorted))
+	for i, p := range sorted {
+		parts[i] = uriEncode(p[0], false) + "=" + uriEncode(p[1], false)
+	}
+	return strings.Join(parts, "&")
+}
+
 // Probe verifies the bucket is reachable and writable, so a misconfiguration
 // surfaces during setup rather than during the first sync (§9.1).
-func (s *S3) Probe(ctx context.Context) error {
-	const key = "v1/.agentsync-probe"
+func (s *S3) Probe(ctx context.Context) (err error) {
 	const body = "probe"
 
-	steps := []struct {
-		what string
-		do   func() error
-	}{
-		{"write to the bucket", func() error { return s.Put(ctx, key, strings.NewReader(body), int64(len(body))) }},
-		{"read back from the bucket", func() error {
-			r, err := s.Get(ctx, key)
-			if err != nil {
-				return err
-			}
-			return r.Close()
-		}},
-		{"list the bucket", func() error { _, err := s.List(ctx, "v1/"); return err }},
-		{"delete from the bucket", func() error { return s.Delete(ctx, key) }},
+	if putErr := s.Put(ctx, probeKey, strings.NewReader(body), int64(len(body))); putErr != nil {
+		return fmt.Errorf("cannot write to the bucket: %w", putErr)
 	}
 
-	for _, step := range steps {
-		if err := step.do(); err != nil {
-			return fmt.Errorf("cannot %s %q: %w", step.what, s.cfg.Bucket, err)
+	// Once the object exists it must be removed whatever happens next.
+	// Returning early on a failed read would leave our probe in the user's
+	// bucket permanently, and Prober's contract says it cleans up after itself.
+	defer func() {
+		if delErr := s.Delete(ctx, probeKey); delErr != nil && err == nil {
+			err = fmt.Errorf("cannot delete from the bucket: %w", delErr)
 		}
+	}()
+
+	r, getErr := s.Get(ctx, probeKey)
+	if getErr != nil {
+		return fmt.Errorf("cannot read back from the bucket: %w", getErr)
+	}
+	if closeErr := r.Close(); closeErr != nil {
+		return fmt.Errorf("cannot read back from the bucket: %w", closeErr)
+	}
+	if _, listErr := s.List(ctx, ""); listErr != nil {
+		return fmt.Errorf("cannot list the bucket: %w", listErr)
 	}
 	return nil
 }

@@ -64,6 +64,18 @@ func (d *Dir) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 		return nil, err
 	}
 
+	// The root must exist. Without this check an unplugged drive, an unmounted
+	// share or a mistyped path reports an empty store, and "the other device
+	// pushed nothing" is how a fast-forward turns into a fork. A directory
+	// missing *below* the root is different: it only means nothing has been
+	// written under that prefix yet.
+	if info, err := os.Stat(d.Root); err != nil {
+		return nil, fmt.Errorf("storage directory is unavailable: check that %s is present and readable: %w",
+			filepath.Base(d.Root), err)
+	} else if !info.IsDir() {
+		return nil, errors.New("storage path is not a directory: check the configured location")
+	}
+
 	start := d.Root
 	if dir := path.Dir(prefix); dir != "." && dir != "/" {
 		start = filepath.Join(d.Root, filepath.FromSlash(dir))
@@ -100,6 +112,12 @@ func (d *Dir) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 		}
 		// Temporary files belong to a write in progress, not to the store.
 		if strings.HasSuffix(key, ".tmp") {
+			return nil
+		}
+		// A listing is another place an external string becomes a key. Ours
+		// are always valid, so anything else was put there by something other
+		// than us and is not ours to hand upwards.
+		if ValidateKey(key) != nil {
 			return nil
 		}
 
@@ -234,33 +252,35 @@ func (d *Dir) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 // Probe verifies the directory can be created, written, read and cleaned up,
 // so a misconfiguration surfaces during setup rather than during the first
 // sync (§9.1).
-func (d *Dir) Probe(ctx context.Context) error {
-	const key = "v1/.agentsync-probe"
+// A single segment, so probing never creates a directory it would then have to
+// remove.
+const probeKey = ".agentsync-probe"
+
+func (d *Dir) Probe(ctx context.Context) (err error) {
 	const body = "probe"
 
-	steps := []struct {
-		what string
-		do   func() error
-	}{
-		{"create the directory", func() error { return os.MkdirAll(d.Root, 0o755) }},
-		{"write to it", func() error { return d.Put(ctx, key, strings.NewReader(body), int64(len(body))) }},
-		{"read back from it", func() error {
-			r, err := d.Get(ctx, key)
-			if err != nil {
-				return err
-			}
-			return r.Close()
-		}},
-		{"delete from it", func() error { return d.Delete(ctx, key) }},
+	if mkErr := os.MkdirAll(d.Root, 0o755); mkErr != nil {
+		return fmt.Errorf("cannot create the storage directory: check the path and its permissions: %w", mkErr)
+	}
+	if putErr := d.Put(ctx, probeKey, strings.NewReader(body), int64(len(body))); putErr != nil {
+		return fmt.Errorf("cannot write to the storage directory: check its permissions and free space: %w", putErr)
 	}
 
-	for _, step := range steps {
-		if err := step.do(); err != nil {
-			// The message says what to do about it, not just what failed
-			// (code_style §2.3).
-			return fmt.Errorf("cannot %s at %q: check the path, its permissions and free space: %w",
-				step.what, d.Root, err)
+	// Once the object exists it must be removed whatever happens next: a probe
+	// that leaves its own litter behind has not verified cleanliness, and
+	// Prober's contract says it cleans up after itself.
+	defer func() {
+		if delErr := d.Delete(ctx, probeKey); delErr != nil && err == nil {
+			err = fmt.Errorf("cannot delete from the storage directory: check its permissions: %w", delErr)
 		}
+	}()
+
+	r, getErr := d.Get(ctx, probeKey)
+	if getErr != nil {
+		return fmt.Errorf("cannot read back from the storage directory: check its permissions: %w", getErr)
+	}
+	if closeErr := r.Close(); closeErr != nil {
+		return fmt.Errorf("cannot read back from the storage directory: %w", closeErr)
 	}
 	return nil
 }
