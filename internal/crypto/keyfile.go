@@ -1,6 +1,8 @@
 package crypto
 
 import (
+	"bytes"
+	"crypto/ecdh"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,10 +28,14 @@ var ErrWrongRecoveryKey = errors.New("crypto: recovery key does not unlock this 
 // is what makes "continue on another machine while the first one is off" work
 // at all (spec §3.2).
 type Keyfile struct {
-	Version              int       `json:"version"`
-	KDF                  KDFParams `json:"kdf"`
-	WrappedByPassphrase  []byte    `json:"wrappedByPassphrase"`
-	WrappedByRecoveryKey []byte    `json:"wrappedByRecoveryKey"`
+	Version int       `json:"version"`
+	KDF     KDFParams `json:"kdf"`
+	// IdentityPublic is stored in the clear because it is public. It is how a
+	// second device learns which key to encrypt to, and unlocking verifies that
+	// it really is the public half of the wrapped secret (spec §3.4).
+	IdentityPublic       []byte `json:"identityPublic"`
+	WrappedByPassphrase  []byte `json:"wrappedByPassphrase"`
+	WrappedByRecoveryKey []byte `json:"wrappedByRecoveryKey"`
 }
 
 // KeyfilePath is the object key the envelope is stored under.
@@ -50,7 +56,12 @@ func NewKeyfile(passphrase string) (*Keyfile, string, error) {
 	recoveryRaw, recoveryText := NewRecoveryKey()
 	defer zero(recoveryRaw)
 
-	kf := &Keyfile{Version: keyfileVersion, KDF: params}
+	public, err := dataKey.IdentityPublic()
+	if err != nil {
+		return nil, "", err
+	}
+
+	kf := &Keyfile{Version: keyfileVersion, KDF: params, IdentityPublic: public.Bytes()}
 	if err := kf.wrapWithPassphrase(dataKey, passphrase); err != nil {
 		return nil, "", err
 	}
@@ -77,25 +88,30 @@ func (k *Keyfile) UnlockWithPassphrase(passphrase string) (*DataKey, error) {
 	}
 	defer zero(kek)
 
-	raw, err := Decrypt(kek, wrapPathPassphrase, k.WrappedByPassphrase)
+	raw, err := unwrap(kek, wrapPathPassphrase, k.WrappedByPassphrase)
 	if err != nil {
 		return nil, translateUnwrapError(err, ErrWrongPassphrase)
 	}
-	return &DataKey{raw: raw}, nil
+	return k.verified(&DataKey{raw: raw})
 }
 
 // translateUnwrapError decides what a failed unwrap means to the user.
 //
-// Almost always the secret was wrong, and the underlying authentication error
-// says nothing they can act on. But an envelope written by a newer release
-// fails here too, and calling that "wrong passphrase" points the user at the
-// one action that destroys their data: re-running init over the keyfile, which
-// orphans everything already uploaded (spec §9).
+// Only an authentication failure is reported as a wrong secret, because only
+// that one is genuinely ambiguous: under an AEAD, "you typed the wrong
+// passphrase" and "somebody altered this" are indistinguishable. Everything
+// else - a truncated wrapping, a format that is not ours, a version from the
+// future - was decided before any key was involved and is a fact about the
+// bytes.
+//
+// The distinction decides where the user goes next. Told the passphrase is
+// wrong, they retype it, then re-run init over the keyfile - and that orphans
+// every session they have already pushed (spec §13.9).
 func translateUnwrapError(err error, wrongSecret error) error {
-	if errors.Is(err, ErrUnsupportedVersion) {
-		return err
+	if errors.Is(err, errWrongKEK) {
+		return wrongSecret
 	}
-	return wrongSecret
+	return err
 }
 
 // UnlockWithRecoveryKey opens the envelope with the written recovery key.
@@ -121,11 +137,56 @@ func (k *Keyfile) UnlockWithRecoveryKey(recoveryText string) (*DataKey, error) {
 	}
 	defer zero(kek)
 
-	raw, err := Decrypt(kek, wrapPathRecovery, k.WrappedByRecoveryKey)
+	raw, err := unwrap(kek, wrapPathRecovery, k.WrappedByRecoveryKey)
 	if err != nil {
 		return nil, translateUnwrapError(err, ErrWrongRecoveryKey)
 	}
-	return &DataKey{raw: raw}, nil
+	return k.verified(&DataKey{raw: raw})
+}
+
+// ErrPublicKeyMismatch reports a keyfile whose public key is not the public
+// half of the secret it wraps.
+var ErrPublicKeyMismatch = errors.New("crypto: the storage keyfile advertises a public key that does not belong to it; do not push to this storage")
+
+// verified checks the advertised public key against the unwrapped secret.
+//
+// This is the moment a device decides which key to encrypt everything to, and
+// the check is what makes that decision safe. Someone able to rewrite the
+// keyfile cannot read anything - but if they replaced the public key, a device
+// that pinned it would encrypt every future session to *their* key and lose the
+// ability to read its own pushes. Verifying here means the pin is only ever
+// taken from a value the passphrase itself vouches for (spec §3.4).
+func (k *Keyfile) verified(dataKey *DataKey) (*DataKey, error) {
+	if len(k.IdentityPublic) == 0 {
+		// Written by a build that predates the asymmetric format. Nothing
+		// shipped, so this is a corrupt file rather than an old one.
+		dataKey.Close()
+		return nil, fmt.Errorf("%w: it advertises no public key", ErrPublicKeyMismatch)
+	}
+
+	public, err := dataKey.IdentityPublic()
+	if err != nil {
+		dataKey.Close()
+		return nil, err
+	}
+	if !bytes.Equal(public.Bytes(), k.IdentityPublic) {
+		dataKey.Close()
+		return nil, ErrPublicKeyMismatch
+	}
+	return dataKey, nil
+}
+
+// IdentityPublicKey parses the advertised public key, for a caller pinning it
+// after a successful unlock.
+func (k *Keyfile) IdentityPublicKey() (*ecdh.PublicKey, error) {
+	if err := k.check(); err != nil {
+		return nil, err
+	}
+	public, err := ecdh.X25519().NewPublicKey(k.IdentityPublic)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPublicKeyMismatch, err)
+	}
+	return public, nil
 }
 
 // ChangePassphrase re-wraps the data key under a new passphrase.
@@ -222,7 +283,7 @@ func (k *Keyfile) wrapWithPassphrase(dataKey *DataKey, passphrase string) error 
 	}
 	defer zero(kek)
 
-	sealed, err := Encrypt(kek, wrapPathPassphrase, dataKey.raw)
+	sealed, err := wrap(kek, wrapPathPassphrase, dataKey.raw)
 	if err != nil {
 		return fmt.Errorf("wrap data key: %w", err)
 	}
@@ -237,7 +298,7 @@ func (k *Keyfile) wrapWithRecoveryKey(dataKey *DataKey, recoveryRaw []byte) erro
 	}
 	defer zero(kek)
 
-	sealed, err := Encrypt(kek, wrapPathRecovery, dataKey.raw)
+	sealed, err := wrap(kek, wrapPathRecovery, dataKey.raw)
 	if err != nil {
 		return fmt.Errorf("wrap data key: %w", err)
 	}

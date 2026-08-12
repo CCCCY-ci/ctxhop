@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/ecdh"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
@@ -126,9 +127,37 @@ func NewDataKey() *DataKey {
 	return &DataKey{raw: raw}
 }
 
-// ContentKey derives the key objects are encrypted under.
-func (d *DataKey) ContentKey() ([]byte, error) {
-	return d.derive("agentsync/content")
+// IdentityPrivate derives the X25519 key objects are encrypted to.
+//
+// Deriving it from the data key rather than generating it separately is what
+// keeps the envelope unchanged: the passphrase and the recovery key still wrap
+// one random secret, and everything else hangs off it (spec §3.1).
+func (d *DataKey) IdentityPrivate() (*ecdh.PrivateKey, error) {
+	seed, err := d.derive("agentsync/identity-x25519")
+	if err != nil {
+		return nil, err
+	}
+	defer zero(seed)
+
+	key, err := ecdh.X25519().NewPrivateKey(seed)
+	if err != nil {
+		return nil, fmt.Errorf("derive identity key: %w", err)
+	}
+	return key, nil
+}
+
+// IdentityPublic derives the public half, which is all a push needs.
+//
+// This is the point of the whole hierarchy. A machine that only pushes holds no
+// secret capable of reading anything: it encrypts to this value and cannot
+// reverse it, so a stolen laptop yields the ability to append and nothing else
+// (spec §3.3).
+func (d *DataKey) IdentityPublic() (*ecdh.PublicKey, error) {
+	private, err := d.IdentityPrivate()
+	if err != nil {
+		return nil, err
+	}
+	return private.PublicKey(), nil
 }
 
 // IdentifierKey derives the key project, session and device identifiers are
