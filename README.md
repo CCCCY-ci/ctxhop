@@ -2,10 +2,9 @@
 
 Continue the same AI coding session on another machine.
 
-> **Status: pre-alpha, not usable yet.** The repository currently contains the
-> design documents and the interface scaffold. The core feasibility test
-> (PoC-1) has not been completed, so nothing here syncs anything today. See
-> [Project status](#project-status).
+> **Status: pre-alpha, not usable yet.** The feasibility tests have passed and
+> the lower layers are being built, but there is no command that syncs anything
+> yet. See [Project status](#project-status).
 
 ---
 
@@ -82,18 +81,28 @@ code, which is worse than not resuming at all.
 | Stage | State |
 |---|---|
 | Design (PRD) | Done — see [`docs/`](docs/) |
-| Interface scaffold | Done |
-| PoC-1: cross-device, cross-path restore | **Not started — everything depends on this** |
-| PoC-2: workspace consistency fingerprint | Not started |
+| PoC-1: cross-device, cross-path restore | Passed |
+| PoC-2: workspace consistency fingerprint | Passed |
+| `internal/adapter` — Claude Code | Done |
+| `internal/remote` — directory and S3 | Done |
+| `internal/crypto` — encryption and keys | Done |
+| `internal/project` — git identity, mapping, consistency | Done |
+| `internal/syncer`, `internal/config`, CLI | Not started |
 | MVP | Not started |
 
-PoC-1 answers whether a Claude Code session can be moved between machines with
-different project paths and still resume natively. If the answer is no, this
-project does not work and will say so.
+PoC-1 asked whether a Claude Code session can be moved between machines with
+different project paths and still resume natively. It can, and the conclusions
+are written up in [`docs/specs/`](docs/specs/).
+
+The remaining cross-device behaviour — a genuinely different operating system,
+a different username, reading a session while the agent writes it — is still
+verified only through a simulated second device.
 
 ## Building
 
-Requires Go 1.26 or newer. No cgo, no external dependencies.
+Requires Go 1.26 or newer. Builds with `CGO_ENABLED=0` into a single static
+binary, and the only third-party dependency is `golang.org/x/crypto` for
+Argon2id, which the standard library does not provide.
 
 ```bash
 go build ./cmd/agentsync      # current platform
