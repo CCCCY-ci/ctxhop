@@ -65,6 +65,11 @@ func (k *Keyfile) UnlockWithPassphrase(passphrase string) (*DataKey, error) {
 	if err := k.check(); err != nil {
 		return nil, err
 	}
+	if len(k.WrappedByPassphrase) == 0 {
+		// Otherwise this spends a full derivation and then reports the
+		// passphrase as wrong, so the user retypes one that can never work.
+		return nil, errors.New("crypto: this storage has no passphrase wrapping; unlock with your recovery key")
+	}
 
 	kek, err := passphraseKEK(passphrase, k.KDF)
 	if err != nil {
@@ -74,17 +79,32 @@ func (k *Keyfile) UnlockWithPassphrase(passphrase string) (*DataKey, error) {
 
 	raw, err := Decrypt(kek, wrapPathPassphrase, k.WrappedByPassphrase)
 	if err != nil {
-		// Deliberately not the underlying authentication error: the only thing
-		// a user can act on is that this passphrase is not the right one.
-		return nil, ErrWrongPassphrase
+		return nil, translateUnwrapError(err, ErrWrongPassphrase)
 	}
 	return &DataKey{raw: raw}, nil
+}
+
+// translateUnwrapError decides what a failed unwrap means to the user.
+//
+// Almost always the secret was wrong, and the underlying authentication error
+// says nothing they can act on. But an envelope written by a newer release
+// fails here too, and calling that "wrong passphrase" points the user at the
+// one action that destroys their data: re-running init over the keyfile, which
+// orphans everything already uploaded (spec §9).
+func translateUnwrapError(err error, wrongSecret error) error {
+	if errors.Is(err, ErrUnsupportedVersion) {
+		return err
+	}
+	return wrongSecret
 }
 
 // UnlockWithRecoveryKey opens the envelope with the written recovery key.
 func (k *Keyfile) UnlockWithRecoveryKey(recoveryText string) (*DataKey, error) {
 	if err := k.check(); err != nil {
 		return nil, err
+	}
+	if len(k.WrappedByRecoveryKey) == 0 {
+		return nil, errors.New("crypto: this storage has no recovery-key wrapping; unlock with your passphrase")
 	}
 
 	// A mistyped key is reported as a mistyped key, before anything is tried
@@ -103,7 +123,7 @@ func (k *Keyfile) UnlockWithRecoveryKey(recoveryText string) (*DataKey, error) {
 
 	raw, err := Decrypt(kek, wrapPathRecovery, k.WrappedByRecoveryKey)
 	if err != nil {
-		return nil, ErrWrongRecoveryKey
+		return nil, translateUnwrapError(err, ErrWrongRecoveryKey)
 	}
 	return &DataKey{raw: raw}, nil
 }
@@ -163,6 +183,13 @@ func (k *Keyfile) rewrap(dataKey *DataKey, passphrase string, params KDFParams) 
 // Reports whether anything changed, so a caller only writes the file back when
 // it must. Existing ciphertext is untouched either way.
 func (k *Keyfile) UpgradeKDF(passphrase string) (bool, error) {
+	// Before touching k.KDF: every other method on *Keyfile survives a nil
+	// receiver through check, and a caller on a "no keyfile yet" path should
+	// get the same error here rather than a panic.
+	if err := k.check(); err != nil {
+		return false, err
+	}
+
 	defaults := DefaultKDFParams()
 	if k.KDF.Time >= defaults.Time && k.KDF.MemoryKiB >= defaults.MemoryKiB {
 		return false, nil
@@ -233,7 +260,16 @@ func (k *Keyfile) check() error {
 }
 
 // MarshalKeyfile renders the envelope for storage.
+//
+// It refuses an envelope holding no wrapped key. This object is the one whose
+// loss locks the user out of every session they have ever pushed, and the
+// caller's next act is to write the result over the existing one, so a caller
+// bug here is unrecoverable data loss. Refusing to write is always safe
+// (BR-12).
 func MarshalKeyfile(k *Keyfile) ([]byte, error) {
+	if err := k.check(); err != nil {
+		return nil, err
+	}
 	data, err := json.MarshalIndent(k, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode keyfile: %w", err)

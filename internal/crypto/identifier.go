@@ -55,9 +55,11 @@ func DeviceID(idKey []byte, localIdentity string) (string, error) {
 
 // derive computes a keyed, domain-separated identifier.
 //
-// Parts are joined with a byte that cannot appear in any of them, so no
-// arrangement of inputs can be made to produce the digest of a different
-// arrangement.
+// Parts are joined with a NUL, and a part containing one is refused rather than
+// hashed. Go strings may hold NUL, so the separator only makes the encoding
+// unambiguous if nothing else can produce it - otherwise ("a\x00b", "c") and
+// ("a", "b\x00c") would digest identically, and two different sessions would
+// share a remote path.
 func derive(idKey []byte, domain string, parts ...string) (string, error) {
 	if len(idKey) != keyLen {
 		return "", fmt.Errorf("crypto: identifier key must be %d bytes", keyLen)
@@ -66,6 +68,9 @@ func derive(idKey []byte, domain string, parts ...string) (string, error) {
 	mac := hmac.New(sha256.New, idKey)
 	mac.Write([]byte(domain))
 	for _, part := range parts {
+		if strings.ContainsRune(part, 0) {
+			return "", fmt.Errorf("crypto: %s identity contains a NUL byte", domain)
+		}
 		mac.Write([]byte{0})
 		mac.Write([]byte(part))
 	}

@@ -27,6 +27,8 @@ type KDFParams struct {
 // expensive to attack: about 47ms on a current laptop.
 func DefaultKDFParams() KDFParams {
 	salt := make([]byte, 16)
+	// crypto/rand.Read never returns an error; it crashes the program if the
+	// system source fails, so there is no branch here to get wrong.
 	rand.Read(salt)
 	return KDFParams{
 		Name:      "argon2id",
@@ -37,11 +39,26 @@ func DefaultKDFParams() KDFParams {
 	}
 }
 
-// validate rejects parameters that would silently weaken the derivation.
+// Ceilings on the stored cost. They are far above any setting a future release
+// would plausibly choose (the current defaults are 3 and 64 MiB), so raising the
+// defaults never trips them.
 //
-// These arrive from a file that anyone holding the bucket can rewrite. An
-// attacker who could set the cost to nothing would turn an offline attack on
-// the passphrase from expensive into instant.
+// They exist because argon2.IDKey answers absurd parameters by allocating the
+// memory and doing the work: a rewritten memoryKiB is an unrecoverable
+// allocation failure, and a rewritten time cost is an unbounded loop with no
+// context to cancel it (code_style §4.2, §4.3).
+const (
+	maxKDFMemoryKiB = 1 << 20 // 1 GiB
+	maxKDFTime      = 16
+	maxKDFThreads   = 16
+)
+
+// validate rejects parameters this build will not derive a key from.
+//
+// These arrive from a file that anyone holding the bucket can rewrite, so they
+// are bounded in both directions. Too cheap turns an offline attack on the
+// passphrase from expensive into instant; too expensive turns unlocking into a
+// crash or a hang, which is a denial of the user's own data.
 func (p KDFParams) validate() error {
 	switch {
 	case p.Name != "argon2id":
@@ -50,10 +67,16 @@ func (p KDFParams) validate() error {
 		return fmt.Errorf("crypto: salt is %d bytes, refusing anything under 16", len(p.Salt))
 	case p.Time < 1:
 		return fmt.Errorf("crypto: time cost %d is too low", p.Time)
+	case p.Time > maxKDFTime:
+		return fmt.Errorf("crypto: time cost %d exceeds the %d this build will run; the keyfile may have been tampered with", p.Time, maxKDFTime)
 	case p.MemoryKiB < 16*1024:
 		return fmt.Errorf("crypto: memory cost %d KiB is too low", p.MemoryKiB)
+	case p.MemoryKiB > maxKDFMemoryKiB:
+		return fmt.Errorf("crypto: memory cost %d KiB exceeds the %d KiB this build will allocate; the keyfile may have been tampered with", p.MemoryKiB, maxKDFMemoryKiB)
 	case p.Threads < 1:
 		return fmt.Errorf("crypto: thread count %d is invalid", p.Threads)
+	case p.Threads > maxKDFThreads:
+		return fmt.Errorf("crypto: thread count %d exceeds the %d this build will run; the keyfile may have been tampered with", p.Threads, maxKDFThreads)
 	}
 	return nil
 }
@@ -98,6 +121,7 @@ type DataKey struct {
 // NewDataKey generates a fresh data key.
 func NewDataKey() *DataKey {
 	raw := make([]byte, keyLen)
+	// See DefaultKDFParams: rand.Read cannot fail without crashing.
 	rand.Read(raw)
 	return &DataKey{raw: raw}
 }
@@ -118,7 +142,7 @@ func (d *DataKey) IdentifierKey() ([]byte, error) {
 
 func (d *DataKey) derive(info string) ([]byte, error) {
 	if d == nil || len(d.raw) != keyLen {
-		return nil, fmt.Errorf("crypto: data key is not initialised")
+		return nil, fmt.Errorf("crypto: data key is not initialised, or has been closed")
 	}
 	key, err := hkdf.Expand(sha256.New, d.raw, info, keyLen)
 	if err != nil {
@@ -127,10 +151,18 @@ func (d *DataKey) derive(info string) ([]byte, error) {
 	return key, nil
 }
 
-// Close zeroes the key material. Best effort, as ever in a garbage-collected
-// language, but it shortens the window in which a heap dump contains the key.
+// Close zeroes the key material and puts the key beyond use. Best effort, as
+// ever in a garbage-collected language, but it shortens the window in which a
+// heap dump contains the key.
+//
+// Dropping the slice matters as much as zeroing it. Zeroing alone leaves a
+// key of the right length holding thirty-two zero bytes, which derive would
+// accept - and every closed key would then derive the same content key, one
+// anybody can compute offline. A use-after-close would encrypt the user's
+// sessions under a public constant and report success (spec §13.4).
 func (d *DataKey) Close() {
 	if d != nil {
 		zero(d.raw)
+		d.raw = nil
 	}
 }

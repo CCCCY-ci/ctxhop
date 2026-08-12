@@ -77,9 +77,16 @@ func Decrypt(contentKey []byte, path string, sealed []byte) ([]byte, error) {
 	if string(sealed[:len(objectMagic)]) != objectMagic {
 		return nil, fmt.Errorf("%w: not an AgentSync object", ErrCorrupt)
 	}
-	if v := sealed[len(objectMagic)]; v != objectVersion {
+	// Only a *higher* version is "too new to read"; the two directions call for
+	// different remedies, and a caller that upgrades in response to a version 0
+	// would be chasing the wrong thing. Splitting them here is also what leaves
+	// room for a future version 2 that still reads version 1 (spec §9).
+	switch v := sealed[len(objectMagic)]; {
+	case v > objectVersion:
 		// Refuse rather than guess. A newer format may mean anything.
-		return nil, fmt.Errorf("%w: version %d", ErrUnsupportedVersion, v)
+		return nil, fmt.Errorf("%w: version %d, upgrade agentsync to read it", ErrUnsupportedVersion, v)
+	case v != objectVersion:
+		return nil, fmt.Errorf("%w: unknown object version %d", ErrCorrupt, v)
 	}
 
 	aead, err := objectAEAD(contentKey, path)

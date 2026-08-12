@@ -30,6 +30,7 @@ var ErrRecoveryKeyChecksum = errors.New("crypto: recovery key checksum does not 
 // NewRecoveryKey generates a recovery key and its written form.
 func NewRecoveryKey() ([]byte, string) {
 	raw := make([]byte, recoveryKeyLen)
+	// See DefaultKDFParams: rand.Read cannot fail without crashing.
 	rand.Read(raw)
 	return raw, FormatRecoveryKey(raw)
 }
