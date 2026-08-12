@@ -48,7 +48,7 @@ func Locate(ctx context.Context, id Identity, candidates []string, bindings []Bi
 		bound = true
 		info, err := os.Stat(b.LocalRoot)
 		if err != nil {
-			return nil, fmt.Errorf("the directory bound to this project cannot be read: %w", err)
+			return nil, fmt.Errorf("the directory bound to this project cannot be read: %w", pathSafe(err))
 		}
 		if !info.IsDir() {
 			return nil, fmt.Errorf("%w: the bound path is not a directory", ErrProjectNotHere)
@@ -62,6 +62,12 @@ func Locate(ctx context.Context, id Identity, candidates []string, bindings []Bi
 	for _, dir := range candidates {
 		p, err := Identify(ctx, dir)
 		if err != nil {
+			if unanswered(err) {
+				// Otherwise a cancelled or timed-out scan ends in "no directory
+				// on this device matches" - a confident negative drawn from
+				// candidates nobody managed to look at.
+				return nil, fmt.Errorf("searching for the project was interrupted: %w", err)
+			}
 			// A candidate that vanished or cannot be read is not a failure of
 			// the search; the list comes from scanning a disk that changes.
 			continue
@@ -99,10 +105,14 @@ func Resolve(ctx context.Context, id Identity, candidates []string, bindings []B
 // Comparison is by file identity, not by string: the same directory reaches
 // here spelled differently depending on whether it came from a binding the user
 // typed or from git, and on Windows the two often differ in case alone.
+// A root that cannot be stat'ed is kept rather than dropped. Dropping one can
+// only ever turn an ambiguity into a silent choice - two worktrees collapsing
+// into one, so Resolve stops refusing and picks - and picking wrong writes a
+// session into a tree the user was not looking at (BR-12).
 func appendUnique(roots []string, root string) []string {
 	info, err := os.Stat(root)
 	if err != nil {
-		return roots
+		return append(roots, root)
 	}
 	for _, existing := range roots {
 		other, err := os.Stat(existing)

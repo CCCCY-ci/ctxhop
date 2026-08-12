@@ -58,19 +58,31 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 
 // runGitRaw is runGit without any trimming, for commands read with -z.
 func runGitRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return runGitStdin(ctx, dir, nil, args...)
+}
+
+// runGitStdin is runGitRaw with input, for `hash-object --stdin-paths`.
+func runGitStdin(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
-	// --no-optional-locks before the subcommand: `git status` otherwise
-	// refreshes and rewrites .git/index, which is a write to the user's
-	// repository during what is meant to be a read (measured; spec §5.1).
-	full := append([]string{"--no-optional-locks"}, args...)
+	// --no-optional-locks: `git status` otherwise refreshes and rewrites
+	// .git/index, which is a write to the user's repository during what is
+	// meant to be a read (measured; spec §5.1).
+	//
+	// --literal-pathspecs: paths from a working tree are data, not patterns. A
+	// file actually named a?.txt would otherwise match ab.txt, and a diff that
+	// matched the wrong file would downgrade a real divergence to "explained".
+	full := append([]string{"--no-optional-locks", "--literal-pathspecs"}, args...)
 
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	// os/exec keeps the last occurrence of a duplicated key, so appending
 	// overrides the inherited values.
 	cmd.Env = append(os.Environ(), gitOverrides...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -83,12 +95,42 @@ func runGitRaw(ctx context.Context, dir string, args ...string) ([]byte, error) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("git %s timed out after %s: %w", args[0], defaultTimeout, ctxErr)
 		}
-		// stderr can name branches and paths, so it is summarised rather than
-		// quoted: this text reaches the user and must stay safe to share
-		// (code_style §5.2, BR-09).
-		return nil, fmt.Errorf("git %s failed: %w", args[0], err)
+		return nil, &gitError{subcommand: args[0], stderr: stderr.String(), err: err}
 	}
 	return stdout.Bytes(), nil
+}
+
+// gitError carries what git printed without ever rendering it.
+//
+// stderr names branches, paths and sometimes remote addresses, none of which
+// may appear in output the user is expected to paste into a public issue
+// (BR-09, code_style §5.2). Keeping it here lets this package tell one failure
+// from another - see dubiousOwnership - while Error() stays safe to print.
+type gitError struct {
+	subcommand string
+	stderr     string
+	err        error
+}
+
+func (e *gitError) Error() string {
+	return fmt.Sprintf("git %s failed: %v", e.subcommand, e.err)
+}
+
+func (e *gitError) Unwrap() error { return e.err }
+
+// dubiousOwnership reports git's refusal to touch a repository owned by another
+// account.
+//
+// It exits 128 exactly like "this is not a repository", but the remedy is
+// completely different: a safe.directory entry rather than binding the project
+// by hand. Telling the user the wrong one sends them somewhere that cannot
+// work (code_style §2.3).
+func dubiousOwnership(err error) bool {
+	var ge *gitError
+	if !errors.As(err, &ge) {
+		return false
+	}
+	return strings.Contains(ge.stderr, "dubious ownership")
 }
 
 // gitAvailable reports whether git can be run at all.

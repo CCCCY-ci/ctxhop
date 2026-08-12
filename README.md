@@ -85,7 +85,7 @@ code, which is worse than not resuming at all.
 | PoC-2: workspace consistency fingerprint | Passed |
 | `internal/adapter` — Claude Code | Done |
 | `internal/remote` — directory and S3 | Done |
-| `internal/crypto` — encryption and keys | Done |
+| `internal/crypto` — encryption and keys | Done, awaiting merge |
 | `internal/project` — git identity, mapping, consistency | Done |
 | `internal/syncer`, `internal/config`, CLI | Not started |
 | MVP | Not started |
@@ -101,8 +101,7 @@ verified only through a simulated second device.
 ## Building
 
 Requires Go 1.26 or newer. Builds with `CGO_ENABLED=0` into a single static
-binary, and the only third-party dependency is `golang.org/x/crypto` for
-Argon2id, which the standard library does not provide.
+binary; nothing here needs a C toolchain.
 
 ```bash
 go build ./cmd/agentsync      # current platform

@@ -257,3 +257,63 @@ func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error)
 
 1. 一致性检查在超大仓库上的耗时未测（PoC-2 §7.3、§7.4）。若 `git status` 成为主要开销，考虑对 L2 加缓存，但缓存过期判定本身有风险，暂不做。
 2. 是否需要为"标识只差大小写"提供诊断提示。当前不做：标识已是 HMAC，无法比较；真要做需要额外派生一个折叠大小写的次级标识，代价与收益不成正比。
+
+---
+
+## 11. Review 中确定的事
+
+以下全部经实测确认（git 2.55, Windows），不是推断。
+
+### 11.1 status 的路径相对于**仓库根**，不是相对于 cwd
+
+在 `sub/` 下执行 `git status --porcelain -z`，输出仍是 `sub/deep/a.txt`。因此把这些路径拼到调用方传入的 `root` 上，只有当 `root` 恰好是工作树顶层时才正确。
+
+用户把项目绑定到子目录（`Binding.LocalRoot` 是用户给的，`Locate` 原样返回）时，所有脏路径都会拼成不存在的路径 → 两侧都是 `absent` → 相等 → **判定为一致**。这正是 §4.1 说的"永远说没问题的检查"。
+
+修法：`Capture` / `Compare` 自己解析 `--show-toplevel`，一切以顶层为基准。**不接受调用方保证 root 是顶层**——这种保证迟早有人违反，而违反的表现是静默。
+
+### 11.2 摘要必须用 git 的内容口径，不能哈希原始字节
+
+`core.autocrlf=true` 是 Git for Windows 的安装默认值。同一个 commit 在 Windows 检出为 CRLF、在 Linux 为 LF，**原始字节不同**：
+
+```
+working tree:  line1\r\nline2\r\n
+sha256(raw):   4ad3ef64...          ← 跨平台不同
+git hash-object: c0d0fb45...        ← 与索引里的 blob 完全一致
+```
+
+哈希原始字节意味着：一台机器上采的指纹拿到另一台比对，**每个文本文件都会报"已修改"**——而跨设备正是这一层存在的全部理由。
+
+改用 `git hash-object --stdin-paths`：它应用与 git 相同的过滤器，答案等于索引中的 blob，跨平台稳定。这也是语义上更正确的定义——**如果 git 认为文件没变，那它就是没变**。
+
+代价：`--stdin-paths` 以换行分隔，文件名含换行的路径无法通过它传递，这类路径退回原始哈希（此类文件名只能存在于 Windows 之外，因而不涉及 CRLF 问题）。
+
+### 11.3 未跟踪目录会被折叠成一条
+
+默认输出把整个未跟踪目录折叠为 `?? sub/untracked/`。于是目录内的所有文件被当作**一个**"directory" 值，其中的新增、修改、删除永远比对相等。必须加 `-uall` 逐个列出。
+
+### 11.4 空仓库里 `rev-parse HEAD` 退出 128
+
+一个刚 `git init`、已配好 origin 的项目能拿到稳定标识，但每次 `Capture` 都会失败——**新项目的第一个会话永远无法采指纹**。改用 `rev-parse --verify HEAD`，失败时 head 记为空；分支用 `git branch --show-current`（空仓库下仍能返回，且分离 HEAD 时返回空而不是字面量 "HEAD"）。
+
+head 为空时不做祖先判定，只比对文件摘要。
+
+### 11.5 pathspec 默认按 glob 匹配
+
+`git diff -- 'rep[1].md'` 会匹配 `rep1.md`。若某个提交改动了 glob 邻居，真实的 divergent 会被降级成 explainable。所有 git 调用统一加 `--literal-pathspecs`：**来自工作区的路径是数据，不是模式**。
+
+### 11.6 "没看成"不等于"不在这里"
+
+`Locate` 的候选扫描原先对所有 `Identify` 错误一律 `continue`，于是取消或超时的扫描最终返回 `ErrProjectNotHere`——对一批根本没看成的候选下"这里没有"的断言。与 §7.1 同一条原则，改为遇到 `unanswered` 立即中止。
+
+### 11.7 `*fs.PathError` 会把绝对路径带进用户可见的错误
+
+`%w` 包装 `os.Stat` 的错误，消息里就有 `stat C:\Users\<用户>\projects\<项目>: ...`——同时暴露了用户是谁和在做什么，违反 BR-09。加 `pathSafe()`：剥掉路径、保留成因，`errors.Is` 仍然可用。
+
+### 11.8 `safe.directory` 拒绝与"不是仓库"退出码相同
+
+两者都是 128。把前者报成"这不是一个 git 仓库"会把用户推向手动绑定，而真正的修法是加一条 `safe.directory` 配置。改为检查 stderr 内部特征（**不回显其内容**）后给出可操作的提示。
+
+### 11.9 非常规文件不得直接打开
+
+工作区里可能存在 FIFO（构建工具会留下），`os.Open` 会阻塞到有写入方出现，且这一步没有超时。改为先 `Lstat`，非常规文件记为 `kind:irregular`——**路径的类型变了本身就是差异，不是一次失败的读取**。

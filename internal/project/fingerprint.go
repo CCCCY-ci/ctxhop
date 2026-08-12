@@ -82,27 +82,47 @@ type Report struct {
 // touched may hold absolute or relative paths; anything outside root is
 // dropped, since a path outside the project has no meaning on another machine.
 func Capture(ctx context.Context, root string, touched []string) (Fingerprint, error) {
-	head, branch, err := headAndBranch(ctx, root)
+	top, err := worktreeTop(ctx, root)
 	if err != nil {
 		return Fingerprint{}, err
 	}
 
-	dirty, err := dirtyPaths(ctx, root)
+	head, branch, err := headAndBranch(ctx, top)
 	if err != nil {
 		return Fingerprint{}, err
 	}
 
-	scope := union(dirty, relativePaths(root, touched))
-	files := make(map[string]string, len(scope))
-	for _, rel := range scope {
-		digest, err := digestOf(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			return Fingerprint{}, fmt.Errorf("fingerprint file: %w", err)
-		}
-		files[rel] = digest
+	dirty, err := dirtyPaths(ctx, top)
+	if err != nil {
+		return Fingerprint{}, err
+	}
+
+	scope := union(dirty, relativePaths(top, touched))
+	files, err := digestAll(ctx, top, scope)
+	if err != nil {
+		return Fingerprint{}, err
 	}
 
 	return Fingerprint{Head: head, Branch: branch, Dirty: dirty, Files: files}, nil
+}
+
+// worktreeTop resolves root to the top of its working tree.
+//
+// git reports status paths relative to the repository root no matter which
+// directory it was invoked from (measured). Joining them onto anything else -
+// a project bound to a subdirectory, say - produces paths that exist nowhere,
+// which read as "absent" on both sides and therefore as agreement. That is the
+// check silently answering yes forever, which spec §4.1 calls worse than not
+// having it.
+func worktreeTop(ctx context.Context, root string) (string, error) {
+	top, ok, err := worktreeRoot(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", errors.New("the consistency check needs a git working tree; this directory is not in one")
+	}
+	return top, nil
 }
 
 // Compare measures root against a fingerprint taken earlier, possibly on
@@ -112,7 +132,12 @@ func Capture(ctx context.Context, root string, touched []string) (Fingerprint, e
 // because "consistent" can be believed; a timeout or an unreadable repository
 // has to surface as an error, not as reassurance (spec §7.1).
 func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error) {
-	head, branch, err := headAndBranch(ctx, root)
+	top, err := worktreeTop(ctx, root)
+	if err != nil {
+		return Report{}, err
+	}
+
+	head, branch, err := headAndBranch(ctx, top)
 	if err != nil {
 		return Report{}, err
 	}
@@ -122,12 +147,18 @@ func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error) {
 	// Whether history moved forward decides whether a difference can be
 	// explained at all. A head that is not a descendant means this working tree
 	// is on other code, however similar the files look.
-	movedForward := head != fp.Head && fp.Head != "" && isAncestor(ctx, root, fp.Head, head)
-	if head != fp.Head && !movedForward {
-		report.Verdict = Divergent
+	//
+	// An empty head on either side is a repository with no commits yet, where
+	// ancestry says nothing either way; the file digests still do.
+	movedForward := false
+	if head != fp.Head && head != "" && fp.Head != "" {
+		movedForward = isAncestor(ctx, top, fp.Head, head)
+		if !movedForward {
+			report.Verdict = Divergent
+		}
 	}
 
-	dirty, err := dirtyPaths(ctx, root)
+	dirty, err := dirtyPaths(ctx, top)
 	if err != nil {
 		return Report{}, err
 	}
@@ -136,11 +167,13 @@ func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error) {
 		isDirty[p] = true
 	}
 
+	current, err := digestAll(ctx, top, sortedKeys(fp.Files))
+	if err != nil {
+		return Report{}, err
+	}
+
 	for _, rel := range sortedKeys(fp.Files) {
-		now, err := digestOf(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			return Report{}, fmt.Errorf("compare file: %w", err)
-		}
+		now := current[rel]
 		if now == fp.Files[rel] {
 			// Committing the session's uncommitted work leaves content
 			// identical, and a commit by itself is not a difference (PoC-2 §4.1).
@@ -153,7 +186,7 @@ func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error) {
 			fv.Note = "deleted since the session"
 		case fp.Files[rel] == digestAbsent:
 			fv.Note = "created since the session"
-		case movedForward && !isDirty[rel] && changedBetween(ctx, root, fp.Head, head, rel):
+		case movedForward && !isDirty[rel] && changedBetween(ctx, top, fp.Head, head, rel):
 			// Explained only if commits account for the whole difference. A
 			// file that also has uncommitted changes is not explained by them,
 			// and calling it explainable would overstate what is known.
@@ -172,12 +205,23 @@ func Compare(ctx context.Context, root string, fp Fingerprint) (Report, error) {
 	return report, nil
 }
 
+// headAndBranch reads the current commit and branch.
+//
+// A repository with no commits yet reports an empty head rather than failing:
+// `rev-parse HEAD` exits 128 there (measured), and a project whose first
+// session runs before its first commit is completely ordinary. Refusing would
+// mean the very first session of a new project could never be fingerprinted.
 func headAndBranch(ctx context.Context, root string) (head, branch string, err error) {
-	head, err = runGit(ctx, root, "rev-parse", "HEAD")
+	head, err = runGit(ctx, root, "rev-parse", "--verify", "HEAD")
 	if err != nil {
-		return "", "", fmt.Errorf("read HEAD: %w", err)
+		if unanswered(err) {
+			return "", "", fmt.Errorf("read HEAD: %w", err)
+		}
+		head = ""
 	}
-	branch, err = runGit(ctx, root, "rev-parse", "--abbrev-ref", "HEAD")
+	// --show-current rather than rev-parse: it still answers before the first
+	// commit, and returns empty on a detached head instead of the word "HEAD".
+	branch, err = runGit(ctx, root, "branch", "--show-current")
 	if err != nil {
 		return "", "", fmt.Errorf("read branch: %w", err)
 	}
@@ -207,7 +251,11 @@ func changedBetween(ctx context.Context, root, older, newer, rel string) bool {
 // This is the layer that catches changes made through a shell, which the
 // session itself never sees (PoC-2 §3).
 func dirtyPaths(ctx context.Context, root string) ([]string, error) {
-	out, err := runGitRaw(ctx, root, "status", "--porcelain", "-z")
+	// -uall lists untracked files individually. Without it git collapses a whole
+	// untracked directory into one entry ending in "/" (measured), and every
+	// file inside it - created, edited or deleted since the session - would
+	// compare equal forever.
+	out, err := runGitRaw(ctx, root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
 		return nil, fmt.Errorf("read working tree status: %w", err)
 	}
@@ -252,33 +300,98 @@ func parsePorcelainZ(out []byte) ([]string, error) {
 	return dirty, nil
 }
 
-// digestOf hashes a file's contents, reporting a missing file as absent rather
-// than as an error.
-func digestOf(path string) (string, error) {
+// Digests for paths that are not readable file content. They are values rather
+// than errors because a path whose very kind changed is a difference, not a
+// failure to look.
+const (
+	digestDirectory = "kind:directory"
+	digestIrregular = "kind:irregular"
+)
+
+// digestAll computes a comparable digest for each path, relative to top.
+//
+// Content is hashed by git rather than by reading raw bytes. With
+// core.autocrlf=true - the default for Git for Windows - the same commit checks
+// out as CRLF on Windows and LF elsewhere (measured), so raw bytes differ
+// between machines for every text file while git considers them identical. A
+// fingerprint taken on one platform would then report every touched file as
+// modified on the other, which is precisely the comparison this whole layer
+// exists to make. `git hash-object` applies the same filters git applies, and
+// its answer matches the blob in the index exactly.
+func digestAll(ctx context.Context, top string, rels []string) (map[string]string, error) {
+	digests := make(map[string]string, len(rels))
+
+	var hashable []string
+	for _, rel := range rels {
+		full := filepath.Join(top, filepath.FromSlash(rel))
+		info, err := os.Lstat(full)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			digests[rel] = digestAbsent
+		case err != nil:
+			return nil, fmt.Errorf("read a file in the working tree: %w", pathSafe(err))
+		case info.IsDir():
+			digests[rel] = digestDirectory
+		case !info.Mode().IsRegular():
+			// A symlink, socket or FIFO. Opening a FIFO blocks until somebody
+			// writes to it, which would hang the capture with no timeout - and
+			// build tools do leave them lying around.
+			digests[rel] = digestIrregular
+		case strings.ContainsAny(rel, "\n\r"):
+			// --stdin-paths is newline-delimited, so such a name cannot be sent
+			// through it. Falling back keeps one pathological filename from
+			// making the whole project unfingerprintable; it can only exist on
+			// systems where the CRLF problem does not arise.
+			digest, err := rawDigest(full)
+			if err != nil {
+				return nil, err
+			}
+			digests[rel] = digest
+		default:
+			hashable = append(hashable, rel)
+		}
+	}
+
+	if len(hashable) == 0 {
+		return digests, nil
+	}
+
+	var stdin strings.Builder
+	for _, rel := range hashable {
+		stdin.WriteString(rel)
+		stdin.WriteByte('\n')
+	}
+	out, err := runGitStdin(ctx, top, []byte(stdin.String()), "hash-object", "--stdin-paths")
+	if err != nil {
+		return nil, fmt.Errorf("hash working tree files: %w", err)
+	}
+
+	lines := strings.Fields(string(out))
+	if len(lines) != len(hashable) {
+		// Never guess at an alignment: a digest attributed to the wrong file
+		// would report agreement about something never examined.
+		return nil, fmt.Errorf("hashed %d files but got %d digests", len(hashable), len(lines))
+	}
+	for i, rel := range hashable {
+		digests[rel] = lines[i]
+	}
+	return digests, nil
+}
+
+// rawDigest hashes bytes directly, for the paths git cannot be handed.
+func rawDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return digestAbsent, nil
-		}
-		return "", err
+		return "", fmt.Errorf("read a file in the working tree: %w", pathSafe(err))
 	}
 	defer func() {
 		// Read-only handle: nothing was buffered, so there is no write to lose.
 		_ = f.Close()
 	}()
 
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	if info.IsDir() {
-		// A path that became a directory is not a file that is unchanged.
-		return "directory", nil
-	}
-
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+		return "", fmt.Errorf("read a file in the working tree: %w", pathSafe(err))
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

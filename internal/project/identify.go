@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ type Project struct {
 func Identify(ctx context.Context, dir string) (Project, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
-		return Project{}, fmt.Errorf("read project directory: %w", err)
+		return Project{}, fmt.Errorf("the project directory cannot be read: %w", pathSafe(err))
 	}
 	if !info.IsDir() {
 		return Project{}, fmt.Errorf("project: %s is not a directory", filepath.Base(dir))
@@ -134,6 +135,11 @@ func worktreeRoot(ctx context.Context, dir string) (string, bool, error) {
 		if unanswered(err) {
 			return "", false, err
 		}
+		if dubiousOwnership(err) {
+			// Exits 128 just like "not a repository", but binding by hand would
+			// not help; the fix is a safe.directory entry.
+			return "", false, errors.New("git refuses this repository as owned by another account; add it to safe.directory in your git config")
+		}
 		// git exiting non-zero here is an answer: this is not a repository. It
 		// says so on stderr, which is not quoted for the reasons in runGit.
 		return "", false, nil
@@ -155,6 +161,20 @@ func worktreeRoot(ctx context.Context, dir string) (string, bool, error) {
 	// git reports forward slashes even on Windows; the rest of the program
 	// compares these against filepath-built paths (code_style §3.4).
 	return filepath.Clean(filepath.FromSlash(top)), true, nil
+}
+
+// pathSafe strips the filename out of a filesystem error while keeping its
+// cause, so errors.Is still answers correctly.
+//
+// A *fs.PathError renders as "stat C:\Users\someone\projects\thing: ...". These
+// errors reach the user, and an absolute path names both the person and what
+// they work on (BR-09, code_style §5.2).
+func pathSafe(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return fmt.Errorf("%s: %w", pe.Op, pe.Err)
+	}
+	return err
 }
 
 // unanswered reports a failure that means git never got to look, as opposed to
