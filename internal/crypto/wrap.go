@@ -88,3 +88,25 @@ func unwrap(kek []byte, label string, sealed []byte) ([]byte, error) {
 	}
 	return plaintext, nil
 }
+
+// SealLocal seals data that stays on this machine, under a key the machine
+// also holds.
+//
+// This is deliberately not the same thing as Encrypt. Objects bound for storage
+// are sealed to a public key precisely so that an unattended push holds nothing
+// that can read them back; a local file has the opposite requirement, since
+// whatever reads it has no passphrase to offer either. Exposing the difference
+// as two names keeps a caller from reaching for the wrong one.
+//
+// What it protects is correspondingly narrower: a file copied on its own, or
+// pasted into an issue, stays unreadable. It does nothing against someone who
+// can already read the directory, because the key is in there too. Callers must
+// describe it that way and no better.
+func SealLocal(key []byte, label string, plaintext []byte) ([]byte, error) {
+	return wrap(key, label, plaintext)
+}
+
+// OpenLocal opens what SealLocal produced.
+func OpenLocal(key []byte, label string, sealed []byte) ([]byte, error) {
+	return unwrap(key, label, sealed)
+}
