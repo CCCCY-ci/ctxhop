@@ -23,6 +23,8 @@
 | `internal/remote`、`internal/project`、`internal/config` | 90%+ |
 | `cmd/agentsync` | 不设硬性要求，但每个命令至少有一个端到端用例 |
 
+**这些是目标，不是可以凑出来的指标。** 达不到时怎么办见 §1.0。
+
 ```bash
 go test -race -cover ./...
 go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
@@ -45,6 +47,29 @@ go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
 * 一条测试如果只是为了让某行被执行，**删掉它**。
 
 判断标准很简单：**这条测试失败时，是否说明有人会遇到一个真实的问题？** 答不出来就不该存在。
+
+#### 数字够不到时怎么办
+
+上表的百分比是**目标**，不是承诺能达到的值。每个包都有一个结构上限，由**不可达的语句**决定——最常见的是标准库在固定长度输入下不可能失败的错误返回：
+
+```go
+aes.NewCipher(32 字节)          // 永不失败
+cipher.NewGCM(AES block)        // 永不失败
+hkdf.Extract / Expand(32 字节)  // 永不失败
+json.MarshalIndent(固定结构体)   // 永不失败
+```
+
+这类错误 Go **强制处理**，忽略它违反 code_style §2.1，所以和 `crypto/rand.Read` 那种不同——**删不掉**。它们连同调用链上的传递，能占掉一个密码学包 5%–8% 的语句。
+
+因此规则是：
+
+1. **达不到目标时，必须在该包的 Spec 里逐条交代缺口**，列出每一条未覆盖语句。
+2. 每一条都必须能说明**它为什么不可达**。说不清的那条，就是缺测试——去补它，而不是把它算进"结构上限"。
+3. **不许为了达标补空测试，也不许悄悄下调数字。** 前者掩盖遗漏，后者掩盖前者。
+
+这比一个光秃秃的百分比要求**更严**：它要的是解释，而百分比只要一个数。
+
+参考实例：`docs/specs/crypto-spec.md §14`。
 
 ### 1.1 `-race` 的工具链前提
 
