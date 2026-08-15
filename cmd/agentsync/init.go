@@ -21,14 +21,15 @@ import (
 const initBackendTimeout = 15 * time.Second
 
 type initOptions struct {
-	backend  string
-	path     string
-	endpoint string
-	bucket   string
-	region   string
-	prefix   string
-	device   string
-	noHook   bool
+	backend    string
+	path       string
+	endpoint   string
+	bucket     string
+	region     string
+	prefix     string
+	device     string
+	deviceMode string
+	noHook     bool
 }
 
 type initPrompter struct {
@@ -113,6 +114,7 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 
 	c := config.New()
 	c.Device.Name = options.device
+	c.Device.Mode = config.DeviceMode(options.deviceMode)
 	c.Remote = config.Remote{
 		Type:     options.backend,
 		Endpoint: options.endpoint,
@@ -165,6 +167,7 @@ func parseInitOptions(args []string) (initOptions, error) {
 	flags.StringVar(&options.region, "region", "", "S3 signing region")
 	flags.StringVar(&options.prefix, "prefix", "", "S3 object prefix")
 	flags.StringVar(&options.device, "device-name", "", "display name for this device")
+	flags.StringVar(&options.deviceMode, "device-mode", "", "device mode: normal, push-only, or disabled")
 	flags.BoolVar(&options.noHook, "no-hook", false, "do not offer Agent hook installation")
 	if err := flags.Parse(args); err != nil {
 		return initOptions{}, fmt.Errorf("init: %w", err)
@@ -178,6 +181,11 @@ func parseInitOptions(args []string) (initOptions, error) {
 			return initOptions{}, errors.New("init: backend must be dir or s3")
 		}
 	}
+	mode, err := config.ParseDeviceMode(options.deviceMode)
+	if err != nil {
+		return initOptions{}, fmt.Errorf("init: %w", err)
+	}
+	options.deviceMode = string(mode)
 	return options, nil
 }
 

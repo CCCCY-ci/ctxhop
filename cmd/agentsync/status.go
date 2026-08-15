@@ -37,7 +37,7 @@ type statusReport struct {
 type statusConfiguration struct {
 	Version  int              `json:"version"`
 	Remote   statusRemote     `json:"remote"`
-	Device   statusReadiness  `json:"device"`
+	Device   statusDevice     `json:"device"`
 	Identity statusReadiness  `json:"identity"`
 	Projects statusProjectSet `json:"projects"`
 	Agents   []statusAgent    `json:"agents,omitempty"`
@@ -51,6 +51,11 @@ type statusRemote struct {
 
 type statusReadiness struct {
 	Configured bool `json:"configured"`
+}
+
+type statusDevice struct {
+	Configured bool   `json:"configured"`
+	Mode       string `json:"mode"`
 }
 
 type statusProjectSet struct {
@@ -142,7 +147,7 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 				Configured: summary.RemoteConfigured,
 				Endpoint:   summary.EndpointSet,
 			},
-			Device:   statusReadiness{Configured: summary.DeviceIdentified},
+			Device:   statusDevice{Configured: summary.DeviceIdentified, Mode: summary.DeviceMode},
 			Identity: statusReadiness{Configured: summary.IdentityPinned},
 			Projects: statusProjectSet{
 				Bound:    summary.BoundProjects,
@@ -235,7 +240,7 @@ func writeStatusText(w io.Writer, report statusReport) error {
 	if _, err := fmt.Fprintf(w, "  remote: %s\n", remote); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  device identity: %s\n", readiness(report.Configuration.Device.Configured)); err != nil {
+	if _, err := fmt.Fprintf(w, "  device identity: %s (mode=%s)\n", readiness(report.Configuration.Device.Configured), report.Configuration.Device.Mode); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  encryption identity: %s\n", readiness(report.Configuration.Identity.Configured)); err != nil {

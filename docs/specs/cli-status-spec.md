@@ -29,6 +29,10 @@ flow before any body read or restore.
 Projects configured as excluded or push-only are not queried remotely. Their
 mode is reported without prompting for the passphrase.
 
+The local device mode is included in the redacted configuration report. A
+push-only or disabled device reports its remote boundary without opening local
+secrets or contacting the backend.
+
 ## 3. Reported counters
 
 The JSON `sync` object and its text equivalent contain only aggregate counts:

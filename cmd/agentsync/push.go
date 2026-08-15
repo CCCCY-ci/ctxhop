@@ -112,6 +112,9 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	if err := ctx.Err(); err != nil {
 		return pushSummary{}, fmt.Errorf("push: %w", err)
 	}
+	if configuredDeviceMode(c) == config.DeviceModeDisabled {
+		return pushSummary{Skipped: 1}, nil
+	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
 		return pushSummary{}, fmt.Errorf("push: local device identity is invalid: %w", err)
 	}

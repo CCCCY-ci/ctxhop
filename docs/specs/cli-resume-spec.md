@@ -45,6 +45,9 @@ by the command.
 Projects configured as excluded or push-only cannot be restored by this
 command; it stops before reading the remote keyfile or asking for a passphrase.
 
+The local device mode is checked before this restore state is read. A
+push-only or disabled device cannot enter the remote body-read flow.
+
 After a successful restore, the command persists only the opaque tips for
 devices included in the selected restore version. The local device and other
 fork versions are not marked as observed. If this local marker cannot be

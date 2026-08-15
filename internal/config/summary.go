@@ -20,6 +20,7 @@ type Summary struct {
 	EndpointSet      bool
 
 	DeviceIdentified bool
+	DeviceMode       string
 	IdentityPinned   bool
 
 	BoundProjects    int
@@ -42,6 +43,7 @@ func (c *Config) Summarise() Summary {
 		RemoteConfigured: c.Remote.Bucket != "" || c.Remote.Path != "",
 		EndpointSet:      c.Remote.Endpoint != "",
 		DeviceIdentified: c.Device.ID != "",
+		DeviceMode:       string(c.Device.Mode.Effective()),
 		IdentityPinned:   len(c.IdentityPublic) > 0,
 		BoundProjects:    len(c.Projects.Bindings),
 		ExcludedProjects: len(c.Projects.Excluded),

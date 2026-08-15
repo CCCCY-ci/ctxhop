@@ -53,6 +53,12 @@ func collectRemoteStatus(ctx context.Context, c *config.Config, configDir, proje
 	if c == nil {
 		return statusSync{}, errors.New("status: configuration is unavailable")
 	}
+	if err := ctx.Err(); err != nil {
+		return statusSync{}, fmt.Errorf("status: %w", err)
+	}
+	if mode := deviceStatusPullMode(c); mode != "" {
+		return statusSync{Mode: mode}, nil
+	}
 	if input == nil {
 		return statusSync{}, errors.New("status: input is required for --remote")
 	}
@@ -257,7 +263,9 @@ func writeStatusSyncText(w io.Writer, sync statusSync) error {
 	if _, err := fmt.Fprintln(w, "sync:"); err != nil {
 		return err
 	}
-	if sync.Mode == "excluded" || sync.Mode == "push-only" {
+	if sync.Mode == projectModeExcluded || sync.Mode == projectModePushOnly ||
+		sync.Mode == deviceStatusModePushOnly || sync.Mode == deviceStatusModeDisabled {
+		// boundary modes do not have backend counters
 		_, err := fmt.Fprintf(w, "  mode: %s\n", sync.Mode)
 		return err
 	}

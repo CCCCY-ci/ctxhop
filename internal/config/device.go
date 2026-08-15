@@ -13,6 +13,48 @@ import (
 
 const maxDeviceIDLength = 128
 
+// DeviceMode controls which synchronization directions this installation may
+// use. An empty value is accepted for configurations written before device
+// modes existed and is interpreted as DeviceModeNormal.
+type DeviceMode string
+
+const (
+	DeviceModeNormal   DeviceMode = "normal"
+	DeviceModePushOnly DeviceMode = "push-only"
+	DeviceModeDisabled DeviceMode = "disabled"
+)
+
+// Effective returns the behavior of a persisted device mode.
+func (m DeviceMode) Effective() DeviceMode {
+	if m == "" {
+		return DeviceModeNormal
+	}
+	return m
+}
+
+// Validate checks the persisted device mode without changing legacy config
+// files that omit the optional field.
+func (m DeviceMode) Validate() error {
+	switch m {
+	case "", DeviceModeNormal, DeviceModePushOnly, DeviceModeDisabled:
+		return nil
+	default:
+		return fmt.Errorf("config: unsupported device mode %q", string(m))
+	}
+}
+
+// ParseDeviceMode normalizes the value accepted by a user-facing command.
+func ParseDeviceMode(value string) (DeviceMode, error) {
+	mode := DeviceMode(strings.ToLower(strings.TrimSpace(value)))
+	if mode == "" {
+		return DeviceModeNormal, nil
+	}
+	if err := mode.Validate(); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
 var (
 	// ErrInvalidDeviceID reports a device identifier that cannot be used in a
 	// remote object namespace.

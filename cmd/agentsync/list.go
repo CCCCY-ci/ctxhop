@@ -111,6 +111,9 @@ func collectList(ctx context.Context, c *config.Config, configDir, projectDir st
 		return listReport{}, fmt.Errorf("list: %w", err)
 	}
 
+	if err := devicePullError("list", c); err != nil {
+		return listReport{}, err
+	}
 	current, err := project.Identify(ctx, projectDir)
 	if err != nil {
 		return listReport{}, fmt.Errorf("list: identify the current project: %w", err)

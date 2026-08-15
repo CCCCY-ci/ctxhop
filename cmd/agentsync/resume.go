@@ -129,6 +129,9 @@ func collectResume(ctx context.Context, c *config.Config, configDir, projectDir 
 	if err := ctx.Err(); err != nil {
 		return resumeReport{}, fmt.Errorf("resume: %w", err)
 	}
+	if err := devicePullError("resume", c); err != nil {
+		return resumeReport{}, err
+	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
 		return resumeReport{}, fmt.Errorf("resume: local device identity is invalid: %w", err)
 	}

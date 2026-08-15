@@ -43,6 +43,9 @@ Projects configured as excluded or push-only are not queried. The command
 reports that remote listing is unavailable before it reads the keyfile or
 asks for a passphrase.
 
+Device `push-only` and `disabled` modes also stop before keyfile
+or passphrase handling; `disabled` is a complete local participation boundary.
+
 An unstable current project, invalid local configuration, keyfile identity
 mismatch, unlock failure, metadata authentication failure, malformed metadata,
 or backend failure stops the command. Missing remote metadata is an empty

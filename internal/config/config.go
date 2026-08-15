@@ -23,8 +23,9 @@ var ErrUnsupportedVersion = errors.New("config: this configuration was written b
 
 // Device is how this machine identifies itself to the others.
 type Device struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   string     `json:"id"`
+	Name string     `json:"name"`
+	Mode DeviceMode `json:"mode,omitempty"`
 }
 
 // Remote describes the storage backend. It holds no credentials: those live in
@@ -115,6 +116,9 @@ func (c *Config) check() error {
 		return fmt.Errorf("%w: version %d", ErrUnsupportedVersion, c.Version)
 	case c.Version != configVersion:
 		return fmt.Errorf("config: unknown configuration version %d; the file is damaged", c.Version)
+	}
+	if err := c.Device.Mode.Validate(); err != nil {
+		return err
 	}
 	if c.Remote.Type == "" {
 		return errors.New("config: the configuration names no storage backend; run 'agentsync init'")

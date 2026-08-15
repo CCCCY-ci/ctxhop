@@ -52,6 +52,9 @@ or restore A's remote branch, so the normal upload path performs no redundant
 self-pull. Foreign branch inspection belongs to the metadata-only pull check
 and explicit restore flow.
 
+The effective local device mode is applied before backend setup. `push-only`
+keeps this write path enabled; `disabled` returns a skipped summary.
+
 ## 5. Test plan
 
 Tests cover hook argument parsing, one-session filtering, project exclusions,
