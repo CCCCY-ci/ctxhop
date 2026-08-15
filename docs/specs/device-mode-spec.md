@@ -30,6 +30,17 @@ agentsync init --device-mode push-only
 agentsync init --device-mode disabled
 ```
 
+After initialization, the local setting can be inspected or changed without
+editing `config.json`:
+
+```text
+agentsync device status
+agentsync device mode normal|push-only|disabled
+```
+
+The management command changes only the persisted mode. It never regenerates
+the opaque device ID or contacts the backend.
+
 The mode is configuration state, not a device identifier. `Config.Device.ID`
 continues to identify the local branch and is never derived from the display
 name, hostname, path, or mode.

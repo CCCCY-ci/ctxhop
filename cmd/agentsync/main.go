@@ -42,6 +42,7 @@ var commands = []command{
 	{name: "resume", summary: "restore a session onto this machine"},
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
+	{name: "device", summary: "inspect or change local device settings"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},
 }
