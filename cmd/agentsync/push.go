@@ -225,12 +225,17 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 			summary.Failed++
 			continue
 		}
-		payload, err := syncflow.EncodeSessionSummary(ref)
+		data, err := adapter.ReadSessionFile(layout.SessionFile(projectRoot, ref.NativeID))
 		if err != nil {
 			summary.Failed++
 			continue
 		}
-		data, err := adapter.ReadSessionFile(layout.SessionFile(projectRoot, ref.NativeID))
+		fingerprint, err := capturePushFingerprint(ctx, projectRoot, data)
+		if err != nil {
+			summary.Failed++
+			continue
+		}
+		payload, err := syncflow.EncodeSessionSummaryWithFingerprint(ref, &fingerprint)
 		if err != nil {
 			summary.Failed++
 			continue
@@ -242,6 +247,15 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 		summary.Pushed++
 	}
 	return summary
+}
+
+func capturePushFingerprint(ctx context.Context, projectRoot string, data adapter.SessionData) (project.Fingerprint, error) {
+	accesses := adapter.TouchedFiles(data.Records, projectRoot)
+	touched := make([]string, 0, len(accesses))
+	for _, access := range accesses {
+		touched = append(touched, access.Path)
+	}
+	return project.Capture(ctx, projectRoot, touched)
 }
 
 func filterPushSession(refs []adapter.SessionRef, nativeID string) []adapter.SessionRef {

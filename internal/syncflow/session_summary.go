@@ -2,6 +2,7 @@ package syncflow
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +12,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
+	"github.com/CCCCY-ci/agentsync/internal/project"
 )
 
-const sessionSummaryVersion = 1
+const (
+	sessionSummaryVersion = 1
+	maxFingerprintPaths   = 10000
+)
 
 var (
 	// ErrInvalidSessionSummary reports a payload that is not a supported
@@ -24,33 +29,44 @@ var (
 // SessionSummary is the small, encrypted payload used by list and resume.
 //
 // It intentionally excludes ProjectPath and Size. The project path is local
-// machine state and must never cross the encryption boundary; the remote
-// metadata envelope already carries the durable record count and digest.
+// machine state and must never cross the encryption boundary; the optional
+// fingerprint contains only relative paths and digests for the restore safety
+// check.
 type SessionSummary struct {
-	NativeID  string
-	Title     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	NativeID    string
+	Title       string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Fingerprint *project.Fingerprint
 }
 
 // EncodeSessionSummary creates the compact JSON payload published beside a
-// session's encrypted branch metadata.
+// session's encrypted branch metadata without workspace evidence.
 func EncodeSessionSummary(ref adapter.SessionRef) ([]byte, error) {
+	return EncodeSessionSummaryWithFingerprint(ref, nil)
+}
+
+// EncodeSessionSummaryWithFingerprint creates the compact JSON payload used by
+// push. The fingerprint is copied so a caller cannot mutate an accepted
+// payload through its maps or slices after encoding begins.
+func EncodeSessionSummaryWithFingerprint(ref adapter.SessionRef, fingerprint *project.Fingerprint) ([]byte, error) {
 	summary := SessionSummary{
-		NativeID:  ref.NativeID,
-		Title:     ref.Title,
-		CreatedAt: ref.CreatedAt,
-		UpdatedAt: ref.UpdatedAt,
+		NativeID:    ref.NativeID,
+		Title:       ref.Title,
+		CreatedAt:   ref.CreatedAt,
+		UpdatedAt:   ref.UpdatedAt,
+		Fingerprint: cloneFingerprint(fingerprint),
 	}
 	if err := summary.validate(); err != nil {
 		return nil, err
 	}
 	wire := sessionSummaryWire{
-		Version:   sessionSummaryVersion,
-		NativeID:  summary.NativeID,
-		Title:     summary.Title,
-		CreatedAt: formatSummaryTime(summary.CreatedAt),
-		UpdatedAt: formatSummaryTime(summary.UpdatedAt),
+		Version:     sessionSummaryVersion,
+		NativeID:    summary.NativeID,
+		Title:       summary.Title,
+		CreatedAt:   formatSummaryTime(summary.CreatedAt),
+		UpdatedAt:   formatSummaryTime(summary.UpdatedAt),
+		Fingerprint: cloneFingerprint(summary.Fingerprint),
 	}
 	payload, err := json.Marshal(wire)
 	if err != nil {
@@ -95,10 +111,11 @@ func DecodeSessionSummary(payload []byte) (SessionSummary, error) {
 		return SessionSummary{}, fmt.Errorf("%w: updated time: %v", ErrInvalidSessionSummary, err)
 	}
 	summary := SessionSummary{
-		NativeID:  wire.NativeID,
-		Title:     wire.Title,
-		CreatedAt: created,
-		UpdatedAt: updated,
+		NativeID:    wire.NativeID,
+		Title:       wire.Title,
+		CreatedAt:   created,
+		UpdatedAt:   updated,
+		Fingerprint: cloneFingerprint(wire.Fingerprint),
 	}
 	if wire.Version != sessionSummaryVersion {
 		return SessionSummary{}, fmt.Errorf("%w: unsupported version %d", ErrInvalidSessionSummary, wire.Version)
@@ -110,11 +127,12 @@ func DecodeSessionSummary(payload []byte) (SessionSummary, error) {
 }
 
 type sessionSummaryWire struct {
-	Version   int    `json:"version"`
-	NativeID  string `json:"nativeId"`
-	Title     string `json:"title"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	Version     int                  `json:"version"`
+	NativeID    string               `json:"nativeId"`
+	Title       string               `json:"title"`
+	CreatedAt   string               `json:"createdAt"`
+	UpdatedAt   string               `json:"updatedAt"`
+	Fingerprint *project.Fingerprint `json:"fingerprint,omitempty"`
 }
 
 func (s SessionSummary) validate() error {
@@ -138,7 +156,86 @@ func (s SessionSummary) validate() error {
 	if s.CreatedAt.IsZero() || s.UpdatedAt.IsZero() {
 		return fmt.Errorf("%w: timestamps are required", ErrInvalidSessionSummary)
 	}
+	if err := validateFingerprint(s.Fingerprint); err != nil {
+		return fmt.Errorf("%w: fingerprint: %v", ErrInvalidSessionSummary, err)
+	}
 	return nil
+}
+
+func validateFingerprint(fingerprint *project.Fingerprint) error {
+	if fingerprint == nil {
+		return nil
+	}
+	if len(fingerprint.Head) > 128 || !validFingerprintText(fingerprint.Head) {
+		return errors.New("head is not valid text")
+	}
+	if len(fingerprint.Branch) > 256 || !validFingerprintText(fingerprint.Branch) {
+		return errors.New("branch is not valid text")
+	}
+	if len(fingerprint.Dirty) > maxFingerprintPaths || len(fingerprint.Files) > maxFingerprintPaths {
+		return errors.New("too many fingerprint paths")
+	}
+	for _, path := range fingerprint.Dirty {
+		if !validFingerprintPath(path) {
+			return errors.New("dirty path is unsafe")
+		}
+	}
+	for path, digest := range fingerprint.Files {
+		if !validFingerprintPath(path) {
+			return errors.New("file path is unsafe")
+		}
+		if !validFingerprintDigest(digest) {
+			return errors.New("file digest is invalid")
+		}
+	}
+	return nil
+}
+
+func validFingerprintText(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsRune(value, 0) && !strings.ContainsAny(value, "\r\n")
+}
+
+func validFingerprintPath(value string) bool {
+	if value == "" || strings.ContainsRune(value, 0) {
+		return false
+	}
+	normalized := strings.ReplaceAll(value, `\`, "/")
+	if strings.HasPrefix(normalized, "/") || strings.Contains(normalized, ":") {
+		return false
+	}
+	for _, part := range strings.Split(normalized, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+	return utf8.ValidString(value)
+}
+
+func validFingerprintDigest(value string) bool {
+	if value == "<absent>" || value == "<directory>" {
+		return true
+	}
+	if len(value) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func cloneFingerprint(fingerprint *project.Fingerprint) *project.Fingerprint {
+	if fingerprint == nil {
+		return nil
+	}
+	clone := &project.Fingerprint{
+		Head:   fingerprint.Head,
+		Branch: fingerprint.Branch,
+		Dirty:  append([]string(nil), fingerprint.Dirty...),
+		Files:  make(map[string]string, len(fingerprint.Files)),
+	}
+	for path, digest := range fingerprint.Files {
+		clone.Files[path] = digest
+	}
+	return clone
 }
 
 func formatSummaryTime(value time.Time) string {
