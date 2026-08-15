@@ -231,6 +231,9 @@ func collectResume(ctx context.Context, c *config.Config, configDir, projectDir 
 	if err != nil {
 		return resumeReport{}, safeResumeApplyError(err)
 	}
+	if err := saveResumeObservedTips(ctx, configDir, projectID, candidate.Group.SessionID, c.Device.ID, candidate.Group.Devices, plan.Devices); err != nil {
+		return resumeReport{}, fmt.Errorf("resume: restore completed but pull state could not be saved: %w", err)
+	}
 	sources := append([]string(nil), plan.Devices...)
 	sort.Strings(sources)
 	return resumeReport{
@@ -326,6 +329,39 @@ func resumeFingerprint(group syncer.ProjectMetadataRef, plan syncflow.RestorePla
 		}
 	}
 	return nil
+}
+
+func saveResumeObservedTips(ctx context.Context, stateRoot, projectID, sessionID, localDeviceID string, refs []syncer.MetadataRef, selectedDevices []string) error {
+	layout, err := syncer.NewObjectLayout(projectID, sessionID, localDeviceID)
+	if err != nil {
+		return err
+	}
+	pullTipStore, err := syncer.NewPullTipStore(stateRoot, layout)
+	if err != nil {
+		return err
+	}
+	selected := make(map[string]struct{}, len(selectedDevices))
+	for _, deviceID := range selectedDevices {
+		if deviceID == localDeviceID {
+			continue
+		}
+		selected[deviceID] = struct{}{}
+	}
+	tips := make([]syncflow.RemoteTip, 0, len(selected))
+	for _, ref := range refs {
+		if _, ok := selected[ref.DeviceID]; !ok {
+			continue
+		}
+		tips = append(tips, syncflow.RemoteTip{
+			DeviceID:    ref.DeviceID,
+			RecordCount: ref.Metadata.RecordCount,
+			HeadDigest:  ref.Metadata.HeadDigest,
+		})
+	}
+	if len(tips) != len(selected) {
+		return errors.New("resume: selected restore version has incomplete device metadata")
+	}
+	return syncflow.SaveObservedTips(ctx, pullTipStore, tips)
 }
 
 func safeResumePlanError(err error) error {
