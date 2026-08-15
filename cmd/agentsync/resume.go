@@ -147,6 +147,12 @@ func collectResume(ctx context.Context, c *config.Config, configDir, projectDir 
 		}
 		return resumeReport{}, fmt.Errorf("resume: %s", reason)
 	}
+	switch projectPullMode(c, current.Identity.Value) {
+	case projectModeExcluded:
+		return resumeReport{}, errors.New("resume: project is excluded from synchronization")
+	case projectModePushOnly:
+		return resumeReport{}, errors.New("resume: project is configured as push-only; remote sessions are unavailable")
+	}
 	secrets, err := config.LoadSecrets(configDir)
 	if err != nil {
 		return resumeReport{}, fmt.Errorf("resume: load local sync material: %w", err)

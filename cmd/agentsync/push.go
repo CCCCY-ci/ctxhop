@@ -279,6 +279,18 @@ func projectExcluded(c *config.Config, identity string) bool {
 	return false
 }
 
+func projectPushOnly(c *config.Config, identity string) bool {
+	if c == nil {
+		return false
+	}
+	for _, value := range c.Projects.PushOnly {
+		if value == identity {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyPushFailure(err error) syncer.FailureClass {
 	if err == nil {
 		return syncer.FailureNone

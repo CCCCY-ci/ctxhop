@@ -123,6 +123,12 @@ func collectList(ctx context.Context, c *config.Config, configDir, projectDir st
 		return listReport{}, fmt.Errorf("list: %s", reason)
 	}
 
+	switch projectPullMode(c, current.Identity.Value) {
+	case projectModeExcluded:
+		return listReport{}, errors.New("list: project is excluded from synchronization")
+	case projectModePushOnly:
+		return listReport{}, errors.New("list: project is configured as push-only; remote sessions are unavailable")
+	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
 		return listReport{}, fmt.Errorf("list: local device identity is invalid: %w", err)
 	}

@@ -75,11 +75,11 @@ func collectRemoteStatus(ctx context.Context, c *config.Config, configDir, proje
 		return statusSync{}, fmt.Errorf("status: %s", reason)
 	}
 
-	if projectExcluded(c, current.Identity.Value) {
-		return statusSync{Mode: "excluded"}, nil
-	}
-	if projectPushOnly(c, current.Identity.Value) {
-		return statusSync{Mode: "push-only"}, nil
+	switch projectPullMode(c, current.Identity.Value) {
+	case projectModeExcluded:
+		return statusSync{Mode: projectModeExcluded}, nil
+	case projectModePushOnly:
+		return statusSync{Mode: projectModePushOnly}, nil
 	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
 		return statusSync{}, fmt.Errorf("status: local device identity is invalid: %w", err)
@@ -251,18 +251,6 @@ func countStatusQueue(snapshot syncer.QueueSnapshot, projectID, deviceID string,
 		}
 	}
 	return counts
-}
-
-func projectPushOnly(c *config.Config, identity string) bool {
-	if c == nil {
-		return false
-	}
-	for _, value := range c.Projects.PushOnly {
-		if value == identity {
-			return true
-		}
-	}
-	return false
 }
 
 func writeStatusSyncText(w io.Writer, sync statusSync) error {
