@@ -17,9 +17,11 @@ import (
 const statusProjectTimeout = 2 * time.Second
 
 // statusOptions controls the output format without changing what status
-// reads. In particular, status never contacts the configured backend.
+// reads. A normal status check never contacts the configured backend. The
+// explicit --remote mode performs a metadata-only check after prompting.
 type statusOptions struct {
-	json bool
+	json   bool
+	remote bool
 }
 
 // statusReport is deliberately a CLI-owned, redacted view. Keeping it apart
@@ -29,6 +31,7 @@ type statusReport struct {
 	Scope         string              `json:"scope"`
 	Configuration statusConfiguration `json:"configuration"`
 	Project       statusProject       `json:"project"`
+	Sync          *statusSync         `json:"sync,omitempty"`
 }
 
 type statusConfiguration struct {
@@ -95,6 +98,15 @@ func runStatus(args []string) error {
 	if err != nil {
 		return err
 	}
+	if options.remote {
+		ctx, cancel := context.WithTimeout(context.Background(), statusRemoteTimeout)
+		defer cancel()
+		checked, err := collectRemoteStatus(ctx, c, dir, ".", os.Stdin, os.Stderr)
+		if err != nil {
+			return err
+		}
+		report.Sync = &checked
+	}
 	if options.json {
 		return writeStatusJSON(os.Stdout, report)
 	}
@@ -105,13 +117,14 @@ func parseStatusOptions(args []string) (statusOptions, error) {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+	remoteCheck := flags.Bool("remote", false, "check encrypted remote metadata")
 	if err := flags.Parse(args); err != nil {
 		return statusOptions{}, fmt.Errorf("status: %w", err)
 	}
 	if flags.NArg() != 0 {
 		return statusOptions{}, fmt.Errorf("status: unexpected argument %q", flags.Arg(0))
 	}
-	return statusOptions{json: *jsonOutput}, nil
+	return statusOptions{json: *jsonOutput, remote: *remoteCheck}, nil
 }
 
 func collectStatus(c *config.Config, dir string) (statusReport, error) {
@@ -261,8 +274,12 @@ func writeStatusText(w io.Writer, report statusReport) error {
 		}
 	}
 	if report.Project.Reason != "" {
-		_, err := fmt.Fprintf(w, "  note: %s\n", report.Project.Reason)
-		return err
+		if _, err := fmt.Fprintf(w, "  note: %s\n", report.Project.Reason); err != nil {
+			return err
+		}
+	}
+	if report.Sync != nil {
+		return writeStatusSyncText(w, *report.Sync)
 	}
 	return nil
 }
