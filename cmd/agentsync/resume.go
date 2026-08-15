@@ -251,6 +251,9 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, safeResumeApplyError(err)
 	}
+	if err := recordResumeStats(ctx, configDir, c.Device.ID, plan.Devices); err != nil {
+		return resumeReport{}, fmt.Errorf("resume: restore completed but local statistics could not be saved: %w", err)
+	}
 	if err := saveResumeObservedTips(ctx, configDir, projectID, candidate.Group.SessionID, c.Device.ID, candidate.Group.Devices, plan.Devices); err != nil {
 		return resumeReport{}, fmt.Errorf("resume: restore completed but pull state could not be saved: %w", err)
 	}
@@ -349,6 +352,15 @@ func resumeFingerprint(group syncer.ProjectMetadataRef, plan syncflow.RestorePla
 		}
 	}
 	return nil
+}
+
+func recordResumeStats(ctx context.Context, stateRoot, localDeviceID string, selectedDevices []string) error {
+	store, err := syncer.NewRestoreStatsStore(stateRoot)
+	if err != nil {
+		return err
+	}
+	_, err = store.RecordRestore(ctx, localDeviceID, selectedDevices, time.Now().UTC())
+	return err
 }
 
 func saveResumeObservedTips(ctx context.Context, stateRoot, projectID, sessionID, localDeviceID string, refs []syncer.MetadataRef, selectedDevices []string) error {
