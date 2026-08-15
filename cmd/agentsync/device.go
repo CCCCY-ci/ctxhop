@@ -14,12 +14,18 @@ import (
 const (
 	deviceActionStatus = "status"
 	deviceActionMode   = "mode"
+	deviceActionList   = "list"
+	deviceActionRename = "rename"
+	deviceActionRemove = "remove"
 )
 
 type deviceOptions struct {
 	action string
 	json   bool
 	mode   config.DeviceMode
+	name   string
+	target string
+	yes    bool
 }
 
 type deviceStatusReport struct {
@@ -40,52 +46,12 @@ func init() {
 }
 
 func runDevice(args []string) error {
-	return runDeviceWithIO(args, os.Stdout)
-}
-
-func runDeviceWithIO(args []string, output io.Writer) error {
-	if output == nil {
-		return errors.New("device: output is required")
-	}
-
-	options, err := parseDeviceOptions(args)
-	if err != nil {
-		return err
-	}
-
-	configDir, err := config.Dir()
-	if err != nil {
-		return err
-	}
-	c, err := config.Load(configDir)
-	if err != nil {
-		return err
-	}
-
-	switch options.action {
-	case deviceActionStatus:
-		report, err := collectDeviceStatus(c)
-		if err != nil {
-			return err
-		}
-		if options.json {
-			return writeDeviceStatusJSON(output, report)
-		}
-		return writeDeviceStatusText(output, report)
-	case deviceActionMode:
-		if err := saveDeviceMode(configDir, c, options.mode); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintf(output, "device mode: %s\n", options.mode)
-		return err
-	default:
-		return fmt.Errorf("device: unsupported action %q", options.action)
-	}
+	return runDeviceWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func parseDeviceOptions(args []string) (deviceOptions, error) {
 	if len(args) == 0 {
-		return deviceOptions{}, errors.New("device: expected 'status' or 'mode'")
+		return deviceOptions{}, errors.New("device: expected 'status', 'mode', 'list', 'rename', or 'remove'")
 	}
 
 	switch args[0] {
@@ -109,8 +75,35 @@ func parseDeviceOptions(args []string) (deviceOptions, error) {
 			return deviceOptions{}, fmt.Errorf("device mode: %w", err)
 		}
 		return deviceOptions{action: deviceActionMode, mode: mode}, nil
+	case deviceActionList:
+		flags := flag.NewFlagSet("device list", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return deviceOptions{}, fmt.Errorf("device list: %w", err)
+		}
+		if flags.NArg() != 0 {
+			return deviceOptions{}, fmt.Errorf("device list: unexpected argument %q", flags.Arg(0))
+		}
+		return deviceOptions{action: deviceActionList, json: *jsonOutput}, nil
+	case deviceActionRename:
+		if len(args) != 2 {
+			return deviceOptions{}, errors.New("device rename: expected one display name")
+		}
+		return deviceOptions{action: deviceActionRename, name: args[1]}, nil
+	case deviceActionRemove:
+		flags := flag.NewFlagSet("device remove", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		yes := flags.Bool("yes", false, "skip the confirmation prompt")
+		if err := flags.Parse(args[1:]); err != nil {
+			return deviceOptions{}, fmt.Errorf("device remove: %w", err)
+		}
+		if flags.NArg() != 1 {
+			return deviceOptions{}, errors.New("device remove: expected one device ID")
+		}
+		return deviceOptions{action: deviceActionRemove, target: flags.Arg(0), yes: *yes}, nil
 	default:
-		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status' or 'mode'", args[0])
+		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', or 'remove'", args[0])
 	}
 }
 

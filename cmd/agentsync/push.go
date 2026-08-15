@@ -186,7 +186,13 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	}
 
 	space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: installation.DataDir}
-	return pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, layout, installation, space, store, public, pusher, configDir, current.Root, refs), nil
+	summary := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, layout, installation, space, store, public, pusher, configDir, current.Root, refs)
+	if summary.Pushed > 0 {
+		if err := publishPushDeviceRecord(ctx, c, store, public); err != nil {
+			summary.Failed++
+		}
+	}
+	return summary, nil
 }
 
 func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.Layout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef) pushSummary {
