@@ -136,12 +136,13 @@ func buildConfiguredRemote(c *config.Config, configDir string) (remote.Remote, e
 			return nil, err
 		}
 		return remote.NewS3(remote.S3Config{
-			Endpoint:  c.Remote.Endpoint,
-			Region:    c.Remote.Region,
-			Bucket:    c.Remote.Bucket,
-			Prefix:    c.Remote.Prefix,
-			AccessKey: secrets.Credentials.AccessKeyID,
-			SecretKey: secrets.Credentials.SecretAccessKey,
+			Endpoint:     c.Remote.Endpoint,
+			Region:       c.Remote.Region,
+			Bucket:       c.Remote.Bucket,
+			Prefix:       c.Remote.Prefix,
+			AccessKey:    secrets.Credentials.AccessKeyID,
+			SecretKey:    secrets.Credentials.SecretAccessKey,
+			SessionToken: secrets.Credentials.SessionToken,
 		})
 	default:
 		return nil, errors.New("storage backend type is unknown")

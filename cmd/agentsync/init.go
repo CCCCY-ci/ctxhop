@@ -255,12 +255,13 @@ func prepareInitBackend(options initOptions, configDir string, p *initPrompter) 
 			return config.Credentials{}, nil, err
 		}
 		store, err := remote.NewS3(remote.S3Config{
-			Endpoint:  options.endpoint,
-			Region:    options.region,
-			Bucket:    options.bucket,
-			Prefix:    options.prefix,
-			AccessKey: credentials.AccessKeyID,
-			SecretKey: credentials.SecretAccessKey,
+			Endpoint:     options.endpoint,
+			Region:       options.region,
+			Bucket:       options.bucket,
+			Prefix:       options.prefix,
+			AccessKey:    credentials.AccessKeyID,
+			SecretKey:    credentials.SecretAccessKey,
+			SessionToken: credentials.SessionToken,
 		})
 		if err != nil {
 			return config.Credentials{}, nil, fmt.Errorf("init: invalid S3 backend: %s", safeBackendSetupError(err))

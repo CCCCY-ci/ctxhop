@@ -47,6 +47,9 @@ type S3Config struct {
 	// AccessKey and SecretKey authenticate requests. They are never logged.
 	AccessKey string
 	SecretKey string
+	// SessionToken authenticates temporary credentials. It is optional and is
+	// sent as a signed X-Amz-Security-Token header when present.
+	SessionToken string
 	// PathStyle addresses the bucket as a path segment rather than a
 	// subdomain. Most S3-compatible providers and MinIO require it, so it is
 	// the default.
@@ -153,6 +156,9 @@ func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*h
 	}
 	if body != nil {
 		req.ContentLength = int64(len(body))
+	}
+	if s.cfg.SessionToken != "" {
+		req.Header.Set("X-Amz-Security-Token", s.cfg.SessionToken)
 	}
 
 	payloadHash := emptyPayloadHash
