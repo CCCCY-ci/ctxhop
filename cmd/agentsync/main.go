@@ -39,6 +39,7 @@ var commands = []command{
 	{name: "status", summary: "show sync state for this project or globally"},
 	{name: "list", summary: "list sessions available for this project"},
 	{name: "resume", summary: "restore a session onto this machine"},
+	{name: "history", summary: "list recoverable versions for a session"},
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
 	{name: "device", summary: "inspect or change local device settings"},
