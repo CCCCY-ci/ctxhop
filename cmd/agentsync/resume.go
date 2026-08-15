@@ -57,10 +57,14 @@ func init() {
 }
 
 func runResume(args []string) error {
-	return runResumeWithIO(args, os.Stdin, os.Stdout)
+	return runResumeWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func runResumeWithIO(args []string, input io.Reader, output io.Writer) error {
+	return runResumeWithStreams(args, input, output, output)
+}
+
+func runResumeWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
 	options, err := parseResumeOptions(args)
 	if err != nil {
 		return err
@@ -70,6 +74,9 @@ func runResumeWithIO(args []string, input io.Reader, output io.Writer) error {
 	}
 	if output == nil {
 		return errors.New("resume: output is required")
+	}
+	if prompt == nil {
+		return errors.New("resume: prompt output is required")
 	}
 	if options.json && options.session == "" {
 		return errors.New("resume: --json requires a session argument")
@@ -85,7 +92,7 @@ func runResumeWithIO(args []string, input io.Reader, output io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resumeTimeout)
 	defer cancel()
-	report, err := collectResume(ctx, c, configDir, ".", options, input, output)
+	report, err := collectResumeWithPrompt(ctx, c, configDir, ".", options, input, output, prompt)
 	if err != nil {
 		return err
 	}
@@ -123,6 +130,10 @@ func parseResumeOptions(args []string) (resumeOptions, error) {
 }
 
 func collectResume(ctx context.Context, c *config.Config, configDir, projectDir string, options resumeOptions, input io.Reader, output io.Writer) (resumeReport, error) {
+	return collectResumeWithPrompt(ctx, c, configDir, projectDir, options, input, output, output)
+}
+
+func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, options resumeOptions, input io.Reader, output, prompt io.Writer) (resumeReport, error) {
 	if c == nil {
 		return resumeReport{}, errors.New("resume: configuration is unavailable")
 	}
@@ -180,7 +191,7 @@ func collectResume(ctx context.Context, c *config.Config, configDir, projectDir 
 		return resumeReport{}, errors.New("resume: remote encryption identity does not match this configuration")
 	}
 
-	prompter := &resumePrompter{reader: bufio.NewReader(input), output: output}
+	prompter := &resumePrompter{reader: bufio.NewReader(input), output: prompt}
 	passphrase, err := prompter.secret("Passphrase: ")
 	if err != nil {
 		return resumeReport{}, err

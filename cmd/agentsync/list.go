@@ -53,10 +53,14 @@ func init() {
 }
 
 func runList(args []string) error {
-	return runListWithIO(args, os.Stdin, os.Stdout)
+	return runListWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func runListWithIO(args []string, input io.Reader, output io.Writer) error {
+	return runListWithStreams(args, input, output, output)
+}
+
+func runListWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
 	options, err := parseListOptions(args)
 	if err != nil {
 		return err
@@ -66,6 +70,9 @@ func runListWithIO(args []string, input io.Reader, output io.Writer) error {
 	}
 	if output == nil {
 		return errors.New("list: output is required")
+	}
+	if prompt == nil {
+		return errors.New("list: prompt output is required")
 	}
 
 	configDir, err := config.Dir()
@@ -79,7 +86,7 @@ func runListWithIO(args []string, input io.Reader, output io.Writer) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
-	report, err := collectList(ctx, c, configDir, ".", input, output)
+	report, err := collectListWithPrompt(ctx, c, configDir, ".", input, output, prompt)
 	if err != nil {
 		return err
 	}
@@ -103,6 +110,10 @@ func parseListOptions(args []string) (listOptions, error) {
 }
 
 func collectList(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, output io.Writer) (listReport, error) {
+	return collectListWithPrompt(ctx, c, configDir, projectDir, input, output, output)
+}
+
+func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, output, prompt io.Writer) (listReport, error) {
 	if c == nil {
 		return listReport{}, errors.New("list: configuration is unavailable")
 	}
@@ -159,7 +170,7 @@ func collectList(ctx context.Context, c *config.Config, configDir, projectDir st
 		return listReport{}, errors.New("list: remote encryption identity does not match this configuration")
 	}
 
-	passphrase, err := readListPassphrase(input, output)
+	passphrase, err := readListPassphrase(input, prompt)
 	if err != nil {
 		return listReport{}, err
 	}

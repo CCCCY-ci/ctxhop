@@ -16,6 +16,9 @@ shown before its body is restored.
 The command accepts `--json` for machine-readable output. A passphrase is read
 interactively and is never accepted as a flag or written to configuration.
 
+Interactive prompts are written to stderr, so stdout remains a valid JSON
+document when `--json` is used.
+
 ## 2. Read boundary
 
 The command may read:

@@ -13,6 +13,9 @@ project's encrypted metadata, and selects one native session. Without a
 session argument it presents a numbered selection. `--json` requires an
 explicit session so machine-readable output is never mixed with a prompt.
 
+All interactive prompts are written to stderr, so stdout remains a valid JSON
+document when `--json` is used.
+
 Only after selection does the command read encrypted shard bodies for that one
 session. Project-level listing never downloads shard contents.
 
