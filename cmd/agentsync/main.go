@@ -1,10 +1,9 @@
 // Command agentsync synchronises AI coding agent sessions across devices
 // through storage the user owns, with no server in the middle.
 //
-// See the PRD in docs/ for the full design. This binary is a scaffold: the
-// command surface is declared here, but the sync implementation is gated on
-// PoC-1 (does a Claude Code session survive a cross-device, cross-path move at
-// all?). Commands that are not implemented yet say so instead of pretending.
+// See the PRD in docs/ for the full design. The command table stays
+// declarative; each implemented handler attaches itself during package
+// initialisation.
 package main
 
 import (
@@ -43,6 +42,7 @@ var commands = []command{
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
 	{name: "device", summary: "inspect or change local device settings"},
+	{name: "project", summary: "bind projects and manage synchronization policy"},
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},
