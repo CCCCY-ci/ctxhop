@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -183,25 +182,6 @@ func collectList(ctx context.Context, c *config.Config, configDir, projectDir st
 		return listReport{}, err
 	}
 	return mergeListSessions(c.Device.ID, secrets.IdentifierKey, projectID, localSessions, remoteSessions), nil
-}
-
-func readListPassphrase(input io.Reader, output io.Writer) (string, error) {
-	if _, err := fmt.Fprint(output, "Passphrase: "); err != nil {
-		return "", err
-	}
-	value, err := bufio.NewReader(input).ReadString('\n')
-	value = strings.TrimSuffix(value, "\n")
-	value = strings.TrimSuffix(value, "\r")
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("list: read passphrase: %w", err)
-	}
-	if errors.Is(err, io.EOF) && value == "" {
-		return "", io.EOF
-	}
-	if value == "" {
-		return "", errors.New("list: passphrase cannot be empty")
-	}
-	return value, nil
 }
 
 func discoverListSessions(projectRoot string) ([]adapter.SessionRef, error) {

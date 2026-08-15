@@ -50,7 +50,7 @@ name, hostname, path, or mode.
 The mode is checked before secrets, keyfiles, remote metadata, or session
 shards are opened:
 
-| Mode | Push | Metadata/list/resume pull | Automatic self-pull |
+| Mode | Push | Metadata/list/pull/resume | Automatic self-pull |
 |---|---|---|---|
 | `normal` | allowed | explicit flow only | none |
 | `push-only` | allowed | blocked | none |
