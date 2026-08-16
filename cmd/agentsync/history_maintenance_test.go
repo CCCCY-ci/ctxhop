@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -67,6 +69,74 @@ func TestSelectHistoryPruneDevicesKeepsNewestVersionAndDeletesRedundantBranches(
 	}
 }
 
+func TestSelectHistoryPruneDevicesBeforeKeepsUnknownAndBoundaryVersions(t *testing.T) {
+	oldRecords := [][]byte{[]byte(`{"version":"old"}`)}
+	boundaryRecords := [][]byte{[]byte(`{"version":"boundary"}`)}
+	unknownRecords := [][]byte{[]byte(`{"version":"unknown"}`)}
+	makeBranch := func(id string, records [][]byte) syncer.Branch {
+		t.Helper()
+		digest, err := syncer.DigestRecords(records)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return syncer.Branch{DeviceID: id, Records: records, HeadDigest: digest}
+	}
+	branches := []syncer.Branch{
+		makeBranch("old", oldRecords),
+		makeBranch("boundary", boundaryRecords),
+		makeBranch("unknown", unknownRecords),
+	}
+	resolution, err := syncer.ResolveBranches(branches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownDigest, err := syncer.DigestRecords(unknownRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownMetadata, err := syncer.NewMetadata(uint64(len(unknownRecords)), unknownDigest, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := []syncer.MetadataRef{
+		historyPruneMetadata(t, "old", "native-old", time.Date(2026, 8, 15, 0, 59, 0, 0, time.UTC), oldRecords),
+		historyPruneMetadata(t, "boundary", "native-boundary", time.Date(2026, 8, 15, 1, 0, 0, 0, time.UTC), boundaryRecords),
+		{DeviceID: "unknown", Metadata: unknownMetadata},
+	}
+	before := time.Date(2026, 8, 15, 1, 0, 0, 0, time.UTC)
+	targets, retained := selectHistoryPruneDevices(metadata, resolution, branches, historyPruneOptions{before: &before})
+	if retained != 2 {
+		t.Fatalf("retained versions = %d, want 2", retained)
+	}
+	if len(targets) != 1 || targets[0] != "old" {
+		t.Fatalf("targets = %v, want [old]", targets)
+	}
+}
+
+func TestSafeHistoryPruneReadErrorFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "missing metadata", err: syncer.ErrNoRemoteMetadata, want: "history prune: no complete remote versions are available"},
+		{name: "missing branches", err: syncer.ErrNoRemoteBranches, want: "history prune: no complete remote versions are available"},
+		{name: "generic remote failure", err: errors.New("bucket credentials leaked"), want: "history prune: remote session could not be read safely"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := safeHistoryPruneReadError(context.Background(), test.err); got == nil || got.Error() != test.want {
+				t.Fatalf("error = %v, want %q", got, test.want)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := safeHistoryPruneReadError(ctx, errors.New("remote read failed"))
+	if got == nil || !errors.Is(got, context.Canceled) {
+		t.Fatalf("cancelled error = %v, want context.Canceled", got)
+	}
+}
 func historyPruneMetadata(t *testing.T, deviceID, nativeID string, updated time.Time, records [][]byte) syncer.MetadataRef {
 	digest, err := syncer.DigestRecords(records)
 	if err != nil {
