@@ -8,7 +8,8 @@
 ## 1. Verification
 
 Pull requests and pushes run native `go test ./...`, `go vet ./...` and a
-native build on Ubuntu, macOS and Windows. Ubuntu also runs
+native build on Ubuntu, macOS and Windows. An Ubuntu job also uploads a
+machine-readable `go test -json ./...` artifact for failure triage. Ubuntu also runs
 `go test -race ./...` and the cross-platform build matrix.
 
 The workflow deliberately does not require Claude Code, S3 credentials or a

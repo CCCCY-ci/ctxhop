@@ -173,11 +173,13 @@ by the local test suite.
 
 ## Design documents
 
-- [`docs/`](docs/)  PRD, TODO, PoC records and module specifications
-- [`docs/TODO.md`](docs/TODO.md)  current implementation and acceptance
+- [`docs/`](docs/) - PRD, TODO, PoC records and module specifications
+- [`docs/TODO.md`](docs/TODO.md) - current implementation and acceptance
   ledger
+- [`docs/acceptance/`](docs/acceptance/) - external Agent/Remote matrix and
+  redacted failure-report template
 - [`docs/specs/mvp-acceptance-matrix.md`](docs/specs/mvp-acceptance-matrix.md)
-   reproducible local MVP checks
+  - reproducible local MVP checks
 
 ## License
 

@@ -28,6 +28,27 @@ jobs:
       - name: build
         run: go build -trimpath ./cmd/agentsync
 
+  test-report:
+    name: test-report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: test (JSON report)
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -json ./... | tee test-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-test-report
+          path: test-results.json
+          if-no-files-found: warn
+
   race:
     name: race
     runs-on: ubuntu-latest

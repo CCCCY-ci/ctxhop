@@ -211,10 +211,10 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 状态：🟡。
 
-- 关键包已有单元测试、集成测试和部分 fuzz 测试；
+- 关键包已有单元测试、集成测试和部分 fuzz 测试，且稳定回归测试已纳入仓库；
 - 稳定回归测试：✅ 已取消测试代码的全局忽略并纳入仓库；本地真实 Agent 数据和敏感 fixture 仍按 .gitignore 忽略；
 - 还缺少真实 Agent、真实 Remote、跨系统和故障注入矩阵；
-- 还缺少统一的测试报告、失败样本归档和版本兼容记录。
+- CI 已上传 go test JSON 报告，docs/acceptance/README.md 已提供失败样本和版本兼容记录模板；真实失败样本仍需在外部矩阵中补齐。
 
 ## 5. 工程、发布和文档 TODO
 
@@ -247,7 +247,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 - README：✅ 已改为当前核心链路、MVP/真实验收状态，并补充五分钟运行指南、completion、测试和已知限制；
 - README 链接：✅ 已移除不存在的 docs/archive 引用，改为现有 docs/specs 和 TODO 入口；
-- docs/specs：🟡 本轮新增的 workspace context、doctor、completion、release 规格已标注实现状态，历史 Draft 规格仍需随真实验收逐项更新；
+- docs/specs：🟡 本轮新增的 workspace context、doctor、completion、release 规格已标注实现状态；docs/acceptance 已补齐外部验收记录模板，历史 Draft 规格仍需随真实验收逐项更新；
 - 五分钟指南：✅ README 已覆盖 init、push、list、resume、watch、pull check 和 doctor；
 - Adapter/Remote 示例：🟡 README 已列出接口扩展点和规格入口，仍需补一个独立的外部实现样例仓库或完整代码示例；
 - PRD §9.3 路径改写：✅ 当前 Adapter 规格和 README 已明确跨用户名、跨平台路径通过 canonical/localized 规则处理；
