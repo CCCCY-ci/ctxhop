@@ -19,6 +19,11 @@ var (
 	// shard objects.
 	ErrNoRemoteBranches = errors.New("syncer: remote session has no shard branches")
 
+	// ErrIncompleteRemoteSession reports a remote session whose authenticated
+	// metadata and visible shard branches do not describe the same complete
+	// stream. Callers must retry rather than restore the visible prefix.
+	ErrIncompleteRemoteSession = errors.New("syncer: remote session is incomplete")
+
 	// ErrDuplicateShard reports two list entries claiming the same device-local
 	// shard sequence.
 	ErrDuplicateShard = errors.New("syncer: duplicate remote shard")
@@ -132,6 +137,67 @@ func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionI
 		}
 		branches = append(branches, branch)
 	}
+	return branches, nil
+}
+
+// FetchCompleteBranches reads and validates the authenticated metadata and
+// every visible shard branch for a session.
+//
+// A List call can be eventually consistent. FetchBranches can prove that the
+// shards it sees are contiguous, but contiguity alone cannot prove that the
+// final shard is visible: a stale listing can end at a perfectly valid shard.
+// The per-device metadata tip supplies that missing upper bound. If the
+// metadata record count or digest does not match the assembled branch, the
+// session is incomplete and must not be restored.
+func FetchCompleteBranches(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]Branch, error) {
+	if ctx == nil {
+		return nil, errors.New("syncer: context is required")
+	}
+	if store == nil {
+		return nil, errors.New("syncer: remote store is required")
+	}
+	if identity == nil {
+		return nil, errors.New("syncer: identity key is required")
+	}
+
+	metadata, err := FetchMetadata(ctx, store, projectID, sessionID, identity)
+	if err != nil {
+		return nil, errors.Join(ErrIncompleteRemoteSession, fmt.Errorf("syncer: fetch session metadata: %w", err))
+	}
+	branches, err := FetchBranches(ctx, store, projectID, sessionID, identity)
+	if err != nil {
+		return nil, errors.Join(ErrIncompleteRemoteSession, err)
+	}
+
+	expected := make(map[string]Metadata, len(metadata))
+	for _, ref := range metadata {
+		if _, exists := expected[ref.DeviceID]; exists {
+			return nil, fmt.Errorf("%w: duplicate metadata for device %q", ErrIncompleteRemoteSession, ref.DeviceID)
+		}
+		expected[ref.DeviceID] = ref.Metadata
+	}
+
+	actual := make(map[string]Branch, len(branches))
+	for _, branch := range branches {
+		if _, exists := actual[branch.DeviceID]; exists {
+			return nil, fmt.Errorf("%w: duplicate branch for device %q", ErrIncompleteRemoteSession, branch.DeviceID)
+		}
+		metadata, exists := expected[branch.DeviceID]
+		if !exists {
+			return nil, fmt.Errorf("%w: device %q has shards but no authenticated metadata", ErrIncompleteRemoteSession, branch.DeviceID)
+		}
+		if uint64(len(branch.Records)) != metadata.RecordCount || branch.HeadDigest != metadata.HeadDigest {
+			return nil, fmt.Errorf("%w: device %q metadata expects %d records with digest %x, visible branch has %d with digest %x", ErrIncompleteRemoteSession, branch.DeviceID, metadata.RecordCount, metadata.HeadDigest, len(branch.Records), branch.HeadDigest)
+		}
+		actual[branch.DeviceID] = branch
+	}
+
+	for device := range expected {
+		if _, exists := actual[device]; !exists {
+			return nil, fmt.Errorf("%w: device %q has metadata but no visible shard branch", ErrIncompleteRemoteSession, device)
+		}
+	}
+
 	return branches, nil
 }
 

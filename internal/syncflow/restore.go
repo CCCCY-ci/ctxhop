@@ -78,7 +78,7 @@ func FetchRestorePlan(ctx context.Context, store remote.Remote, projectID, sessi
 		return RestorePlan{}, err
 	}
 
-	branches, err := syncer.FetchBranches(ctx, store, projectID, sessionID, identity)
+	branches, err := syncer.FetchCompleteBranches(ctx, store, projectID, sessionID, identity)
 	if err != nil {
 		return RestorePlan{}, fmt.Errorf("syncflow: fetch restore branches: %w", err)
 	}
