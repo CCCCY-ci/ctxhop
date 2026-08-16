@@ -21,6 +21,16 @@ const (
 	passphraseActionReset  = "reset"
 )
 
+const recoveryResetReminder = "Recovery Key is unchanged by reset; keep your existing Recovery Key safe for future recovery."
+
+func writeRecoveryResetReminder(prompt io.Writer) error {
+	if prompt == nil {
+		return errors.New("passphrase: prompt output is required")
+	}
+	_, err := fmt.Fprintln(prompt, recoveryResetReminder)
+	return err
+}
+
 func init() {
 	for i := range commands {
 		if commands[i].name == "passphrase" {
@@ -112,6 +122,9 @@ func rotatePassphrase(ctx context.Context, c *config.Config, configDir, action s
 			return fmt.Errorf("passphrase: change: %w", err)
 		}
 	case passphraseActionReset:
+		if err := writeRecoveryResetReminder(prompt); err != nil {
+			return err
+		}
 		recovery, err := readCommandSecretReader(secretInput, prompt, "passphrase", "Recovery key: ")
 		if err != nil {
 			return err

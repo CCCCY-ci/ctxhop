@@ -34,6 +34,12 @@ The default behavior refuses:
 * replacing an existing local session (`--replace-existing` is explicit);
 * selecting an ambiguous fork without `--version`.
 
+Workspace differences are written back into the restored session as a local-only
+metadata record by default. This record explains the accepted divergence to the
+Agent user, is not uploaded on a later push, and can be disabled with
+`--no-workspace-context`. The option only changes the local explanation; it does
+not weaken the `--allow-divergent` safety gate.
+
 Every write goes through the adapter's atomic session writer. A failed
 precondition never creates or replaces an Agent file.
 

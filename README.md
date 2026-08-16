@@ -158,7 +158,9 @@ var _ remote.Remote = (*MyRemote)(nil)
 
 The interface comments and the relevant specs are the acceptance checklist;
 an external implementation must not inspect plaintext records or invent a
-fallback for failed atomic operations.
+fallback for failed atomic operations. A complete contract example is available
+in
+[`examples/remote-memory`](examples/remote-memory/README.md).
 
 ## Known limitations
 

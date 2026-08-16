@@ -46,7 +46,7 @@
 | 远端对象布局 | ✅ | 项目、会话、设备、分片和元数据使用稳定的版本化布局 |
 | 隐私边界 | ✅ | 对象标识使用不透明 ID；明文会话内容和本地路径不直接写入 Remote 元数据 |
 | 设备身份和模式 | ✅ | 配置中保存设备 ID/名称，并支持 normal、push-only、disabled 三种设备模式 |
-| 配置更新安全性 | 🟡 | 已有原子保存等基础能力；多进程同时写配置时目前是后写者胜，仍需评估 |
+| 配置更新安全性 | ✅ | 原子保存保证不会产生半写文件；规格已明确多进程同时写采用后写者胜，不做锁，绑定丢失可察觉且可重做 |
 
 ### 2.2 Claude Adapter、路径和项目识别
 
@@ -78,7 +78,7 @@
 | fork 版本 | ✅ | 恢复链路已有 fork/分叉选择和版本处理逻辑 |
 | 工作区安全检查 | ✅ | 恢复前会检查指纹缺失、过期、差异和已有会话等情况 |
 | 恢复统计 | ✅ | stats 已区分本设备恢复与跨设备恢复，不参与同步决策 |
-| 远端格式兼容 | 🟡 | 当前格式和旧对象读取有实现，但正式版本升级/迁移策略仍需在发布前固定 |
+| 远端格式兼容 | ✅ | 已统一记录 version 1 基线、未来版本 fail-closed、迁移前置条件和回滚规则；真正发生格式升级时再实现对应 migration |
 
 ### 2.4 CLI 命令盘点
 
@@ -187,10 +187,10 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ### 4.1 安全与生命周期
 
-状态：⬜ / 🟡。
+状态：🟡（代码路径已完成，真实远端故障验收仍待补）。
 
 - 口令更换 CLI：✅ 已实现 `agentsync passphrase change`；保留数据密钥并替换已存在的远端 keyfile，仍需真实远端故障验收；
-- Recovery Key 重置 CLI：✅ 已实现 `agentsync passphrase reset`；使用 Recovery Key 替换远端 keyfile，仍需补充 Recovery Key 备份提示和真实故障验收；
+- Recovery Key 重置 CLI：✅ 已实现 `agentsync passphrase reset`；使用 Recovery Key 替换远端 keyfile，并在读取前明确提示原 Recovery Key 不会重新生成；仍需真实故障验收；
 - 远端删除会话：✅ 已实现 `agentsync remote delete-session`；默认从当前项目和 native session ID 推导不透明 remote ID，也支持 `--remote-id`；
 - 远端删除项目：✅ 已实现 `agentsync remote delete-project`；仅按当前稳定项目身份生成项目前缀，不接受任意远端前缀；
 - 清空整个 Remote：✅ 已实现 `agentsync remote delete-all`；显式确认会提示包含 keyfile 和设备记录，`--yes` 可用于无人交互；
@@ -243,13 +243,13 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 升级、回滚和各目标系统启动检查仍需真实发布前验收。
 ### 5.3 文档同步
 
-状态：🟡（README 和核心规格已同步，外部实现示例及真实验收记录仍需补齐）。
+状态：🟡（README 和核心规格已同步，真实验收记录仍需补齐）。
 
 - README：✅ 已改为当前核心链路、MVP/真实验收状态，并补充五分钟运行指南、completion、测试和已知限制；
 - README 链接：✅ 已移除不存在的 docs/archive 引用，改为现有 docs/specs 和 TODO 入口；
-- docs/specs：🟡 本轮新增的 workspace context、doctor、completion、release 规格已标注实现状态；docs/acceptance 已补齐外部验收记录模板，历史 Draft 规格仍需随真实验收逐项更新；
+- docs/specs：🟡 workspace context、doctor、completion、release、format-versioning 规格已同步实现状态；docs/acceptance 已补齐外部验收记录模板，历史 Draft 规格仍需随真实验收逐项更新；
 - 五分钟指南：✅ README 已覆盖 init、push、list、resume、watch、pull check 和 doctor；
-- Adapter/Remote 示例：🟡 README 已列出接口扩展点和规格入口，仍需补一个独立的外部实现样例仓库或完整代码示例；
+- Adapter/Remote 示例：✅ 已新增可编译的 examples/remote-memory 最小 Remote 实现、契约测试和接入检查清单；
 - PRD §9.3 路径改写：✅ 当前 Adapter 规格和 README 已明确跨用户名、跨平台路径通过 canonical/localized 规则处理；
 - 已知限制：✅ README 已集中列出访问撤销、口令/Recovery Key 丢失、元数据侧信道和 Agent 版本变化限制；
 

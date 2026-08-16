@@ -143,6 +143,12 @@ AGSY-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-CCCC
 
 PRD §10.2 要求首次设置时**强制引导保存，未完成不得进入正常使用流程**。文案不得让用户误以为存在找回途径——同时遗忘口令与 Recovery Key 时数据不可恢复，这是无服务端形态下唯一可行模型的代价。
 
+`agentsync passphrase reset` 使用现有 Recovery Key 重新包裹同一个
+`masterKey`，不会生成新的 Recovery Key，也不会改变 Recovery Key 包裹。
+命令在读取 Recovery Key 前明确提醒用户继续保管原 Recovery Key；它不会把
+Recovery Key 写入配置、远端或普通命令输出。若需要更换 Recovery Key，必须
+另行设计显式轮换流程，不能把口令重置误认为 Recovery Key 备份。
+
 ### 5.3 Recovery Key 不经 Argon2id
 
 它本身就是高熵随机值，不存在字典攻击面，用 HKDF 直接派生即可。对它做记忆硬化只会拖慢恢复流程，不增加任何安全性。

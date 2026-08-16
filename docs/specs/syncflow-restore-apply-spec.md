@@ -38,15 +38,21 @@ Agent data directory and does not provide a non-atomic fallback.
 
 ## 3. Explicit decisions
 
-`RestoreApplyOptions` contains three opt-in decisions:
+`RestoreApplyOptions` contains four opt-in decisions:
 
 * `AllowLimited` permits applying a plan produced for an unverified Agent
   version;
 * `AllowDivergent` permits writing despite a workspace `Divergent` verdict;
 * `ReplaceExisting` selects the adapter replacement operation instead of the
   create-only operation.
+* `InjectWorkspaceContext` appends a local-only, non-uploaded metadata record
+  when a divergent workspace is explicitly accepted; it does not change the
+  workspace safety decision.
 
-All three default to false. `ReplaceExisting` does not by itself authorise a
+The first three default to false. `InjectWorkspaceContext` defaults to false at
+the library boundary and is enabled explicitly by the `resume` CLI. The option
+does not by itself authorise a divergent workspace; `AllowDivergent` remains
+required. `ReplaceExisting` does not by itself authorise a
 divergent workspace; both decisions are independent.
 
 ## 4. Failure and durability
