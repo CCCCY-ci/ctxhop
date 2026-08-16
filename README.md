@@ -1,116 +1,183 @@
 # AgentSync
 
-Continue the same AI coding session on another machine.
+Continue an AI coding session on another machine without copying the
+Agent's credentials or synchronising its live data directory.
 
-> **Status: pre-alpha, not usable yet.** The repository currently contains the
-> design documents and the interface scaffold. The core feasibility test
-> (PoC-1) has not been completed, so nothing here syncs anything today. See
-> [Project status](#project-status).
+> **Status: pre-alpha.** The local core sync/restore path, encrypted `dir`/S3
+> storage, workspace safety checks, device modes, history maintenance and
+> CLI completion are implemented. Real multi-OS Agent/Remote acceptance and
+> production release packaging are still in progress.
 
----
+## What it does
 
-## The problem
+AgentSync runs locally. It discovers Claude Code sessions, canonicalises
+machine-specific paths, encrypts records before writing them to a storage
+backend you own, and restores one selected session into the Agent's native
+session directory.
 
-Claude Code and similar agents keep their sessions on the machine that created
-them. A session is hours of accumulated context: what you asked for, what the
-agent read, what it changed, what it decided and why.
+There is no AgentSync server, account or telemetry. The configured backend is
+the only network destination. Remote metadata and session bodies are encrypted
+locally; credentials and private keys stay on the device.
 
-Switch to another machine — desktop to laptop, work to home, Windows to macOS —
-and none of it comes with you. Same account, same Git repository, same project:
-the session still stays behind. So you re-explain everything, or you copy-paste
-transcripts, or you leave the first machine running so you can SSH back into it.
+Before restore, AgentSync compares the target workspace with the source
+workspace fingerprint. A divergent workspace requires explicit
+`--allow-divergent` consent. Accepted non-consistent restores include a
+local-only explanation that asks the Agent to re-read affected files; use
+`--no-workspace-context` to disable that explanation.
 
-AgentSync moves the session instead, so the agent on the second machine picks up
-where the first one stopped.
+## Five-minute local-directory setup
 
-## How it works
+Requirements: Go 1.26+, Claude Code, and a directory available to both
+devices. The directory backend is useful for a first local test or for a
+directory synchroniser you already trust.
 
-A single binary runs locally. It finds sessions your agent has written, encrypts
-them on your machine, and stores them in a backend **you own** — an S3-compatible
-bucket, or a directory you already sync with something else.
+```bash
+# Build the binary
+go build -trimpath -o agentsync ./cmd/agentsync
 
-There is no AgentSync server. No account to create. Nothing to trust us with.
+# Initialise once on each device; this prompts for the passphrase
+agentsync init --backend dir --path /path/to/agentsync-remote
 
+# From a project directory on the source device
+cd /path/to/project
+agentsync push
+agentsync list
+
+# On the target device, from the same project checkout
+agentsync list
+agentsync resume
+claude --resume
 ```
-agentsync resume      # pick a session, restore it onto this machine
-claude --resume       # it is now in your agent's own session list
+
+The second device gets its own device identity. A normal device may push
+sessions and perform explicit metadata/list/resume operations. `push-only`
+devices never restore remote sessions; `disabled` devices skip automatic
+synchronisation.
+
+Useful follow-up commands:
+
+```bash
+agentsync status
+agentsync pull --check       # metadata-only remote check
+agentsync watch              # watch and push changed sessions
+agentsync watch --once       # one watch cycle
+agentsync history <session>
+agentsync history prune --keep 3 <session>
+agentsync doctor
 ```
 
-The source machine does not need to be online.
+For an S3-compatible backend, initialise with `--backend s3`, `--endpoint`,
+`--bucket`, `--region` and `--prefix`; credentials can be supplied through
+`AGENTSYNC_ACCESS_KEY_ID`, `AGENTSYNC_SECRET_ACCESS_KEY` and the optional
+`AGENTSYNC_SESSION_TOKEN` variables.
 
-## Why not just sync `~/.claude` with Syncthing or iCloud Drive?
+## Shell completion
 
-Because that corrupts sessions rather than moving them:
+Completion scripts are generated without loading configuration or contacting
+the backend:
 
-- **Sessions are bound to absolute paths.** The directory holding them can
-  encode the project's full path, and the session records its working directory
-  internally. Copied as-is to a machine where the project lives somewhere else,
-  the agent does not recognise it. Restoring correctly is a rewrite, not a copy.
-- **Conflicts resolve the wrong way.** A session is an append-only log. File
-  sync tools apply last-write-wins (silently discarding one side's entire
-  conversation) or drop a `conflict-copy` file the agent cannot read. Two
-  machines continuing one session need to fork, not fight.
-- **Some agents keep live databases.** Copying SQLite files while the agent
-  holds them open produces corruption, not a backup.
-- **The granularity is wrong.** An agent's data directory also holds
-  credentials, tokens, caches and logs. Syncing all of it copies your API keys
-  to every machine you own.
+```bash
+source <(agentsync completion bash)
+source <(agentsync completion zsh)
+agentsync completion fish | source
+agentsync completion powershell | Invoke-Expression
+```
 
-AgentSync can *use* a synced folder as its transport — the storage layout
-guarantees two devices never write the same object — but it never delegates the
-semantics.
+See [`docs/specs/cli-completion-spec.md`](docs/specs/cli-completion-spec.md)
+for persistent installation examples.
 
-It also does something no file sync tool can: before restoring, it checks
-whether the files this session actually touched still match what the session
-believes. Otherwise the agent resumes with a confidently wrong picture of your
-code, which is worse than not resuming at all.
+## Why not synchronise `~/.claude` directly?
 
-## Privacy
+Agent data is not a safe generic file-sync target:
 
-- Everything is encrypted on your machine before it is written anywhere,
-  including metadata and session titles.
-- The key is derived from your passphrase. It is never uploaded and cannot be
-  recovered by anyone, including you, if you lose both it and your recovery key.
-- **This tool collects no data of any kind.** No telemetry, no crash reporting,
-  no opt-in analytics, no phone-home. It contacts nothing except the storage
-  backend you configured.
-- You choose which projects sync. Work machines can be set to push only, or to
-  exclude specific projects entirely.
+- sessions contain absolute project paths and need adapter-aware rewriting;
+- append-only conversations need fork/version semantics instead of
+  last-write-wins conflict resolution;
+- live databases can be corrupted while the Agent is running;
+- credentials, caches and unrelated local state should not be copied to
+  another machine.
+
+AgentSync uses a storage backend as transport, but owns the session and
+workspace semantics.
 
 ## Project status
 
-| Stage | State |
-|---|---|
-| Design (PRD) | Done — see [`docs/`](docs/) |
-| Interface scaffold | Done |
-| PoC-1: cross-device, cross-path restore | **Not started — everything depends on this** |
-| PoC-2: workspace consistency fingerprint | Not started |
-| MVP | Not started |
+| Area | State | Evidence |
+|---|---|---|
+| Encrypted local sync/restore path | Implemented locally | `internal/syncflow`, `internal/syncer`, CLI commands and tests |
+| Cross-device device identity and modes | Implemented locally | `device`, `device-mode-spec.md` and sync-flow guards |
+| Workspace fingerprint safety | Implemented locally | PoC-2, restore checks and local-only difference context |
+| MVP acceptance matrix | Reproducible locally | `go run ./poc/mvp` |
+| Real Windows/macOS/Linux Agent matrix | Pending | Requires installed Agents and separate devices |
+| Real S3/third-party Remote acceptance | Pending | Local `dir` Remote is covered; external credentials are required |
+| Production release channels | In progress | CI, cross-build and release scripts are being established |
 
-PoC-1 answers whether a Claude Code session can be moved between machines with
-different project paths and still resume natively. If the answer is no, this
-project does not work and will say so.
+## Building and testing
 
-## Building
-
-Requires Go 1.26 or newer. No cgo, no external dependencies.
+The project requires Go 1.26 or newer and has no cgo dependency.
 
 ```bash
-go build ./cmd/agentsync      # current platform
-./scripts/build.sh            # all supported platforms into dist/
+go test ./...
+go test -race ./...
+go vet ./...
+./scripts/build.sh
 ```
+
+Install a tagged source version with Go tooling when a release tag is available:
+
+```bash
+go install github.com/CCCCY-ci/agentsync/cmd/agentsync@v0.1.0
+agentsync version
+```
+
+On Windows PowerShell, use `./scripts/build.ps1`. Cross-built binaries are
+written to the ignored `dist/` directory. A tagged release workflow packages
+the six supported targets and publishes checksums.
+
+## Extension points
+
+- [`internal/adapter`](internal/adapter) defines Agent discovery, strict
+  session reading, path localisation and atomic writing.
+- [`internal/remote`](internal/remote) defines the storage contract; the
+  built-in implementations are local directory and S3-compatible storage.
+- [`docs/specs/`](docs/specs) records the versioned format and safety
+contracts. Start with the adapter and remote specs before adding an external
+implementation.
+
+### External implementation sketch
+
+An Agent adapter implements `adapter.Adapter` and must preserve strict reads,
+path-space rewriting and atomic writes. A Remote implementation satisfies the
+content-agnostic `remote.Remote` contract and should also implement
+`remote.Prober` when it can verify permissions during init.
+
+```go
+var _ adapter.Adapter = (*MyAdapter)(nil)
+var _ remote.Remote = (*MyRemote)(nil)
+```
+
+The interface comments and the relevant specs are the acceptance checklist;
+an external implementation must not inspect plaintext records or invent a
+fallback for failed atomic operations.
+
+## Known limitations
+
+- Losing both the passphrase and Recovery Key is not recoverable.
+- Removing a device currently deletes its remote data but cannot revoke
+  credentials already held by that device.
+- Object counts, sizes and timing remain metadata side channels.
+- Agent format/version changes may downgrade an adapter to limited support;
+  restore then requires explicit compatibility consent.
+- Real cross-OS, real Agent and third-party Remote acceptance is not claimed
+by the local test suite.
 
 ## Design documents
 
-- [`docs/AgentSync PRD v2.0（无服务端开源版）.md`](docs/) — current design
-- [`docs/archive/`](docs/archive/) — earlier revisions, kept for context
-
-Two interfaces define the extension points:
-
-- [`internal/adapter`](internal/adapter/adapter.go) — support a new agent
-- [`internal/remote`](internal/remote/remote.go) — support a new storage backend
-
-Contributions are welcome once PoC-1 has settled the core design.
+- [`docs/`](docs/)  PRD, TODO, PoC records and module specifications
+- [`docs/TODO.md`](docs/TODO.md)  current implementation and acceptance
+  ledger
+- [`docs/specs/mvp-acceptance-matrix.md`](docs/specs/mvp-acceptance-matrix.md)
+   reproducible local MVP checks
 
 ## License
 

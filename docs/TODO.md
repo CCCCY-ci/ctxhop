@@ -19,15 +19,15 @@
 | 范围 | 状态 | 结论 |
 |---|---|---|
 | 核心同步链路 | ✅ | 配置、密钥、Adapter、Remote、增量 push、元数据、恢复、队列和 CLI 主链路均已落地 |
-| PRD P0 功能 | 🟡 | 主要代码已实现，但正式 MVP 验收、真实跨平台矩阵、CI 和发布链路尚未闭环 |
-| PRD P1 功能 | 🟡 | project、device、stats、watch 等已实现；history、工作区上下文注入、shell completion 仍有缺口 |
+| PRD P0 功能 | 🟡 | 主要代码、MVP 合成验收、CI 和发布基础链路已实现；真实跨平台、Agent 和 Remote 验收仍待闭环 |
+| PRD P1 功能 | 🟡 | project、device、stats、watch、history、工作区上下文、doctor、shell completion 均已实现；真实跨设备验收仍待补 |
 | PoC-1 路径与恢复 | 🟡 | 同操作系统/同机模拟通过部分范围，真实 Windows ↔ POSIX 和复杂会话仍待验证 |
 | PoC-1b 新设备恢复 | ✅ | 同机模拟的第二设备流程已通过；真实跨系统和复杂会话仍属于补充验收 |
 | PoC-2 工作区指纹 | ✅ | 9 个场景和 454 文件基准已有 PoC 记录与实现 |
 | PoC-3 S3/dir 一致性 | 🟡 | 一致性保护和模拟场景已完成；真实 S3/第三方同步工具矩阵待验收 |
 | PoC-4 Codex Adapter | ⬜ | 尚未开始，属于 P2 |
-| MVP 端到端验收 | 🟡 | poc/mvp 合成矩阵已可重复运行；真实跨平台、S3 和 Agent 环境仍待验收 |
-| 发布工程 | ⬜ / 🟡 | 有跨平台构建脚本，缺 CI、发布包、安装渠道和升级验证 |
+| MVP 端到端验收 | 🟡 | poc/mvp 合成矩阵和 CI 已可重复运行；真实跨平台、S3 和 Agent 环境仍待验收 |
+| 发布工程 | 🟡 | CI 原生矩阵、交叉构建、GitHub Release、checksum 和包管理器 manifest 模板已实现；签名及外部渠道发布仍待配置 |
 
 结论：项目已经不是 README 所描述的“只有接口脚手架”，而是具备完整核心同步链路的 pre-alpha 实现。当前最重要的工作是把跨平台、Remote 一致性、失败恢复和发布保障固化为可重复验收。
 
@@ -89,7 +89,7 @@
 | agentsync list | ✅ | 合并本地会话和远端元数据，区分本地/外部设备来源 |
 | agentsync resume | ✅ | 选择版本并执行恢复；远端 body 读取前有设备模式和工作区检查 |
 | agentsync push | ✅ | 增量上传、元数据发布、队列重试 |
-| agentsync doctor | 🟡 | 已覆盖配置、backend、Agent、版本、兼容性、hook、项目检查；缺少统一的最近错误持久化报告 |
+| agentsync doctor | ✅ | 配置、backend、Agent、版本、兼容性、hook、项目检查和脱敏的最近错误历史均已覆盖 |
 | agentsync project | ✅ | 项目策略、识别和相关配置命令已实现 |
 | agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；真实 Remote 故障验收待补 |
 | agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
@@ -98,7 +98,7 @@
 | agentsync pull | ✅ | 当前作为显式的 metadata-only pull check 使用；不是自动下载全部远端会话 |
 | agentsync watch | ✅ | 轮询本地变化并 push，支持本地快照去重、失败重试、once/json；当前是 push-only |
 | JSON 输出 | ✅ | 已处理提示和 JSON 输出隔离，避免交互提示污染机器可读输出 |
-| shell completion | ⬜ | PRD 要求的补全尚未实现 |
+| shell completion | ✅ | 已提供 Bash、Zsh、Fish、PowerShell（含 pwsh 别名）脚本生成和静态命令/参数候选 |
 
 ### 2.5 设备标识与拉取规则
 
@@ -111,7 +111,7 @@
 5. push-only 和 disabled 设备在 body-read 流程前会被拒绝；因此可以把某设备配置成“只上传、不接收远端会话”。
 6. watch 当前只负责本地变化检测和 push，不负责后台自动拉取远端会话。
 
-因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 或设备 A 需要查看外部变化时，再通过显式 metadata-only check 和 resume 进入读取流程。剩余工作是用真实的 A/B/C 设备场景补齐验收和用户文档，明确 normal、push-only、disabled 的默认行为。
+因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 或设备 A 需要查看外部变化时，再通过显式 metadata-only check 和 resume 进入读取流程。剩余工作仅是用真实 A/B/C 设备场景补齐验收记录。
 
 ## 3. 仍需推进的 P0 / MVP 项
 
@@ -199,20 +199,20 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ### 4.2 P1 用户体验
 
-状态：⬜ / 🟡。
+状态：✅。
 
-- 工作区差异上下文注入：PRD §9.5 要求用户继续恢复时把差异说明注入会话上下文；当前有检查和展示，但尚未完成上下文注入；
-- shell completion：bash、zsh、fish、PowerShell 补全尚未提供；
-- doctor 最近错误：当前 doctor 能检查当前状态，但没有统一的持久化错误历史和可查询报告；
-- 失败场景的文档：需要把“只读元数据检查”和“读取远端会话 body”的边界讲清楚；
-- 设备模式的默认推荐：需要明确普通设备、只上传设备和禁用设备分别适用的场景。
+- 工作区差异上下文注入：✅ 已实现；resume 默认把差异说明作为本地 isMeta 记录追加到恢复会话，后续 push 会过滤该记录，--no-workspace-context 可关闭；
+- shell completion：✅ 已实现 Bash、Zsh、Fish、PowerShell 补全，入口为 agentsync completion <shell>；
+- doctor 最近错误：✅ 已实现最多 20 条、仅含时间/命令/错误类别的脱敏持久化历史，并接入 doctor 文本/JSON 报告；
+- 失败场景的文档：✅ README 和 docs/specs 已说明 metadata-only check、body read、工作区差异、设备模式和远端清理边界；
+- 设备模式的默认推荐：✅ README 已说明 normal、push-only、disabled 的适用行为；
 
 ### 4.3 测试与可观测性闭环
 
 状态：🟡。
 
 - 关键包已有单元测试、集成测试和部分 fuzz 测试；
-- 测试代码和数据按当前 .gitignore 规则未纳入提交，需要明确哪些测试必须迁移为仓库内的稳定回归用例；
+- 稳定回归测试：✅ 已取消测试代码的全局忽略并纳入仓库；本地真实 Agent 数据和敏感 fixture 仍按 .gitignore 忽略；
 - 还缺少真实 Agent、真实 Remote、跨系统和故障注入矩阵；
 - 还缺少统一的测试报告、失败样本归档和版本兼容记录。
 
@@ -220,40 +220,38 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ### 5.1 跨平台和 CI
 
-状态：🟡。
+状态：🟡（CI/构建基础已完成，真实环境仍待验收）。
 
-- scripts/build.sh 已支持 windows/amd64、windows/arm64、darwin/amd64、darwin/arm64、linux/amd64、linux/arm64。
-- 仍需：
-  - CI 中自动执行 go test、race、vet、build；
-  - Windows、macOS、Linux/WSL 原生矩阵；
-  - 真实 Agent 集成测试和本地目录 Remote 测试；
-  - 交叉编译产物启动检查；
-  - 在 CI 中验证无 cgo 和可复现构建约束。
-
+- 目标矩阵：windows/amd64、windows/arm64、darwin/amd64、darwin/arm64、linux/amd64、linux/arm64。
+- 已完成：scripts/build.sh 和 scripts/build.ps1 均支持六个目标，注入版本/commit/UTC 时间并使用 CGO_ENABLED=0。
+- 已完成：GitHub CI 在 Windows、macOS、Linux 原生矩阵执行 test、vet、build；Ubuntu 另执行 race。
+- 已完成：CI 运行交叉构建并上传六个产物；交叉编译和发布脚本均使用 trimpath。
+- 仍需：真实 Agent 集成测试、本地目录 Remote 之外的真实 S3/第三方同步工具矩阵。
+- 仍需：发布前对交叉编译产物做各目标系统的启动检查和可复现构建抽样验证。
 ### 5.2 发布和安装
 
-状态：⬜ / 🟡。
+状态：🟡（发布自动化已完成，外部渠道和签名仍待配置）。
 
-PRD §18 要求目前尚未形成完整交付链：
-
-- GitHub Releases 自动发布 Windows/macOS 预编译包；
-- Homebrew formula；
-- Scoop manifest；
-- go install 的正式文档和版本验证；
-- checksum、版本签名或发布校验流程；
-- 发布前的升级、回滚和配置兼容性测试。
-
+已完成的交付链路：
+- GitHub Releases workflow：v* tag 自动执行 test/vet、构建六个目标并发布 release 资产；
+- checksum：release.sh 为每个二进制生成 SHA-256 checksums.txt；
+- Homebrew formula / Scoop manifest：已提供带版本和 hash 渲染的模板，并作为 release 资产输出；
+- go install、版本检查、升级/回滚和配置兼容性说明已写入 README 与 release-engineering spec；
+仍需明确的外部条件：
+- Homebrew tap、Scoop bucket 的实际维护者仓库尚未指定，workflow 不会擅自修改第三方仓库；
+- 发布签名/证明材料（例如 cosign 或平台签名）尚未配置密钥和信任根；
+- 升级、回滚和各目标系统启动检查仍需真实发布前验收。
 ### 5.3 文档同步
 
-状态：⬜。
+状态：🟡（README 和核心规格已同步，外部实现示例及真实验收记录仍需补齐）。
 
-- README 仍写着“PoC-1 未开始、没有任何同步能力”，与当前代码和 PoC 记录不一致，需要改为“核心链路已实现，MVP 跨平台验收进行中”；
-- README 引用的 docs/archive 目录当前不存在，需要修正链接或补齐目录；
-- 多数 docs/specs 文件头仍为 Draft，需要在代码和验收完成后逐项更新状态；
-- 需要补一份五分钟可运行指南，覆盖 init、push、list、resume、watch；
-- 需要补充 Adapter/Remote 接口的外部实现示例；
-- 需要把 PRD §9.3 的跨用户名、跨平台路径改写结论与当前 Adapter 规格保持一致；
-- 需要把已知限制集中列出：访问撤销限制、口令和 Recovery Key 丢失、元数据侧信道、Agent 版本变化。
+- README：✅ 已改为当前核心链路、MVP/真实验收状态，并补充五分钟运行指南、completion、测试和已知限制；
+- README 链接：✅ 已移除不存在的 docs/archive 引用，改为现有 docs/specs 和 TODO 入口；
+- docs/specs：🟡 本轮新增的 workspace context、doctor、completion、release 规格已标注实现状态，历史 Draft 规格仍需随真实验收逐项更新；
+- 五分钟指南：✅ README 已覆盖 init、push、list、resume、watch、pull check 和 doctor；
+- Adapter/Remote 示例：🟡 README 已列出接口扩展点和规格入口，仍需补一个独立的外部实现样例仓库或完整代码示例；
+- PRD §9.3 路径改写：✅ 当前 Adapter 规格和 README 已明确跨用户名、跨平台路径通过 canonical/localized 规则处理；
+- 已知限制：✅ README 已集中列出访问撤销、口令/Recovery Key 丢失、元数据侧信道和 Agent 版本变化限制；
 
 ## 6. 适配器和存储层的持续维护项
 
@@ -298,9 +296,9 @@ PRD §18 要求目前尚未形成完整交付链：
 2. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 3. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。
 4. 对 passphrase change/reset、远端删除和 history prune 做真实远端故障验收。
-5. 实现工作区差异上下文注入，并完善 doctor 最近错误。
-6. 建立 CI、发布包、安装方式和 README 五分钟指南。
-7. 最后推进 shell completion、P2 Remote 和更多 Agent。
+5. 完成真实 Agent、Remote、跨系统和故障注入验收，并归档结果和版本兼容记录。
+6. 完成发布签名、外部 Homebrew/Scoop 渠道接入和目标系统启动/升级回滚验收。
+7. 在 P0/P1 外部验收闭环后，再推进 P2 Remote、Codex Adapter 和更多 Agent。
 
 ## 9. 本轮盘点后的判断
 
