@@ -141,6 +141,40 @@ func TestPassphraseResetKeepsRecoveryKeyAndDataKey(t *testing.T) {
 	recovered.Close()
 }
 
+func TestPassphraseChangeValidationFailureLeavesRemoteEnvelopeUntouched(t *testing.T) {
+	const oldPassphrase = "alpha-secret-6f2d"
+	const newPassphrase = "beta-secret-91ac"
+
+	configDir, remoteRoot, _, _ := preparePassphraseCommand(t, oldPassphrase)
+	t.Setenv("AGENTSYNC_CONFIG_DIR", configDir)
+
+	var output bytes.Buffer
+	wrongCurrent := strings.NewReader("wrong-secret\n" + newPassphrase + "\n" + newPassphrase + "\n")
+	err := runPassphraseWithIO([]string{"change"}, wrongCurrent, &output)
+	if !errors.Is(err, crypto.ErrWrongPassphrase) {
+		t.Fatalf("wrong current passphrase error = %v, want ErrWrongPassphrase", err)
+	}
+
+	mismatched := strings.NewReader(oldPassphrase + "\n" + newPassphrase + "\nother-secret\n")
+	if err := runPassphraseWithIO([]string{"change"}, mismatched, &output); err == nil || !strings.Contains(err.Error(), "new passphrases do not match") {
+		t.Fatalf("mismatched new passphrase error = %v", err)
+	}
+
+	store, err := remote.NewDir(remoteRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := syncer.FetchKeyfile(context.Background(), store)
+	if err != nil {
+		t.Fatalf("fetch keyfile after rejected changes: %v", err)
+	}
+	if _, err := unchanged.UnlockWithPassphrase(oldPassphrase); err != nil {
+		t.Fatalf("old passphrase stopped working after rejected changes: %v", err)
+	}
+	if _, err := unchanged.UnlockWithPassphrase(newPassphrase); !errors.Is(err, crypto.ErrWrongPassphrase) {
+		t.Fatalf("new passphrase error after rejected changes = %v, want ErrWrongPassphrase", err)
+	}
+}
 func preparePassphraseCommand(t *testing.T, passphrase string) (string, string, *crypto.Keyfile, string) {
 	t.Helper()
 	configDir := t.TempDir()
