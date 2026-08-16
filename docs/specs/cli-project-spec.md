@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Proposed; manual identity resolution in push/read paths is still pending |
 | Date | 2026-08-15 |
 | Depends on | `config-layer-spec.md`, `internal/project`, `device-mode-spec.md` |
 
@@ -35,6 +35,18 @@ The same identity/root pair is idempotent. Multiple roots may be bound to one
 identity so a user can keep the same project on several local paths. One local
 root may not be bound to two different identities; the command stops without
 changing configuration in that case.
+
+For a directory without a usable Git remote, the user may bind a stable manual
+identity, for example
+`agentsync project bind --name client-project --path /path/to/project`.
+The same manual identity must be configured on every device that represents
+that logical project. Binding is local configuration only; it does not contact
+the backend or start a push.
+
+The current project-consuming commands still need a shared resolver that
+consults these bindings when automatic Git identification is unavailable. Until
+that resolver is implemented, a manual binding is visible to project policy
+commands but does not make push/watch/list/pull/resume work for a no-Git root.
 
 ## 3. Unbinding and modes
 
@@ -74,7 +86,9 @@ target, conflicting root, or failed save leaves the prior configuration
 unchanged.
 
 The command does not read secrets, keyfiles, remote metadata, or session
-shards. It cannot trigger a push, pull, restore, or observed-tip update.
+shards. It cannot trigger a push, pull, restore, or observed-tip update. Domain
+membership and project synchronization behavior are specified separately in
+sync-domain-project-scope-spec.md.
 
 ## 6. Test plan
 
