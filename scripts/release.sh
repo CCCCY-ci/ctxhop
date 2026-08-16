@@ -23,12 +23,30 @@ for binary in dist/agentsync_*; do
   cp "$binary" "$RELEASE_DIR/agentsync_${VERSION}_${target}"
 done
 
+expected_assets=(
+  "agentsync_${VERSION}_windows_amd64.exe"
+  "agentsync_${VERSION}_windows_arm64.exe"
+  "agentsync_${VERSION}_darwin_amd64"
+  "agentsync_${VERSION}_darwin_arm64"
+  "agentsync_${VERSION}_linux_amd64"
+  "agentsync_${VERSION}_linux_arm64"
+)
+for expected in "${expected_assets[@]}"; do
+  if [[ ! -f "$RELEASE_DIR/$expected" ]]; then
+    echo "release: missing expected asset $expected" >&2
+    exit 1
+  fi
+done
 if ! compgen -G "$RELEASE_DIR/agentsync_*" > /dev/null; then
   echo "release: no binaries were produced" >&2
   exit 1
 fi
 
 (cd "$RELEASE_DIR" && sha256sum agentsync_* > checksums.txt)
+if ! (cd "$RELEASE_DIR" && sha256sum --check checksums.txt > /dev/null); then
+  echo "release: checksum self-check failed" >&2
+  exit 1
+fi
 VERSION="$VERSION" ./scripts/render-packages.sh
 echo "release assets written to $RELEASE_DIR"
 cat "$RELEASE_DIR/checksums.txt"
