@@ -1,6 +1,6 @@
 # AgentSync 开发 TODO 与完成情况
 
-> 盘点基线：2026-08-15；当前 HEAD：26844ff feat(cli): add polling watch mode。
+> 盘点基线：2026-08-16；当前 HEAD：57466a0 docs(core): close remaining local TODO items。
 > 依据：PRD v2.0、docs/specs 下的模块规格、poc 记录、当前源代码和测试。
 > 本文只记录当前仓库已经能证明的状态；“代码存在”不等于“跨平台验收已经完成”。
 
