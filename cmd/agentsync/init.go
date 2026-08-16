@@ -31,6 +31,8 @@ type initOptions struct {
 	deviceMode                string
 	noHook                    bool
 	expectedDomainFingerprint string
+	invitePath                string
+	invite                    *deviceInvite
 }
 
 type initPrompter struct {
@@ -54,6 +56,15 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	options, err := parseInitOptions(args)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(options.invitePath) != "" {
+		invite, err := loadDeviceInvite(options.invitePath)
+		if err != nil {
+			return err
+		}
+		if err := options.applyDeviceInvite(invite); err != nil {
+			return err
+		}
 	}
 	if input == nil {
 		return errors.New("init: input is required")
@@ -123,7 +134,7 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return fmt.Errorf("init: backend probe failed: %s", safeBackendProbeError(err))
 	}
 
-	public, identifierKey, created, err := prepareKeyMaterial(ctx, store, passphrase, prompter, namespace, options.expectedDomainFingerprint)
+	public, identifierKey, created, err := prepareKeyMaterial(ctx, store, passphrase, prompter, namespace, options.expectedDomainFingerprint, options.invite != nil)
 	if err != nil {
 		return err
 	}
@@ -136,6 +147,12 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	}
 
 	c.DomainFingerprint = domainFingerprint
+	if options.invite != nil {
+		if err := verifyDeviceInvite(options.invite, c, identifierKey); err != nil {
+			zeroInitBytes(identifierKey)
+			return fmt.Errorf("init: verify device invite: %w", err)
+		}
+	}
 
 	secrets := &config.Secrets{
 		Credentials:   credentials,
@@ -167,6 +184,11 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	if _, err := fmt.Fprintln(output, "sync domain fingerprint:", domainFingerprint); err != nil {
 		return err
 	}
+	if options.invite != nil {
+		if _, err := fmt.Fprintln(output, "sync domain joined via invitation from:", safeListText(options.invite.Issuer.Name)); err != nil {
+			return err
+		}
+	}
 	_, err = fmt.Fprintln(output, "agentsync initialization complete")
 	return err
 }
@@ -185,6 +207,7 @@ func parseInitOptions(args []string) (initOptions, error) {
 	flags.StringVar(&options.deviceMode, "device-mode", "", "device mode: normal, push-only, or disabled")
 	flags.BoolVar(&options.noHook, "no-hook", false, "do not offer Agent hook installation")
 	flags.StringVar(&options.expectedDomainFingerprint, "expect-domain-fingerprint", "", "require this sync domain fingerprint")
+	flags.StringVar(&options.invitePath, "invite", "", "join using an AgentSync device invitation file")
 	if err := flags.Parse(args); err != nil {
 		return initOptions{}, fmt.Errorf("init: %w", err)
 	}
@@ -332,11 +355,14 @@ func initCredentials(configDir string, p *initPrompter) (config.Credentials, err
 	return config.Credentials{AccessKeyID: access, SecretAccessKey: secret, SessionToken: token}, nil
 }
 
-func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase string, p *initPrompter, namespace, expectedFingerprint string) ([]byte, []byte, bool, error) {
+func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase string, p *initPrompter, namespace, expectedFingerprint string, requireExisting bool) ([]byte, []byte, bool, error) {
 	keyfile, err := syncer.FetchKeyfile(ctx, store)
 	created := false
 	var recovery string
 	if errors.Is(err, syncer.ErrNoRemoteKeyfile) {
+		if requireExisting {
+			return nil, nil, false, errors.New("init: device invite requires an existing remote keyfile")
+		}
 		keyfile, recovery, err = crypto.NewKeyfile(passphrase)
 		created = true
 	} else if err != nil {

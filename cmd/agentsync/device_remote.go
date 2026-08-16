@@ -57,6 +57,12 @@ func runDeviceWithStreams(args []string, input io.Reader, output, prompt io.Writ
 	}
 
 	switch options.action {
+	case deviceActionInvite:
+		invite, err := createDeviceInvite(c, configDir)
+		if err != nil {
+			return err
+		}
+		return writeDeviceInvite(output, options.output, invite)
 	case deviceActionStatus:
 		report, err := collectDeviceStatus(c)
 		if err != nil {

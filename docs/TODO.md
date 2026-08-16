@@ -19,7 +19,7 @@
 | 范围 | 状态 | 结论 |
 |---|---|---|
 | 核心同步链路 | ✅ | 配置、密钥、Adapter、Remote、增量 push、元数据、恢复、队列和 CLI 主链路均已落地 |
-| 同步域与设备入组 | 🟡 | 当前同步域由 Remote namespace + keyfile 隐式确定；domain fingerprint confirms the namespace; persisted binding and keyfile validation fail closed on drift; capability-based invite/join and access revocation remain unfinished |
+| 同步域与设备入组 | 🟡 | 同步域由 Remote namespace + keyfile 确定；domain fingerprint、持久化绑定和 signed device invite/init --invite 配对流程已实现；强访问撤销和真实跨设备验收仍待补 |
 | 多项目范围与项目策略 | ✅ | push/watch 当前只处理当前项目，normal/push-only/excluded 和无 Git manual identity 主同步路径均已接入 |
 | PRD P0 功能 | 🟡 | 主要代码、MVP 合成验收、CI 和发布基础链路已实现；真实跨平台、Agent 和 Remote 验收仍待闭环 |
 | PRD P1 功能 | 🟡 | project、device、stats、watch、history、工作区上下文、doctor、shell completion 和 manual identity 均有基础实现；同步域入组与真实跨设备验收仍待补 |
@@ -114,16 +114,16 @@
 5. push-only 和 disabled 设备在 body-read 流程前会被拒绝；因此可以把某设备配置成“只上传、不接收远端会话”。
 6. watch 当前只负责本地变化检测和 push，不负责后台自动拉取远端会话。
 
-因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 或设备 A 需要查看外部变化时，再通过显式 metadata-only check 和 resume 进入读取流程。剩余工作仅是用真实 A/B/C 设备场景补齐验收记录。
+因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 先通过 device invite/init --invite 明确加入同一同步域，再通过 metadata-only check 和 resume 进入读取流程。剩余工作是用真实 A/B/C 设备场景补齐验收，并单独设计强访问撤销。
 
 ### 2.6 同步域、项目范围和无 Git 项目
 
 - 一个同步域可以包含多个项目；project ID 从同步域密钥和项目稳定身份派生，项目之间不会共享 session 历史；
 - 当前 push/watch/list/pull/resume/history 都围绕当前项目运行，不会默认扫描整台机器的所有 Claude Code 项目；
 - project mode 的 normal、push-only、excluded 是项目级策略，与设备级 normal、push-only、disabled 分开；
-- 当前同步域是 Remote namespace + keyfile 的隐式组合；设备 ID 只区分组内 branch，不负责入组授权；domain fingerprint confirms the namespace; persisted binding and keyfile validation fail closed on drift; capability-based invite/join and access revocation remain unfinished
-- domain fingerprint: implemented in init/status/doctor; new configurations persist the accepted value and all Remote-reading commands validate the namespace/keyfile binding; capability-based invite/join and access revocation remain unfinished
-- 需要后续设计一次性 invite/join 和真正的设备访问撤销；当前 device remove 只删除远端数据，不能撤销设备已有的密钥材料；
+- 当前同步域是 Remote namespace + keyfile 的隐式组合；设备 ID 只区分组内 branch，不负责强授权；domain fingerprint、持久化 binding 和 signed device invite/init --invite 已用于确认第二台设备打开的是同一同步域；强访问撤销仍待设计；
+- domain fingerprint：已接入 init/status/doctor；新配置持久化 accepted value，所有 Remote-reading 命令校验 namespace/keyfile binding；device invite/init --invite 已补齐显式配对流程；
+- 设备邀请包与 init --invite 已实现，用于显式确认第二台设备打开的是同一 Remote/keyfile；当前 device remove 只删除远端数据，不能撤销设备已有的密钥材料；
 - 无 Git 项目应使用跨设备稳定的 manual identity，例如 manual:client-project，不能使用绝对路径、用户名或主机名；共享 resolver 已接入主同步路径；
 - 当前 project bind --name 的 binding 已由主同步命令统一读取；无 binding 时仍按 fail-closed 规则拒绝自动同步。
 
@@ -221,7 +221,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 失败场景的文档：✅ README 和 docs/specs 已说明 metadata-only check、body read、工作区差异、设备模式和远端清理边界；
 - 设备模式的默认推荐：✅ README 已说明 normal、push-only、disabled 的适用行为；
 
-- 同步域指纹与入组确认：🟡 domain fingerprint confirms the namespace; persisted binding and keyfile validation fail closed on drift; capability-based invite/join and access revocation remain unfinished
+- 同步域指纹与入组确认：✅ domain fingerprint、持久化 namespace binding、signed device invite 和 init --invite 已实现；强访问撤销与真实跨设备验收仍待补；
 - 多项目选择：✅ 当前 push/watch 只处理当前项目，project mode 支持 normal、push-only、excluded；全局 --all 未规划为默认行为；
 - 无 Git 项目：✅ manual identity 设计和共享 current-project resolver 已接入主同步路径，并有边界测试；
 
@@ -313,7 +313,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ## 8. 建议推进顺序
 
-1. 完成显式 invite/join、设备撤销设计和真实同步域成员验收。
+1. 完成强访问撤销设计、密钥轮换和真实同步域成员验收。
 2. 完成 PoC-3 真实 S3/dir 和第三方目录同步工具验收，锁定最终一致性和部分同步行为。
 3. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 4. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。

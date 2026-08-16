@@ -11,7 +11,7 @@ import (
 
 var completionSubcommands = map[string][]string{
 	"completion": {"bash", "zsh", "fish", "powershell", "pwsh"},
-	"device":     {"status", "mode", "list", "rename", "remove"},
+	"device":     {"status", "mode", "list", "rename", "remove", "invite"},
 	"history":    {"cleanup", "prune"},
 	"passphrase": {"change", "reset"},
 	"project":    {"bind", "unbind", "mode", "list"},
@@ -24,7 +24,7 @@ var completionValues = map[string][]string{
 }
 
 var completionOptions = map[string][]string{
-	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint"},
+	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint", "--invite"},
 	"status":                {"--json", "--remote"},
 	"list":                  {"--json"},
 	"resume":                {"--json", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version"},
@@ -38,6 +38,7 @@ var completionOptions = map[string][]string{
 	"device status":         {"--json"},
 	"device list":           {"--json"},
 	"device remove":         {"--yes"},
+	"device invite":         {"--output"},
 	"project bind":          {"--path", "--identity", "--name"},
 	"project unbind":        {"--path", "--identity"},
 	"project mode":          {"--path", "--identity"},

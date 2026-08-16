@@ -30,6 +30,11 @@ backend. It is the only command that creates the first remote keyfile.
    existing namespace, `--expect-domain-fingerprint` may require an exact
    fingerprint match; a mismatch stops before local configuration is saved. The accepted fingerprint is persisted in `config.json` as a non-secret binding for later commands.
 
+9. `init --invite PATH` imports the Remote settings from a signed device
+   invitation. It requires an existing remote keyfile and verifies the namespace,
+   domain fingerprint, and proof before saving local secrets or configuration.
+   The invitation contains no credentials, passphrase, or session content.
+
 ## Failure boundary
 
 No remote keyfile is published when backend probing, passphrase confirmation,

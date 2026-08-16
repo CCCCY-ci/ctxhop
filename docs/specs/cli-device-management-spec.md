@@ -21,6 +21,7 @@ Remote device management adds:
 agentsync device list [--json]
 agentsync device rename NAME
 agentsync device remove DEVICE_ID [--yes]
+agentsync device invite [--output PATH]
 ```
 
 `device list` asks for the storage passphrase because device records are
@@ -28,6 +29,13 @@ encrypted with the same storage identity as session objects. `device rename`
 and `device remove` use the configured backend credentials and do not need to
 unlock session content. Removing a device always requires an interactive
 confirmation unless `--yes` is supplied.
+
+`device invite` reads the local configuration and identifier key without
+contacting the Remote. It writes a portable JSON package atomically when
+`--output PATH` is supplied, or emits the package as JSON on stdout. The package
+contains the Remote settings, non-secret domain fingerprint, issuer device
+identity, nonce, and proof; it contains no credentials, passphrase, session
+content, or private key material.
 
 ## 2. Remote device records
 
@@ -74,6 +82,10 @@ local synchronization mode is push-only or disabled.
 Removal is not access revocation: the target device still retains its local
 credentials and can publish again if it can reach the backend. To revoke
 access, rotate the backend credentials or storage key material separately.
+
+An invitation confirms pairing and namespace consistency. It does not provide
+one-time enrollment or strong per-device revocation; those require a separate
+credential or domain-key lifecycle design.
 
 ## 4. Output and failure behavior
 

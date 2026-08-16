@@ -26,6 +26,7 @@ type deviceOptions struct {
 	name   string
 	target string
 	yes    bool
+	output string
 }
 
 type deviceStatusReport struct {
@@ -51,10 +52,21 @@ func runDevice(args []string) error {
 
 func parseDeviceOptions(args []string) (deviceOptions, error) {
 	if len(args) == 0 {
-		return deviceOptions{}, errors.New("device: expected 'status', 'mode', 'list', 'rename', or 'remove'")
+		return deviceOptions{}, errors.New("device: expected 'status', 'mode', 'list', 'rename', 'remove', or 'invite'")
 	}
 
 	switch args[0] {
+	case deviceActionInvite:
+		flags := flag.NewFlagSet("device invite", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		output := flags.String("output", "", "write the invitation JSON to a file")
+		if err := flags.Parse(args[1:]); err != nil {
+			return deviceOptions{}, fmt.Errorf("device invite: %w", err)
+		}
+		if flags.NArg() != 0 {
+			return deviceOptions{}, fmt.Errorf("device invite: unexpected argument %q", flags.Arg(0))
+		}
+		return deviceOptions{action: deviceActionInvite, output: *output}, nil
 	case deviceActionStatus:
 		flags := flag.NewFlagSet("device status", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
@@ -103,7 +115,7 @@ func parseDeviceOptions(args []string) (deviceOptions, error) {
 		}
 		return deviceOptions{action: deviceActionRemove, target: flags.Arg(0), yes: *yes}, nil
 	default:
-		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', or 'remove'", args[0])
+		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', 'remove', or 'invite'", args[0])
 	}
 }
 

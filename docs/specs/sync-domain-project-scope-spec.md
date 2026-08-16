@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed; domain fingerprinting, persisted namespace binding, keyfile validation and manual-identity consumption are implemented, while capability-based enrollment and revocation remain unfinished |
+| Status | Partially implemented; domain fingerprinting, persisted namespace binding, signed device invitations and init --invite pairing are implemented, while strong per-device authorization and revocation remain unfinished |
 | Date | 2026-08-16 |
 | Depends on | cli-init-spec.md, cli-project-spec.md, cli-push-spec.md, cli-watch-spec.md, device-mode-spec.md, crypto-spec.md |
 
@@ -39,11 +39,12 @@ namespace. Two devices using the same namespace, keyfile, and passphrase are
 currently treated as members of the same domain.
 
 The keyfile public-identity pin prevents a local configuration from silently
-accepting a different encryption identity. It does not implement an invitation
-flow or per-device authorization. A person who obtains the Remote credentials
-and the passphrase or Recovery Key can join the domain. Device removal currently
-deletes that device's Remote objects but does not revoke credentials already held
-by the device.
+accepting a different encryption identity. It does not implement per-device
+authorization. The explicit invitation flow below provides pairing and tamper
+detection, but a person who already holds the Remote credentials and domain
+passphrase can still access the domain. Device removal currently deletes that
+device's Remote objects but does not revoke credentials already held by the
+device.
 
 ### 2.2 Implemented domain fingerprint
 
@@ -69,23 +70,32 @@ The implemented flow is:
 
 A fingerprint confirms which configured namespace a device is opening and
 prevents accidental namespace drift; it is not, by itself, an access-control
-mechanism. The expected-fingerprint init flag is the current explicit join
-confirmation; it does not grant a one-time capability.
+mechanism. The expected-fingerprint init flag is an explicit join confirmation;
+it does not grant a one-time capability.
 
 ### 2.3 Enrollment and revocation
 
-A production-grade domain needs an explicit invite/join flow. A future invite
-should carry, at minimum:
+The explicit pairing flow is implemented as a portable signed invitation:
 
-- the Remote namespace;
-- the expected domain fingerprint;
-- a one-time or expiring enrollment capability;
-- the joining device's public identity or a way to register it.
+`agentsync device invite --output agentsync-invite.json` creates the package on
+device A. `agentsync init --invite agentsync-invite.json` imports its Remote
+settings on device B, requires an existing keyfile, and verifies the domain
+fingerprint and proof before saving local configuration.
 
-The design must also define what happens after device removal. Deleting a branch
-is not enough when the removed device retains material that can read future
-objects. Per-device key wrapping, a domain-key rotation, or an equivalent
-revocation mechanism is required before claiming strong membership control.
+The invitation package carries:
+
+- the Remote namespace and the non-secret domain fingerprint;
+- the issuer device ID and display name;
+- a random nonce and an HMAC proof over the canonical package payload, keyed by
+  the domain identifier key;
+- no credentials, passphrase, session content, or private key material.
+
+The invitation is a pairing and namespace-consistency check, not a strong
+membership or revocation mechanism. The design must also define what happens
+after device removal. Deleting a branch is not enough when the removed device
+retains material that can read future objects. Per-device key wrapping, a
+domain-key rotation, or an equivalent revocation mechanism is required before
+claiming strong membership control.
 
 ## 3. Multiple projects in one domain
 
@@ -158,6 +168,8 @@ same root is rejected rather than guessed.
 | Scenario | Expected result |
 |---|---|
 | Same Remote namespace/keyfile, two installations | Same domain, different device branches |
+| Device A creates an invitation and device B uses `init --invite` | Device B gets a different device ID, the same domain fingerprint and the same pinned keyfile identity |
+| Invitation payload or proof is tampered with | Join fails before local secrets/configuration are saved |
 | Same bucket, different prefix | Separate domains |
 | Existing keyfile, wrong passphrase | Join fails before data access |
 | Existing keyfile, unexpected public identity | Configuration/keyfile mismatch fails closed |
