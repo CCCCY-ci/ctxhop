@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-08-16 |
-| Commit under test | `0135e74` (with `4f555d4`) |
+| Commit under test | `0e48aa0` (with `e0babff`, `8e3eb60`, `0135e74`, `4f555d4`) |
 | Environment | Windows workspace, Go 1.26 toolchain |
 | Scope | Synthetic/local checks only; no credentials, Agent session data, or external service |
 
@@ -12,7 +12,7 @@
 - `go test ./...` — PASS
 - `go test -race ./...` — PASS
 - `go vet ./...` — PASS
-- Lifecycle regression coverage — PASS; local dir Remote tests cover passphrase change/reset, partial deletion failure, cancellation, history prune boundary retention and safe error classification.
+- Lifecycle regression coverage — PASS; local dir Remote tests cover passphrase change/reset and rejected changes, scoped delete-all/project/session boundaries, partial deletion failure, cancellation, history prune boundary retention and safe error classification.
 - `go run ./poc/mvp` — PASS; all six local synthetic scenarios passed
 - `CGO_ENABLED=0` cross-build — PASS for windows/amd64, windows/arm64, darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64
 
