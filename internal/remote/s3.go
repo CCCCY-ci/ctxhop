@@ -145,6 +145,9 @@ func (s *S3) urlFor(key string) *url.URL {
 // do signs and performs a request, returning the response for the caller to
 // close.
 func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*http.Response, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -248,6 +251,12 @@ func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 
 // Put stores size bytes read from r.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if r == nil {
+		return errors.New("remote: object body is required")
+	}
 	if err := ValidateKey(key); err != nil {
 		return err
 	}
@@ -255,7 +264,7 @@ func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64) error
 		return fmt.Errorf("remote: object %q is %d bytes, larger than the %d byte limit", key, size, maxObjectSize)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r, maxObjectSize+1))
+	body, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: r}, maxObjectSize+1))
 	if err != nil {
 		return fmt.Errorf("read object body: %w", err)
 	}

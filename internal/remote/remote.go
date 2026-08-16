@@ -96,3 +96,29 @@ type Prober interface {
 	// operation failed and which permission is missing (§11.2).
 	Probe(ctx context.Context) error
 }
+
+// contextReader lets a Remote stop consuming a caller-provided body after the
+// operation has been cancelled. A plain io.Reader has no context contract of
+// its own, so both local and HTTP-backed drivers use this wrapper.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := contextError(r.ctx); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if contextErr := contextError(r.ctx); contextErr != nil {
+		return n, contextErr
+	}
+	return n, err
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("remote: context is required")
+	}
+	return ctx.Err()
+}

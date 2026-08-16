@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runContract exercises every behaviour the sync layer relies on, against any
@@ -243,6 +244,37 @@ func runContract(t *testing.T, newStore func(t *testing.T) Remote) {
 		}
 	})
 
+	t.Run("cancellation stops a body read before publishing", func(t *testing.T) {
+		s := newStore(t)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		body := &blockedReader{started: started, release: release}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- s.Put(ctx, "v1/cancelled", body, -1)
+		}()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("Put did not start reading the body")
+		}
+		cancel()
+		close(release)
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Put error = %v, want context.Canceled", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Put did not stop after cancellation")
+		}
+		if _, err := s.Stat(context.Background(), "v1/cancelled"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("cancelled Put left an object: %v", err)
+		}
+	})
+
 	t.Run("large object", func(t *testing.T) {
 		s := newStore(t)
 		body := strings.Repeat("abcdefgh", 200_000) // 1.6 MB
@@ -257,6 +289,17 @@ func runContract(t *testing.T, newStore func(t *testing.T) Remote) {
 			t.Error("a backend must identify itself for configuration and diagnostics")
 		}
 	})
+}
+
+type blockedReader struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockedReader) Read([]byte) (int, error) {
+	close(r.started)
+	<-r.release
+	return 0, errors.New("body released")
 }
 
 func keysOf(t *testing.T, s Remote, prefix string) []string {

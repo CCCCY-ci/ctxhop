@@ -60,6 +60,9 @@ func (d *Dir) pathFor(key string) (string, error) {
 // The walk starts at the deepest directory the prefix implies rather than at
 // the root, so listing one session does not traverse every project.
 func (d *Dir) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	if err := ValidatePrefix(prefix); err != nil {
 		return nil, err
 	}
@@ -144,6 +147,9 @@ func (d *Dir) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 
 // Get opens the object for reading.
 func (d *Dir) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	p, err := d.pathFor(key)
 	if err != nil {
 		return nil, err
@@ -180,6 +186,12 @@ func (d *Dir) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 // The write is atomic, so a reader - including a third-party sync tool - never
 // sees a partially written object.
 func (d *Dir) Put(ctx context.Context, key string, r io.Reader, size int64) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if r == nil {
+		return errors.New("remote: object body is required")
+	}
 	p, err := d.pathFor(key)
 	if err != nil {
 		return err
@@ -193,7 +205,7 @@ func (d *Dir) Put(ctx context.Context, key string, r io.Reader, size int64) erro
 	}
 
 	return atomicfile.Write(p, func(w io.Writer) error {
-		written, err := io.Copy(w, r)
+		written, err := io.Copy(w, contextReader{ctx: ctx, reader: r})
 		if err != nil {
 			return fmt.Errorf("write object: %w", err)
 		}
@@ -210,6 +222,9 @@ func (d *Dir) Put(ctx context.Context, key string, r io.Reader, size int64) erro
 // Delete removes the object. Deleting a key that is not there succeeds, so
 // cleanup is idempotent.
 func (d *Dir) Delete(ctx context.Context, key string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	p, err := d.pathFor(key)
 	if err != nil {
 		return err
@@ -226,6 +241,9 @@ func (d *Dir) Delete(ctx context.Context, key string) error {
 
 // Stat returns metadata without transferring the object.
 func (d *Dir) Stat(ctx context.Context, key string) (ObjectInfo, error) {
+	if err := contextError(ctx); err != nil {
+		return ObjectInfo{}, err
+	}
 	p, err := d.pathFor(key)
 	if err != nil {
 		return ObjectInfo{}, err
