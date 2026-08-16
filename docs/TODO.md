@@ -1,6 +1,6 @@
 # AgentSync 开发 TODO 与完成情况
 
-> 盘点基线：2026-08-16；实现基线：9d8b1ef test(cli): isolate watch agent absence fixture；本次 TODO 同步随当前提交完成。
+> 盘点基线：2026-08-16；实现基线：1a0ca09 feat(sync): add signed device pairing；本次 TODO 同步随当前提交完成。
 > 依据：PRD v2.0、docs/specs 下的模块规格、poc 记录、当前源代码和测试。
 > 本文只记录当前仓库已经能证明的状态；“代码存在”不等于“跨平台验收已经完成”。
 

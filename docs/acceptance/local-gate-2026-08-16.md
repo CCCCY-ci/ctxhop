@@ -3,13 +3,14 @@
 | Field | Value |
 |---|---|
 | Date | 2026-08-16 |
-| Commit under test | `9d8b1ef` (with `ccf3c39`, `5670e14`, `fcfa885` and the earlier lifecycle commits) |
+| Commit under test | `1a0ca09` (`feat(sync): add signed device pairing`, on top of the earlier lifecycle commits) |
 | Environment | Windows workspace, Go 1.26 toolchain |
 | Scope | Synthetic/local checks only; no credentials, Agent session data, or external service |
 
 ## Results
 
 - `go test ./...` — PASS
+- Signed device pairing integration: PASS; device A invitation and device B `init --invite` produce distinct device IDs with the same fingerprint and pinned identity, while tampering fails before local configuration is saved.
 - `go test -race ./...` — PASS
 - `go vet ./...` — PASS
 - Lifecycle regression coverage — PASS; local dir Remote tests cover passphrase change/reset and rejected changes, scoped delete-all/project/session boundaries, partial deletion failure, cancellation, history prune boundary retention and safe error classification.
