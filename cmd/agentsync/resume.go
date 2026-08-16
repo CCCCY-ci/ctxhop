@@ -177,30 +177,15 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, fmt.Errorf("resume: derive project identity: %w", err)
 	}
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: configure backend: %s", safeBackendSetupError(err))
-	}
-	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "resume")
+	prompter := &resumePrompter{reader: bufio.NewReader(input), output: output}
+	access, err := openDomainForRead(ctx, c, configDir, prompter.reader, prompter.output, "resume")
 	if err != nil {
 		return resumeReport{}, err
 	}
-
-	prompter := &resumePrompter{reader: bufio.NewReader(input), output: prompt}
-	passphrase, err := prompter.secret("Passphrase: ")
-	if err != nil {
-		return resumeReport{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: open remote identity: %w", err)
-	}
-	groups, err := syncer.FetchProjectMetadata(ctx, store, projectID, identity)
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
+	groups, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return resumeReport{}, errors.New("resume: no encrypted sessions are available for this project")
 	}
@@ -229,7 +214,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if options.version >= 0 {
 		restoreOptions.VersionIndex = &options.version
 	}
-	plan, err := syncflow.FetchRestorePlan(ctx, store, projectID, candidate.Group.SessionID, identity, space, installation, restoreOptions)
+	plan, err := syncflow.FetchRestorePlanWithIdentitiesAndDevices(ctx, store, projectID, candidate.Group.SessionID, identities, access.allowedDevices(), space, installation, restoreOptions)
 	if err != nil {
 		return resumeReport{}, safeResumePlanError(err)
 	}

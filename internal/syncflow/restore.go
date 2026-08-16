@@ -68,6 +68,18 @@ type RestorePlan struct {
 // incomplete target path cannot cause remote I/O. The function never writes
 // local Agent data.
 func FetchRestorePlan(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions) (RestorePlan, error) {
+	return FetchRestorePlanWithIdentitiesAndDevices(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity}, nil, space, installation, options)
+}
+
+// FetchRestorePlanWithIdentities reads and resolves a session with retained
+// content-key generations.
+func FetchRestorePlanWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions) (RestorePlan, error) {
+	return FetchRestorePlanWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil, space, installation, options)
+}
+
+// FetchRestorePlanWithIdentitiesAndDevices restores only currently authorized
+// device branches.
+func FetchRestorePlanWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions) (RestorePlan, error) {
 	if ctx == nil {
 		return RestorePlan{}, errors.New("syncflow: context is required")
 	}
@@ -78,7 +90,7 @@ func FetchRestorePlan(ctx context.Context, store remote.Remote, projectID, sessi
 		return RestorePlan{}, err
 	}
 
-	branches, err := syncer.FetchCompleteBranches(ctx, store, projectID, sessionID, identity)
+	branches, err := syncer.FetchCompleteBranchesWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
 	if err != nil {
 		return RestorePlan{}, fmt.Errorf("syncflow: fetch restore branches: %w", err)
 	}

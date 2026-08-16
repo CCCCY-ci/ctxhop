@@ -57,7 +57,13 @@ The second device gets its own device identity. A normal device may push
 sessions and perform explicit metadata/list/resume operations. `push-only`
 devices never restore remote sessions; `disabled` devices skip automatic
 synchronisation.
-The invitation is a portable, signed pairing document. It carries the Remote settings and non-secret domain fingerprint, but no credentials, passphrase or session content. The second device verifies the existing keyfile before saving its local configuration. This is an explicit pairing and consistency check, not strong access revocation; removing a device or rotating credentials remains a separate lifecycle operation.
+The invitation is a portable, signed pairing document. It carries the Remote settings and non-secret domain fingerprint, but no credentials, passphrase or session content. The second device verifies the existing keyfile before saving its local configuration. Managed domains then issue a device-specific encrypted grant, so each installation can be authorized and revoked independently.
+
+`agentsync device rotate-key` creates a new content-key generation, passphrase and
+Recovery Key while retaining the stable project namespace. `agentsync device
+remove DEVICE_ID` performs the same rotation, tombstones the target device, and
+then removes its remote branch objects. The command prints a new Recovery Key
+and requires an explicit `saved` confirmation before publishing the rotation.
 
 A sync domain is currently implicit: the configured Remote namespace and its
 keyfile/data-key identity define the domain, while each installation gets a
@@ -137,7 +143,7 @@ workspace semantics.
 |---|---|---|
 | Encrypted local sync/restore path | Implemented locally | `internal/syncflow`, `internal/syncer`, CLI commands and tests |
 | Cross-device device identity and modes | Implemented locally | `device`, `device-mode-spec.md` and sync-flow guards |
-| Sync domain membership | Implemented locally (pairing) | Domain fingerprint, persisted namespace binding, signed `device invite` packages and `init --invite` are implemented; strong access revocation remains pending |
+| Sync domain membership | Implemented locally | Domain fingerprint, persisted namespace binding, signed `device invite` packages, managed per-device grants, key rotation and `device remove` revocation are implemented; external multi-device acceptance remains pending |
 | Multi-project scope | Implemented locally | `push`/`watch` process the current project; project policies are `normal`, `push-only` or `excluded` |
 | No-Git manual project identity | Implemented locally | `project bind --name` is consumed by the shared current-project resolver across project-consuming commands |
 | Workspace fingerprint safety | Implemented locally | PoC-2, restore checks and local-only difference context |
@@ -199,8 +205,11 @@ in
 ## Known limitations
 
 - Losing both the passphrase and Recovery Key is not recoverable.
-- Removing a device currently deletes its remote data but cannot revoke
-  credentials already held by that device; invitations do not change this.
+- Managed domains provide cryptographic forward revocation: a removed device
+  cannot unlock the next key generation. Plaintext or historical keys already
+  copied by that device cannot be recalled, and a dumb backend can still accept
+  destructive writes from anyone who holds its storage credentials; provider
+  ACLs or credential rotation are still needed to control backend tampering.
 - Object counts, sizes and timing remain metadata side channels.
 - Agent format/version changes may downgrade an adapter to limited support;
   restore then requires explicit compatibility consent.

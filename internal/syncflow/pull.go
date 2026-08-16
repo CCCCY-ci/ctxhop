@@ -133,6 +133,12 @@ func PlanPull(refs []syncer.MetadataRef, options PullOptions) (PullPlan, error) 
 // Missing metadata is a safe no-op because the caller has no authenticated
 // remote tip from which to select or restore a session.
 func FetchPullPlan(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey, options PullOptions) (PullPlan, error) {
+	return FetchPullPlanWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity}, options)
+}
+
+// FetchPullPlanWithIdentities performs the metadata-only pull check with a
+// retained key history.
+func FetchPullPlanWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, options PullOptions) (PullPlan, error) {
 	if ctx == nil {
 		return PullPlan{}, errors.New("syncflow: context is required")
 	}
@@ -142,7 +148,7 @@ func FetchPullPlan(ctx context.Context, store remote.Remote, projectID, sessionI
 	if err := validatePullOptions(options); err != nil {
 		return PullPlan{}, err
 	}
-	refs, err := syncer.FetchMetadata(ctx, store, projectID, sessionID, identity)
+	refs, err := syncer.FetchMetadataWithIdentities(ctx, store, projectID, sessionID, identities)
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return PullPlan{LocalDeviceID: options.LocalDeviceID, LocalCursor: options.LocalCursor}, nil
 	}

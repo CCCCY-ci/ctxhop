@@ -100,30 +100,15 @@ func collectRemoteStatus(ctx context.Context, c *config.Config, configDir, proje
 	if err != nil {
 		return statusSync{}, fmt.Errorf("status: derive project identity: %w", err)
 	}
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return statusSync{}, fmt.Errorf("status: configure backend: %s", safeBackendSetupError(err))
-	}
-	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "status")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "status")
 	if err != nil {
 		return statusSync{}, err
 	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	passphrase, err := readListPassphrase(input, prompt)
-	if err != nil {
-		return statusSync{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return statusSync{}, fmt.Errorf("status: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return statusSync{}, fmt.Errorf("status: open remote identity: %w", err)
-	}
-
-	remoteSessions, err := syncer.FetchProjectMetadata(ctx, store, projectID, identity)
+	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		remoteSessions = nil
 	} else if err != nil {

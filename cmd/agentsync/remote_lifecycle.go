@@ -91,10 +91,12 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 				return fmt.Errorf("remote %s: cancelled", options.action)
 			}
 		}
-		store, _, err := openDeviceRemote(ctx, c, configDir, "remote "+options.action)
+		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
 		}
+		defer access.close()
+		store := access.Store
 		removed, err := syncer.DeleteRemoteSession(ctx, store, projectID, sessionID)
 		if err != nil {
 			return remoteDeletionError(options.action, removed, err)
@@ -114,10 +116,12 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 				return fmt.Errorf("remote %s: cancelled", options.action)
 			}
 		}
-		store, _, err := openDeviceRemote(ctx, c, configDir, "remote "+options.action)
+		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
 		}
+		defer access.close()
+		store := access.Store
 		removed, err := syncer.DeleteRemoteProject(ctx, store, projectID)
 		if err != nil {
 			return remoteDeletionError(options.action, removed, err)
@@ -133,10 +137,12 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 				return fmt.Errorf("remote %s: cancelled", options.action)
 			}
 		}
-		store, _, err := openDeviceRemote(ctx, c, configDir, "remote "+options.action)
+		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
 		}
+		defer access.close()
+		store := access.Store
 		removed, err := syncer.DeleteRemoteAll(ctx, store)
 		if err != nil {
 			return remoteDeletionError(options.action, removed, err)

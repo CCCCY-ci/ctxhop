@@ -69,14 +69,26 @@ func (l SessionLayout) Prefix() (string, error) {
 // fails with ErrIncompleteBranch so callers can retry after eventual
 // consistency settles instead of restoring a silently truncated session.
 func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]Branch, error) {
+	return FetchBranchesWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchBranchesWithIdentities reads branches encrypted under any retained
+// content-key generation.
+func FetchBranchesWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey) ([]Branch, error) {
+	return FetchBranchesWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil)
+}
+
+// FetchBranchesWithIdentitiesAndDevices reads branches and optionally filters
+// out branches from revoked devices.
+func FetchBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]Branch, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
 	if store == nil {
 		return nil, errors.New("syncer: remote store is required")
 	}
-	if identity == nil {
-		return nil, errors.New("syncer: identity key is required")
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
 	}
 	layout, err := NewSessionLayout(projectID, sessionID)
 	if err != nil {
@@ -107,6 +119,11 @@ func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionI
 
 	branches := make([]Branch, 0, len(devices))
 	for _, device := range devices {
+		if allowed != nil {
+			if _, ok := allowed[device]; !ok {
+				continue
+			}
+		}
 		parts := refs[device]
 		numbers := make([]uint64, 0, len(parts))
 		for number := range parts {
@@ -124,7 +141,7 @@ func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionI
 			if err != nil {
 				return nil, fmt.Errorf("syncer: read remote branch: %w", err)
 			}
-			shard, err := OpenShard(identity, key, sealed)
+			shard, err := openShardWithIdentities(identities, key, sealed)
 			if err != nil {
 				return nil, fmt.Errorf("syncer: open remote branch: %w", err)
 			}
@@ -136,6 +153,9 @@ func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionI
 			return nil, fmt.Errorf("syncer: assemble remote branch: %w", err)
 		}
 		branches = append(branches, branch)
+	}
+	if len(branches) == 0 {
+		return nil, ErrNoRemoteBranches
 	}
 	return branches, nil
 }
@@ -150,21 +170,33 @@ func FetchBranches(ctx context.Context, store remote.Remote, projectID, sessionI
 // metadata record count or digest does not match the assembled branch, the
 // session is incomplete and must not be restored.
 func FetchCompleteBranches(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]Branch, error) {
+	return FetchCompleteBranchesWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchCompleteBranchesWithIdentities validates metadata and branches using
+// every retained content-key generation.
+func FetchCompleteBranchesWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey) ([]Branch, error) {
+	return FetchCompleteBranchesWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil)
+}
+
+// FetchCompleteBranchesWithIdentitiesAndDevices validates metadata and branches
+// after filtering the current membership set.
+func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]Branch, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
 	if store == nil {
 		return nil, errors.New("syncer: remote store is required")
 	}
-	if identity == nil {
-		return nil, errors.New("syncer: identity key is required")
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
 	}
 
-	metadata, err := FetchMetadata(ctx, store, projectID, sessionID, identity)
+	metadata, err := FetchMetadataWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
 	if err != nil {
 		return nil, errors.Join(ErrIncompleteRemoteSession, fmt.Errorf("syncer: fetch session metadata: %w", err))
 	}
-	branches, err := FetchBranches(ctx, store, projectID, sessionID, identity)
+	branches, err := FetchBranchesWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
 	if err != nil {
 		return nil, errors.Join(ErrIncompleteRemoteSession, err)
 	}

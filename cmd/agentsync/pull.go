@@ -164,30 +164,15 @@ func collectPullCheck(ctx context.Context, c *config.Config, configDir, projectD
 	if err != nil {
 		return pullCheckReport{}, fmt.Errorf("pull: derive project identity: %w", err)
 	}
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return pullCheckReport{}, fmt.Errorf("pull: configure backend: %s", safeBackendSetupError(err))
-	}
-	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "pull")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "pull")
 	if err != nil {
 		return pullCheckReport{}, err
 	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	passphrase, err := readCommandPassphrase(input, prompt, "pull")
-	if err != nil {
-		return pullCheckReport{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return pullCheckReport{}, fmt.Errorf("pull: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return pullCheckReport{}, fmt.Errorf("pull: open remote identity: %w", err)
-	}
-
-	remoteSessions, err := syncer.FetchProjectMetadata(ctx, store, projectID, identity)
+	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return newPullCheckReport(pullCheckSessionCounts{}), nil
 	}

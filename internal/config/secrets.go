@@ -52,13 +52,15 @@ type Credentials struct {
 
 // Secrets is everything on this machine worth protecting.
 //
-// Note what is absent: the identity private key. A push encrypts to a public
-// key, so an unattended run never needs the means to read anything back. Both
-// values here can reach the storage and compute paths within it, and neither
-// can open a session (crypto-spec §3.3, spec §2.2).
+// IdentifierKey is enough for unattended path derivation and push. Managed
+// domains additionally persist DevicePrivateKey so this installation can unwrap
+// its encrypted device grants; it must be protected like the backend secrets.
+// The content identity private keys remain derived in memory from an unlocked
+// key ring and are never written here.
 type Secrets struct {
-	Credentials   Credentials `json:"credentials"`
-	IdentifierKey []byte      `json:"identifierKey"`
+	Credentials      Credentials `json:"credentials"`
+	IdentifierKey    []byte      `json:"identifierKey"`
+	DevicePrivateKey []byte      `json:"devicePrivateKey,omitempty"`
 }
 
 // LoadSecrets reads the credentials this machine should use.
@@ -81,6 +83,7 @@ func LoadSecrets(dir string) (*Secrets, error) {
 			// form: it is derived from the user's own key material, so the
 			// stored copy is the only one there is.
 			s.IdentifierKey = stored.IdentifierKey
+			s.DevicePrivateKey = stored.DevicePrivateKey
 		}
 		return s, nil
 	}

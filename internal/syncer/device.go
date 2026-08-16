@@ -160,14 +160,20 @@ func PutDeviceRecord(ctx context.Context, store remote.Remote, recipient *ecdh.P
 
 // FetchDeviceRecords reads and decrypts every explicit device record.
 func FetchDeviceRecords(ctx context.Context, store remote.Remote, identity *ecdh.PrivateKey) ([]DeviceRecord, error) {
+	return FetchDeviceRecordsWithIdentities(ctx, store, []*ecdh.PrivateKey{identity})
+}
+
+// FetchDeviceRecordsWithIdentities reads records encrypted under any retained
+// content-key generation.
+func FetchDeviceRecordsWithIdentities(ctx context.Context, store remote.Remote, identities []*ecdh.PrivateKey) ([]DeviceRecord, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
 	if store == nil {
 		return nil, errors.New("syncer: remote store is required")
 	}
-	if identity == nil {
-		return nil, errors.New("syncer: identity key is required")
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
 	}
 	objects, err := store.List(ctx, devicePrefix)
 	if err != nil {
@@ -187,7 +193,7 @@ func FetchDeviceRecords(ctx context.Context, store remote.Remote, identity *ecdh
 		if err != nil {
 			return nil, fmt.Errorf("syncer: read remote device record: %w", err)
 		}
-		record, err := OpenDeviceRecord(identity, key, sealed)
+		record, err := openDeviceRecordWithIdentities(identities, key, sealed)
 		if err != nil {
 			return nil, fmt.Errorf("syncer: open remote device record: %w", err)
 		}

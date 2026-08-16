@@ -58,6 +58,13 @@ func runDeviceWithStreams(args []string, input io.Reader, output, prompt io.Writ
 
 	switch options.action {
 	case deviceActionInvite:
+		ctx, cancel := context.WithTimeout(context.Background(), deviceManagementTimeout)
+		defer cancel()
+		access, err := openAuthorizedDomain(ctx, c, configDir, "device invite")
+		if err != nil {
+			return err
+		}
+		access.close()
 		invite, err := createDeviceInvite(c, configDir)
 		if err != nil {
 			return err
@@ -108,22 +115,35 @@ func runDeviceWithStreams(args []string, input io.Reader, output, prompt io.Writ
 			_, err = fmt.Fprintf(output, "device name: %s (local only; remote publication skipped)\n", safeListText(options.name))
 		}
 		return err
-	case deviceActionRemove:
-		if !options.yes {
-			if input == nil {
-				return errors.New("device remove: input is required")
-			}
-			if prompt == nil {
-				return errors.New("device remove: prompt output is required")
-			}
+	case deviceActionRotateKey:
+		if input == nil {
+			return errors.New("device rotate-key: input is required")
+		}
+		if prompt == nil {
+			return errors.New("device rotate-key: prompt output is required")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), deviceManagementTimeout)
 		defer cancel()
-		removed, err := removeDevice(ctx, c, configDir, options.target, options.yes, input, prompt)
+		result, err := rotateDeviceKey(ctx, c, configDir, "", input, prompt, "device rotate-key")
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(output, "device removed: id=%s objects=%d\n", options.target, removed)
+		_, err = fmt.Fprintf(output, "device key rotated: generation=%d\n", result.Generation)
+		return err
+	case deviceActionRemove:
+		if input == nil {
+			return errors.New("device remove: input is required")
+		}
+		if prompt == nil {
+			return errors.New("device remove: prompt output is required")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), deviceManagementTimeout)
+		defer cancel()
+		result, err := removeDevice(ctx, c, configDir, options.target, options.yes, asBufferedReader(input), prompt)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(output, "device removed: id=%s objects=%d generation=%d\n", options.target, result.Removed, result.Generation)
 		return err
 	default:
 		return fmt.Errorf("device: unsupported action %q", options.action)
@@ -141,25 +161,15 @@ func collectDeviceList(ctx context.Context, c *config.Config, configDir string, 
 		return deviceListReport{}, fmt.Errorf("device list: local device identity is invalid: %w", err)
 	}
 
-	store, keyfile, err := openDeviceRemote(ctx, c, configDir, "device list")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "device list")
 	if err != nil {
 		return deviceListReport{}, err
 	}
-	passphrase, err := readCommandPassphrase(input, prompt, "device list")
-	if err != nil {
-		return deviceListReport{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return deviceListReport{}, fmt.Errorf("device list: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return deviceListReport{}, fmt.Errorf("device list: open remote identity: %w", err)
-	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	records, err := syncer.FetchDeviceRecords(ctx, store, identity)
+	records, err := syncer.FetchDeviceRecordsWithIdentities(ctx, store, identities)
 	if err != nil {
 		return deviceListReport{}, fmt.Errorf("device list: read encrypted device records: %w", err)
 	}
@@ -283,11 +293,16 @@ func renameDevice(ctx context.Context, c *config.Config, configDir, name string)
 	}
 
 	var store remote.Remote
+	var public *ecdh.PublicKey
+	var access *domainAccess
 	if c.Device.Mode.Effective() != config.DeviceModeDisabled {
-		store, _, err = openDeviceRemote(ctx, c, configDir, "device rename")
+		access, err = openAuthorizedDomain(ctx, c, configDir, "device rename")
 		if err != nil {
 			return false, err
 		}
+		defer access.close()
+		store = access.Store
+		public = access.Public
 	}
 
 	previous := c.Device.Name
@@ -301,9 +316,8 @@ func renameDevice(ctx context.Context, c *config.Config, configDir, name string)
 	}
 
 	record.LastActiveAt = time.Now().UTC()
-	public, err := ecdh.X25519().NewPublicKey(c.IdentityPublic)
-	if err != nil {
-		return false, fmt.Errorf("device rename: local encryption identity is invalid: %w", err)
+	if public == nil {
+		return false, errors.New("device rename: active encryption identity is unavailable")
 	}
 	if err := syncer.PutDeviceRecord(ctx, store, public, record); err != nil {
 		return false, fmt.Errorf("device rename: local name saved but remote device record could not be updated: %w", err)
@@ -326,41 +340,182 @@ func publishPushDeviceRecord(ctx context.Context, c *config.Config, store remote
 	return syncer.PutDeviceRecord(ctx, store, public, record)
 }
 
-func removeDevice(ctx context.Context, c *config.Config, configDir, target string, yes bool, input io.Reader, prompt io.Writer) (int, error) {
+type deviceKeyRotationResult struct {
+	Generation  uint64
+	RecoveryKey string
+	Removed     int
+}
+
+func removeDevice(ctx context.Context, c *config.Config, configDir, target string, yes bool, input io.Reader, prompt io.Writer) (deviceKeyRotationResult, error) {
 	if c == nil {
-		return 0, errors.New("device remove: configuration is unavailable")
+		return deviceKeyRotationResult{}, errors.New("device remove: configuration is unavailable")
 	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
-		return 0, fmt.Errorf("device remove: local device identity is invalid: %w", err)
+		return deviceKeyRotationResult{}, fmt.Errorf("device remove: local device identity is invalid: %w", err)
 	}
 	if err := config.ValidateDeviceID(target); err != nil {
-		return 0, fmt.Errorf("device remove: target device identity is invalid: %w", err)
+		return deviceKeyRotationResult{}, fmt.Errorf("device remove: target device identity is invalid: %w", err)
 	}
 	if target == c.Device.ID {
-		return 0, errors.New("device remove: refusing to remove the current local device")
+		return deviceKeyRotationResult{}, errors.New("device remove: refusing to remove the current local device")
+	}
+	if input == nil {
+		return deviceKeyRotationResult{}, errors.New("device remove: input is required")
+	}
+	if prompt == nil {
+		return deviceKeyRotationResult{}, errors.New("device remove: prompt output is required")
 	}
 	if !yes {
 		confirmed, err := confirmDeviceRemoval(input, prompt, target)
 		if err != nil {
-			return 0, err
+			return deviceKeyRotationResult{}, err
 		}
 		if !confirmed {
-			return 0, errors.New("device remove: cancelled")
+			return deviceKeyRotationResult{}, errors.New("device remove: cancelled")
+		}
+	}
+	if result, handled, err := retryRevokedDeviceCleanup(ctx, c, configDir, target); handled {
+		return result, err
+	}
+	return rotateDeviceKey(ctx, c, configDir, target, input, prompt, "device remove")
+}
+
+func retryRevokedDeviceCleanup(ctx context.Context, c *config.Config, configDir, target string) (deviceKeyRotationResult, bool, error) {
+	access, err := openAuthorizedDomain(ctx, c, configDir, "device remove")
+	if err != nil {
+		return deviceKeyRotationResult{}, false, err
+	}
+	defer access.close()
+	member, found := keyfileMember(access.Keyfile, target)
+	if !found || member.RevokedAtGeneration == 0 {
+		return deviceKeyRotationResult{}, false, nil
+	}
+	removed, cleanupErr := syncer.DeleteDeviceData(ctx, access.Store, target)
+	result := deviceKeyRotationResult{Generation: access.Keyfile.Generation, Removed: removed}
+	if cleanupErr != nil {
+		return result, true, fmt.Errorf("device remove: device is already cryptographically revoked; cleanup removed %d objects before failure: %w", removed, cleanupErr)
+	}
+	return result, true, nil
+}
+
+func rotateDeviceKey(ctx context.Context, c *config.Config, configDir, removeDeviceID string, input io.Reader, prompt io.Writer, command string) (deviceKeyRotationResult, error) {
+	if c == nil {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: configuration is unavailable", command)
+	}
+	if input == nil {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: input is required", command)
+	}
+	if prompt == nil {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: prompt output is required", command)
+	}
+	store, keyfile, err := openDeviceRemote(ctx, c, configDir, command)
+	if err != nil {
+		return deviceKeyRotationResult{}, err
+	}
+
+	secrets, err := config.LoadSecrets(configDir)
+	if err != nil {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: load local sync material: %w", command, err)
+	}
+	var devicePrivate *ecdh.PrivateKey
+	if len(secrets.DevicePrivateKey) != 0 {
+		devicePrivate, err = crypto.ParseDevicePrivateKey(secrets.DevicePrivateKey)
+		if err != nil {
+			return deviceKeyRotationResult{}, fmt.Errorf("%s: parse local device authorization: %w", command, err)
+		}
+	} else if keyfile.IsManaged() {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: local device authorization is missing; re-initialize this device with an invitation", command)
+	} else {
+		devicePrivate, err = crypto.NewDevicePrivateKey()
+		if err != nil {
+			return deviceKeyRotationResult{}, fmt.Errorf("%s: create local device authorization: %w", command, err)
+		}
+		secrets.DevicePrivateKey = append([]byte(nil), devicePrivate.Bytes()...)
+	}
+
+	secretInput := asBufferedReader(input)
+	currentPassphrase, err := readCommandSecretReader(secretInput, prompt, command, "Current passphrase: ")
+	if err != nil {
+		return deviceKeyRotationResult{}, err
+	}
+	if !keyfile.IsManaged() {
+		if err := config.ValidateDeviceID(c.Device.ID); err != nil {
+			return deviceKeyRotationResult{}, fmt.Errorf("%s: local device identity is invalid: %w", command, err)
+		}
+		// Keep the legacy-to-managed migration in memory until the new
+		// passphrase and Recovery Key have been confirmed. Publishing an
+		// intermediate managed keyfile would leave a v1 local configuration
+		// unable to push if the user cancelled the rotation.
+		if err := crypto.MigrateKeyfile(keyfile, currentPassphrase, c.Device.ID, devicePrivate.PublicKey()); err != nil {
+			return deviceKeyRotationResult{}, fmt.Errorf("%s: migrate remote keyfile to device authorization: %w", command, err)
 		}
 	}
 
-	store, _, err := openDeviceRemote(ctx, c, configDir, "device remove")
+	nextPassphrase, err := readNewPassphraseFromReader(secretInput, prompt, command)
 	if err != nil {
-		return 0, err
+		return deviceKeyRotationResult{}, err
 	}
-	removed, err := syncer.DeleteDeviceData(ctx, store, target)
+	recoveryKey, err := crypto.RotateManagedKeyfile(keyfile, currentPassphrase, nextPassphrase, removeDeviceID)
 	if err != nil {
-		if removed > 0 {
-			return removed, fmt.Errorf("device remove: removed %d remote objects before failure: %w", removed, err)
-		}
-		return 0, fmt.Errorf("device remove: delete remote data: %w", err)
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: rotate encryption key: %w", command, err)
 	}
-	return removed, nil
+	if _, err := fmt.Fprintln(prompt, "New Recovery Key (save it before continuing):"); err != nil {
+		return deviceKeyRotationResult{}, err
+	}
+	if _, err := fmt.Fprintln(prompt, recoveryKey); err != nil {
+		return deviceKeyRotationResult{}, err
+	}
+	saved, err := readDeviceRecoveryConfirmation(secretInput, prompt, command)
+	if err != nil {
+		return deviceKeyRotationResult{}, err
+	}
+	if !saved {
+		return deviceKeyRotationResult{}, fmt.Errorf("%s: Recovery Key was not confirmed as saved; no rotation was published", command)
+	}
+	// Persist the local grant before publishing the final keyfile. If the
+	// process stops after the remote write, the next command can still
+	// authorize this device and accept the new generation.
+	if err := config.SaveSecrets(configDir, secrets); err != nil {
+		return deviceKeyRotationResult{Generation: keyfile.Generation, RecoveryKey: recoveryKey}, fmt.Errorf("%s: save local device authorization: %w", command, err)
+	}
+	if err := syncer.ReplaceKeyfile(ctx, store, keyfile); err != nil {
+		return deviceKeyRotationResult{Generation: keyfile.Generation, RecoveryKey: recoveryKey}, fmt.Errorf("%s: publish rotated keyfile: %w", command, err)
+	}
+	ring, err := keyfile.UnlockKeyRingForDevice(c.Device.ID, devicePrivate)
+	if err != nil {
+		return deviceKeyRotationResult{Generation: keyfile.Generation, RecoveryKey: recoveryKey}, fmt.Errorf("%s: local device was not granted the new key generation: %w", command, err)
+	}
+	if err := acceptManagedDomainState(c, configDir, keyfile, ring, command); err != nil {
+		ring.Close()
+		return deviceKeyRotationResult{Generation: keyfile.Generation, RecoveryKey: recoveryKey}, err
+	}
+	ring.Close()
+
+	result := deviceKeyRotationResult{Generation: keyfile.Generation, RecoveryKey: recoveryKey}
+	if removeDeviceID == "" {
+		return result, nil
+	}
+	removed, cleanupErr := syncer.DeleteDeviceData(ctx, store, removeDeviceID)
+	result.Removed = removed
+	if cleanupErr != nil {
+		return result, fmt.Errorf("%s: cryptographic revocation completed, but remote data cleanup removed %d objects before failure: %w", command, removed, cleanupErr)
+	}
+	return result, nil
+}
+
+func asBufferedReader(input io.Reader) *bufio.Reader {
+	if reader, ok := input.(*bufio.Reader); ok {
+		return reader
+	}
+	return bufio.NewReader(input)
+}
+
+func readDeviceRecoveryConfirmation(input *bufio.Reader, prompt io.Writer, command string) (bool, error) {
+	value, err := readCommandSecretReader(input, prompt, command, "Type 'saved' after storing the Recovery Key: ")
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(value, "saved"), nil
 }
 
 func confirmDeviceRemoval(input io.Reader, prompt io.Writer, target string) (bool, error) {
@@ -373,7 +528,7 @@ func confirmDeviceRemoval(input io.Reader, prompt io.Writer, target string) (boo
 	if _, err := fmt.Fprintf(prompt, "Remove all remote data for device %q? [y/N]: ", target); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(input).ReadString('\n')
+	line, err := asBufferedReader(input).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("device remove: read confirmation: %w", err)
 	}

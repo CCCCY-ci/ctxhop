@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	deviceActionStatus = "status"
-	deviceActionMode   = "mode"
-	deviceActionList   = "list"
-	deviceActionRename = "rename"
-	deviceActionRemove = "remove"
+	deviceActionStatus    = "status"
+	deviceActionMode      = "mode"
+	deviceActionList      = "list"
+	deviceActionRename    = "rename"
+	deviceActionRemove    = "remove"
+	deviceActionRotateKey = "rotate-key"
 )
 
 type deviceOptions struct {
@@ -52,7 +53,7 @@ func runDevice(args []string) error {
 
 func parseDeviceOptions(args []string) (deviceOptions, error) {
 	if len(args) == 0 {
-		return deviceOptions{}, errors.New("device: expected 'status', 'mode', 'list', 'rename', 'remove', or 'invite'")
+		return deviceOptions{}, errors.New("device: expected 'status', 'mode', 'list', 'rename', 'remove', 'rotate-key', or 'invite'")
 	}
 
 	switch args[0] {
@@ -103,6 +104,11 @@ func parseDeviceOptions(args []string) (deviceOptions, error) {
 			return deviceOptions{}, errors.New("device rename: expected one display name")
 		}
 		return deviceOptions{action: deviceActionRename, name: args[1]}, nil
+	case deviceActionRotateKey:
+		if len(args) != 1 {
+			return deviceOptions{}, errors.New("device rotate-key: does not accept arguments")
+		}
+		return deviceOptions{action: deviceActionRotateKey}, nil
 	case deviceActionRemove:
 		flags := flag.NewFlagSet("device remove", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
@@ -115,7 +121,7 @@ func parseDeviceOptions(args []string) (deviceOptions, error) {
 		}
 		return deviceOptions{action: deviceActionRemove, target: flags.Arg(0), yes: *yes}, nil
 	default:
-		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', 'remove', or 'invite'", args[0])
+		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', 'remove', 'rotate-key', or 'invite'", args[0])
 	}
 }
 

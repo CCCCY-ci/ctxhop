@@ -138,29 +138,19 @@ func runHistoryPruneWithStreams(args []string, input io.Reader, output, prompt i
 	if err != nil {
 		return err
 	}
-	store, keyfile, err := openDeviceRemote(ctx, c, configDir, "history prune")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "history prune")
 	if err != nil {
 		return err
 	}
-	passphrase, err := readCommandPassphrase(input, prompt, "history prune")
-	if err != nil {
-		return err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return fmt.Errorf("history prune: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return fmt.Errorf("history prune: open remote identity: %w", err)
-	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	branches, err := syncer.FetchCompleteBranches(ctx, store, projectID, sessionID, identity)
+	branches, err := syncer.FetchCompleteBranchesWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, access.allowedDevices())
 	if err != nil {
 		return safeHistoryPruneReadError(ctx, err)
 	}
-	metadata, err := syncer.FetchMetadata(ctx, store, projectID, sessionID, identity)
+	metadata, err := syncer.FetchMetadataWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, access.allowedDevices())
 	if err != nil {
 		return safeHistoryPruneReadError(ctx, err)
 	}

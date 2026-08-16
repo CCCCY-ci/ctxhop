@@ -217,14 +217,26 @@ type MetadataRef struct {
 // FetchMetadata lists, reads, decrypts, and validates every device metadata
 // object under one remote session prefix.
 func FetchMetadata(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]MetadataRef, error) {
+	return FetchMetadataWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchMetadataWithIdentities reads metadata encrypted under any retained
+// content-key generation.
+func FetchMetadataWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey) ([]MetadataRef, error) {
+	return FetchMetadataWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil)
+}
+
+// FetchMetadataWithIdentitiesAndDevices reads metadata and optionally ignores
+// branches whose device ID is not in the current membership set.
+func FetchMetadataWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]MetadataRef, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
 	if store == nil {
 		return nil, errors.New("syncer: remote store is required")
 	}
-	if identity == nil {
-		return nil, errors.New("syncer: identity key is required")
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
 	}
 	layout, err := NewSessionLayout(projectID, sessionID)
 	if err != nil {
@@ -256,16 +268,24 @@ func FetchMetadata(ctx context.Context, store remote.Remote, projectID, sessionI
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("syncer: read remote metadata: %w", err)
 		}
+		if allowed != nil {
+			if _, ok := allowed[device]; !ok {
+				continue
+			}
+		}
 		key := refs[device]
 		sealed, err := readRemoteMetadata(ctx, store, key)
 		if err != nil {
 			return nil, fmt.Errorf("syncer: read remote metadata: %w", err)
 		}
-		metadata, err := OpenMetadata(identity, key, sealed)
+		metadata, err := openMetadataWithIdentities(identities, key, sealed)
 		if err != nil {
 			return nil, fmt.Errorf("syncer: open remote metadata: %w", err)
 		}
 		out = append(out, MetadataRef{DeviceID: device, Metadata: metadata})
+	}
+	if len(out) == 0 {
+		return nil, ErrNoRemoteMetadata
 	}
 	return out, nil
 }

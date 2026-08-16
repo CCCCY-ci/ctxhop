@@ -30,14 +30,26 @@ type ProjectMetadataRef struct {
 // the set of session/device metadata objects stable for the duration of this
 // call and lets the reader reject duplicate metadata entries deterministically.
 func FetchProjectMetadata(ctx context.Context, store remote.Remote, projectID string, identity *ecdh.PrivateKey) ([]ProjectMetadataRef, error) {
+	return FetchProjectMetadataWithIdentities(ctx, store, projectID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchProjectMetadataWithIdentities reads project metadata under any retained
+// content-key generation.
+func FetchProjectMetadataWithIdentities(ctx context.Context, store remote.Remote, projectID string, identities []*ecdh.PrivateKey) ([]ProjectMetadataRef, error) {
+	return FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, nil)
+}
+
+// FetchProjectMetadataWithIdentitiesAndDevices reads project metadata while
+// optionally filtering revoked device branches.
+func FetchProjectMetadataWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]ProjectMetadataRef, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
 	if store == nil {
 		return nil, errors.New("syncer: remote store is required")
 	}
-	if identity == nil {
-		return nil, errors.New("syncer: identity key is required")
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
 	}
 	if err := validateIdentifier(projectID); err != nil {
 		return nil, fmt.Errorf("syncer: invalid project identifier: %w", err)
@@ -76,6 +88,11 @@ func FetchProjectMetadata(ctx context.Context, store remote.Remote, projectID st
 
 		metadata := make([]MetadataRef, 0, len(deviceIDs))
 		for _, deviceID := range deviceIDs {
+			if allowed != nil {
+				if _, ok := allowed[deviceID]; !ok {
+					continue
+				}
+			}
 			if err := ctx.Err(); err != nil {
 				return nil, fmt.Errorf("syncer: read project metadata: %w", err)
 			}
@@ -83,13 +100,18 @@ func FetchProjectMetadata(ctx context.Context, store remote.Remote, projectID st
 			if err != nil {
 				return nil, fmt.Errorf("syncer: read project metadata: %w", err)
 			}
-			opened, err := OpenMetadata(identity, devices[deviceID], sealed)
+			opened, err := openMetadataWithIdentities(identities, devices[deviceID], sealed)
 			if err != nil {
 				return nil, fmt.Errorf("syncer: open project metadata: %w", err)
 			}
 			metadata = append(metadata, MetadataRef{DeviceID: deviceID, Metadata: opened})
 		}
-		out = append(out, ProjectMetadataRef{SessionID: sessionID, Devices: metadata})
+		if len(metadata) != 0 {
+			out = append(out, ProjectMetadataRef{SessionID: sessionID, Devices: metadata})
+		}
+	}
+	if len(out) == 0 {
+		return nil, ErrNoRemoteMetadata
 	}
 	return out, nil
 }

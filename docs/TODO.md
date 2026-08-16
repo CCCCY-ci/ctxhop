@@ -19,7 +19,7 @@
 | 范围 | 状态 | 结论 |
 |---|---|---|
 | 核心同步链路 | ✅ | 配置、密钥、Adapter、Remote、增量 push、元数据、恢复、队列和 CLI 主链路均已落地 |
-| 同步域与设备入组 | 🟡 | 同步域由 Remote namespace + keyfile 确定；domain fingerprint、持久化绑定和 signed device invite/init --invite 配对流程已实现；强访问撤销和真实跨设备验收仍待补 |
+| 同步域与设备入组 | 🟡 | 同步域由 Remote namespace + keyfile 确定；domain fingerprint、持久化绑定、signed device invite/init --invite、托管设备授权、强撤销和密钥轮换已实现；真实跨设备验收仍待补 |
 | 多项目范围与项目策略 | ✅ | push/watch 当前只处理当前项目，normal/push-only/excluded 和无 Git manual identity 主同步路径均已接入 |
 | PRD P0 功能 | 🟡 | 主要代码、MVP 合成验收、CI 和发布基础链路已实现；真实跨平台、Agent 和 Remote 验收仍待闭环 |
 | PRD P1 功能 | 🟡 | project、device、stats、watch、history、工作区上下文、doctor、shell completion 和 manual identity 均有基础实现；同步域入组与真实跨设备验收仍待补 |
@@ -42,7 +42,7 @@
 | 配置层 | ✅ | internal/config 已提供配置加载、校验、保存和默认值处理 |
 | 初始化流程 | ✅ | agentsync init 创建配置、设备身份和本地密钥材料；口令通过交互输入，不从命令行参数接收 |
 | 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力；internal/config/secrets.go 及其回归测试已纳入版本控制，随机源失败时不会发布半成品 device.key |
-| 口令 API | ✅ | keyfile 已有 ChangePassphrase 和 ResetPassphrase API；agentsync passphrase change/reset CLI 已接入，真实远端验收待补 |
+| 口令 API | ✅ | keyfile 已有 ChangePassphrase、ResetPassphrase 和托管 key rotation API；agentsync passphrase change/reset、device rotate-key CLI 已接入，真实远端验收待补 |
 | 本地目录 Remote | ✅ | internal/remote/dir 已实现对象读写、列表和目录布局 |
 | S3 Remote | ✅ | internal/remote/s3 与 SigV4 相关实现已存在 |
 | 远端对象布局 | ✅ | 项目、会话、设备、分片和元数据使用稳定的版本化布局 |
@@ -95,7 +95,7 @@
 | agentsync doctor | ✅ | 配置、backend、Agent、版本、兼容性、hook、项目检查和脱敏的最近错误历史均已覆盖 |
 | agentsync project | ✅ | 项目策略、Git/manual identity 配置命令和当前项目共享解析已实现 |
 | agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；本地故障注入回归已补，真实 Remote 故障验收待补 |
-| agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
+| agentsync device | ✅ | 支持 status、mode、list、rename、invite、rotate-key、remove；remove 会先做强撤销轮换，再清理目标设备数据 |
 | agentsync remote | ✅ | 支持按会话、按项目和清空 Remote；删除前统一确认并支持 --yes，失败时报告已删除对象数 |
 | agentsync stats | ✅ | 输出本地恢复统计 |
 | agentsync pull | ✅ | 当前作为显式的 metadata-only pull check 使用；不是自动下载全部远端会话 |
@@ -113,17 +113,18 @@
 4. 只有用户显式进入 resume/restore 选择流程后，程序才会按选定版本读取远端会话 body，并继续做兼容性、工作区和分叉检查。
 5. push-only 和 disabled 设备在 body-read 流程前会被拒绝；因此可以把某设备配置成“只上传、不接收远端会话”。
 6. watch 当前只负责本地变化检测和 push，不负责后台自动拉取远端会话。
+7. 托管同步域的 device remove 和 device rotate-key 会创建新的数据密钥代际；被移除设备没有下一代 grant，合规客户端会在 push、读取和远端维护前失败关闭。历史对象仍由保留 epoch 读取，已被移除设备复制到本地的明文或旧密钥无法追回。
 
-因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 先通过 device invite/init --invite 明确加入同一同步域，再通过 metadata-only check 和 resume 进入读取流程。剩余工作是用真实 A/B/C 设备场景补齐验收，并单独设计强访问撤销。
+因此，设备 A 持续对话时，正常的 watch 上传不会触发全量同步；设备 B 先通过 device invite/init --invite 明确加入同一同步域，再通过 metadata-only check 和 resume 进入读取流程。托管同步域还会按设备私钥授权读取：当前设备只读取活跃设备元数据，历史 key epoch 只用于兼容已发布数据。
 
 ### 2.6 同步域、项目范围和无 Git 项目
 
 - 一个同步域可以包含多个项目；project ID 从同步域密钥和项目稳定身份派生，项目之间不会共享 session 历史；
 - 当前 push/watch/list/pull/resume/history 都围绕当前项目运行，不会默认扫描整台机器的所有 Claude Code 项目；
 - project mode 的 normal、push-only、excluded 是项目级策略，与设备级 normal、push-only、disabled 分开；
-- 当前同步域是 Remote namespace + keyfile 的隐式组合；设备 ID 只区分组内 branch，不负责强授权；domain fingerprint、持久化 binding 和 signed device invite/init --invite 已用于确认第二台设备打开的是同一同步域；强访问撤销仍待设计；
+- 当前同步域是 Remote namespace + keyfile 的隐式组合；托管 v2 keyfile 另外保存设备成员、公钥、当前代际和每代加密 grant；设备 ID 区分 branch，同时由设备私钥 grant 负责强授权；
 - domain fingerprint：已接入 init/status/doctor；新配置持久化 accepted value，所有 Remote-reading 命令校验 namespace/keyfile binding；device invite/init --invite 已补齐显式配对流程；
-- 设备邀请包与 init --invite 已实现，用于显式确认第二台设备打开的是同一 Remote/keyfile；当前 device remove 只删除远端数据，不能撤销设备已有的密钥材料；
+- 设备邀请包与 init --invite 已实现，用于显式确认第二台设备打开的是同一 Remote/keyfile；新设备加入时由现有管理员把所有保留 epoch 加密授予新设备；device remove 会生成新数据密钥、更新口令和 Recovery Key、标记目标设备撤销并清理其旧 branch；device rotate-key 用于不移除成员的日常轮换；
 - 无 Git 项目应使用跨设备稳定的 manual identity，例如 manual:client-project，不能使用绝对路径、用户名或主机名；共享 resolver 已接入主同步路径；
 - 当前 project bind --name 的 binding 已由主同步命令统一读取；无 binding 时仍按 fail-closed 规则拒绝自动同步。
 
@@ -210,10 +211,11 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 清空整个 Remote：✅ 已实现 `agentsync remote delete-all`；显式确认会提示包含 keyfile 和设备记录，`--yes` 可用于无人交互；
 - 上述删除操作：✅ 统一使用显式确认和 `--yes` 语义；部分失败会返回已删除对象数，避免把不完整清理误报为成功；
 - history cleanup/prune：✅ 已实现显式 cleanup 和按 maximal version 的 `--keep`/`--before` prune；未知更新时间的版本默认保留，避免误删；真实远端验收待补。
+- 强撤销与密钥轮换：✅ 托管 v2 keyfile 提供设备私钥 grant、历史 epoch、代际轮换和撤销 tombstone；`agentsync device rotate-key` 与 `agentsync device remove` 已接入，remove 的远端 branch 清理仍按非事务 backend 的部分失败语义报告。
 
 ### 4.2 P1 用户体验
 
-状态：🟡（已有基础实现，显式入组和真实跨设备验收仍待补）。
+状态：🟡（强授权核心已实现，真实跨设备验收仍待补）。
 
 - 工作区差异上下文注入：✅ 已实现；resume 默认把差异说明作为本地 isMeta 记录追加到恢复会话，后续 push 会过滤该记录，--no-workspace-context 可关闭；
 - shell completion：✅ 已实现 Bash、Zsh、Fish、PowerShell 补全，入口为 agentsync completion <shell>；
@@ -221,7 +223,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 失败场景的文档：✅ README 和 docs/specs 已说明 metadata-only check、body read、工作区差异、设备模式和远端清理边界；
 - 设备模式的默认推荐：✅ README 已说明 normal、push-only、disabled 的适用行为；
 
-- 同步域指纹与入组确认：✅ domain fingerprint、持久化 namespace binding、signed device invite 和 init --invite 已实现；强访问撤销与真实跨设备验收仍待补；
+- 同步域指纹与入组确认：✅ domain fingerprint、持久化 namespace binding、signed device invite、init --invite、设备 grant、device rotate-key 和 device remove 强撤销已实现；真实跨设备验收仍待补；
 - 多项目选择：✅ 当前 push/watch 只处理当前项目，project mode 支持 normal、push-only、excluded；全局 --all 未规划为默认行为；
 - 无 Git 项目：✅ manual identity 设计和共享 current-project resolver 已接入主同步路径，并有边界测试；
 
@@ -232,6 +234,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 关键包已有单元测试、集成测试和部分 fuzz 测试，且稳定回归测试已纳入仓库；
 - 稳定回归测试：✅ 已取消测试代码的全局忽略并纳入仓库；本地真实 Agent 数据和敏感 fixture 仍按 .gitignore 忽略；
 - 基础契约回归：✅ dir/S3 写入在 body 读取期间响应取消且不发布对象；命令注册表完整性、归档干净树构建和 watch 缺少 Agent fixture 隔离均已覆盖；
+- 双设备生命周期回归：✅ 覆盖 A/B 配对、B 设备撤销、旧口令/旧 grant 失效、A 保留历史读取，以及用新代际重新加入 C 设备。
 - 还缺少真实 Agent、真实 Remote、跨系统和故障注入矩阵；
 - CI 已上传 go test JSON 报告，docs/acceptance/README.md 已提供失败样本和版本兼容记录模板；真实失败样本仍需在外部矩阵中补齐。
 

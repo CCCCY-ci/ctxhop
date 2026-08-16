@@ -61,6 +61,16 @@ func fetchValidatedRemoteKeyfile(ctx context.Context, c *config.Config, store re
 	if err != nil {
 		return nil, fmt.Errorf("%s: validate remote identity: %w", command, err)
 	}
+	if keyfile.IsManaged() {
+		if c.DomainGeneration != 0 && keyfile.Generation < c.DomainGeneration {
+			return nil, fmt.Errorf("%s: %w: local generation %d, remote generation %d", command, errDomainGenerationRollback, c.DomainGeneration, keyfile.Generation)
+		}
+		// v2 authorizes a local device through an encrypted grant. The active
+		// public identity is expected to change after rotation, so comparing it
+		// with the stale local pin here would reject the update needed to refresh
+		// that pin.
+		return keyfile, nil
+	}
 	if len(c.IdentityPublic) == 0 || !bytes.Equal(public.Bytes(), c.IdentityPublic) {
 		return nil, fmt.Errorf("%s: remote encryption identity does not match this configuration", command)
 	}

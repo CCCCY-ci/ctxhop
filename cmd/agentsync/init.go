@@ -141,31 +141,74 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	defer zeroInitBytes(identifierKey)
 
 	c.IdentityPublic = public
+	devicePrivate, err := crypto.NewDevicePrivateKey()
+	if err != nil {
+		return fmt.Errorf("init: create local device authorization: %w", err)
+	}
+	deviceID, err := config.GenerateDeviceID(identifierKey)
+	if err != nil {
+		return fmt.Errorf("init: create device identity: %w", err)
+	}
+	c.Device.ID = deviceID
+
+	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	if err != nil {
+		return fmt.Errorf("init: re-read remote keyfile: %w", err)
+	}
+	if options.invite != nil {
+		if options.invite.Generation != 0 && keyfile.IsManaged() && options.invite.Generation != keyfile.Generation {
+			return fmt.Errorf("init: invitation belongs to key generation %d, remote is at generation %d; create a new invitation", options.invite.Generation, keyfile.Generation)
+		}
+		if err := verifyDeviceInvite(options.invite, c, identifierKey); err != nil {
+			return fmt.Errorf("init: verify device invite: %w", err)
+		}
+		if keyfile.IsManaged() {
+			issuer, found := keyfileMember(keyfile, options.invite.Issuer.DeviceID)
+			if !found || issuer.RevokedAtGeneration != 0 {
+				return errors.New("init: invitation issuer is not an active member of this sync domain")
+			}
+		}
+	}
+
+	keyfileChanged := false
+	if keyfile.IsManaged() {
+		if err := crypto.RegisterManagedDevice(keyfile, passphrase, deviceID, devicePrivate.PublicKey()); err != nil {
+			return fmt.Errorf("init: register local device grant: %w", err)
+		}
+		keyfileChanged = true
+	} else {
+		if err := crypto.MigrateKeyfile(keyfile, passphrase, deviceID, devicePrivate.PublicKey()); err != nil {
+			return fmt.Errorf("init: migrate remote keyfile to device authorization: %w", err)
+		}
+		keyfileChanged = true
+	}
+	if keyfileChanged {
+		if err := syncer.ReplaceKeyfile(ctx, store, keyfile); err != nil {
+			return fmt.Errorf("init: publish device authorization: %w", err)
+		}
+	}
+	activePublic, err := keyfile.IdentityPublicKey()
+	if err != nil {
+		return fmt.Errorf("init: read active remote identity: %w", err)
+	}
+	c.IdentityPublic = activePublic.Bytes()
+	c.DomainGeneration = keyfile.Generation
 	domainFingerprint, err := syncDomainFingerprint(c)
 	if err != nil {
 		return fmt.Errorf("init: derive sync domain fingerprint: %w", err)
 	}
-
 	c.DomainFingerprint = domainFingerprint
-	if options.invite != nil {
-		if err := verifyDeviceInvite(options.invite, c, identifierKey); err != nil {
-			zeroInitBytes(identifierKey)
-			return fmt.Errorf("init: verify device invite: %w", err)
-		}
-	}
 
 	secrets := &config.Secrets{
-		Credentials:   credentials,
-		IdentifierKey: identifierKey,
+		Credentials:      credentials,
+		IdentifierKey:    identifierKey,
+		DevicePrivateKey: append([]byte(nil), devicePrivate.Bytes()...),
 	}
 	if err := config.SaveSecrets(configDir, secrets); err != nil {
 		return fmt.Errorf("init: save local secrets: %w", err)
 	}
 	if err := c.Save(configDir); err != nil {
 		return fmt.Errorf("init: save local configuration: %w", err)
-	}
-	if _, err := config.EnsureDeviceID(configDir, c, identifierKey); err != nil {
-		return fmt.Errorf("init: create device identity: %w", err)
 	}
 
 	if !options.noHook {
@@ -372,14 +415,24 @@ func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase str
 		return nil, nil, false, fmt.Errorf("init: create keyfile: %w", err)
 	}
 
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("init: unlock remote keyfile: %w", err)
-	}
-	identifierKey, idErr := dataKey.IdentifierKey()
-	dataKey.Close()
-	if idErr != nil {
-		return nil, nil, false, fmt.Errorf("init: derive identifier key: %w", idErr)
+	var identifierKey []byte
+	if keyfile.IsManaged() {
+		ring, err := keyfile.UnlockKeyRingWithPassphrase(passphrase)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("init: unlock managed remote keyfile: %w", err)
+		}
+		identifierKey = append([]byte(nil), ring.IdentifierKey...)
+		ring.Close()
+	} else {
+		dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("init: unlock remote keyfile: %w", err)
+		}
+		identifierKey, err = dataKey.IdentifierKey()
+		dataKey.Close()
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("init: derive identifier key: %w", err)
+		}
 	}
 	public, err := keyfile.IdentityPublicKey()
 	if err != nil {

@@ -82,6 +82,31 @@ func ValidateDeviceID(id string) error {
 	return nil
 }
 
+// GenerateDeviceID creates one opaque installation identifier without persisting
+// it. Init uses this before publishing a managed keyfile so a failed migration
+// does not leave a half-configured local installation.
+func GenerateDeviceID(identifierKey []byte) (string, error) {
+	if len(identifierKey) == 0 {
+		return "", ErrDeviceIdentityRequired
+	}
+	localEntropy := make([]byte, 32)
+	if _, err := rand.Read(localEntropy); err != nil {
+		return "", fmt.Errorf("config: generate device identity: %w", err)
+	}
+	localIdentity := hex.EncodeToString(localEntropy)
+	for i := range localEntropy {
+		localEntropy[i] = 0
+	}
+	id, err := crypto.DeviceID(identifierKey, localIdentity)
+	if err != nil {
+		return "", fmt.Errorf("config: derive device identity: %w", err)
+	}
+	if err := ValidateDeviceID(id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // EnsureDeviceID creates and persists one opaque installation identifier.
 //
 // The identifier is generated once and then read from Config.Device.ID. It is
@@ -108,19 +133,8 @@ func EnsureDeviceID(dir string, c *Config, identifierKey []byte) (string, error)
 		return "", fmt.Errorf("config: create configuration directory: %w", pathSafe(err))
 	}
 
-	localEntropy := make([]byte, 32)
-	if _, err := rand.Read(localEntropy); err != nil {
-		return "", fmt.Errorf("config: generate device identity: %w", err)
-	}
-	localIdentity := hex.EncodeToString(localEntropy)
-	for i := range localEntropy {
-		localEntropy[i] = 0
-	}
-	id, err := crypto.DeviceID(identifierKey, localIdentity)
+	id, err := GenerateDeviceID(identifierKey)
 	if err != nil {
-		return "", fmt.Errorf("config: derive device identity: %w", err)
-	}
-	if err := ValidateDeviceID(id); err != nil {
 		return "", err
 	}
 

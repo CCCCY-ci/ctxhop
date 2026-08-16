@@ -10,7 +10,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 )
 
-const maxKeyfileBytes = 64 << 10
+const maxKeyfileBytes = 1 << 20
 
 var (
 	// ErrNoRemoteKeyfile reports a backend that has not been initialised for

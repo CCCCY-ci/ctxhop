@@ -32,6 +32,7 @@ type deviceInvite struct {
 	Kind              string             `json:"kind"`
 	CreatedAt         string             `json:"createdAt"`
 	DomainFingerprint string             `json:"domainFingerprint"`
+	Generation        uint64             `json:"generation,omitempty"`
 	Remote            config.Remote      `json:"remote"`
 	Issuer            deviceInviteIssuer `json:"issuer"`
 	Nonce             string             `json:"nonce"`
@@ -48,6 +49,7 @@ type deviceInvitePayload struct {
 	Kind              string             `json:"kind"`
 	CreatedAt         string             `json:"createdAt"`
 	DomainFingerprint string             `json:"domainFingerprint"`
+	Generation        uint64             `json:"generation,omitempty"`
 	Remote            config.Remote      `json:"remote"`
 	Issuer            deviceInviteIssuer `json:"issuer"`
 	Nonce             string             `json:"nonce"`
@@ -59,6 +61,7 @@ func (i deviceInvite) payload() deviceInvitePayload {
 		Kind:              i.Kind,
 		CreatedAt:         i.CreatedAt,
 		DomainFingerprint: i.DomainFingerprint,
+		Generation:        i.Generation,
 		Remote:            i.Remote,
 		Issuer:            i.Issuer,
 		Nonce:             i.Nonce,
@@ -192,6 +195,7 @@ func createDeviceInvite(c *config.Config, configDir string) (deviceInvite, error
 		Kind:              deviceInviteKind,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		DomainFingerprint: fingerprint,
+		Generation:        c.DomainGeneration,
 		Remote:            c.Remote,
 		Issuer:            deviceInviteIssuer{DeviceID: c.Device.ID, Name: name},
 		Nonce:             base64.RawURLEncoding.EncodeToString(nonce),

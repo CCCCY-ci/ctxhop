@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft |
-| Date | 2026-08-15 |
+| Status | Implemented locally; external backend failure and multi-OS acceptance remain pending |
+| Date | 2026-08-16 |
 | Depends on | `device-mode-spec.md`, `syncer-pull-state-spec.md`, `cli-pull-spec.md` |
 
 ## 1. Invocation
@@ -21,14 +21,17 @@ Remote device management adds:
 agentsync device list [--json]
 agentsync device rename NAME
 agentsync device remove DEVICE_ID [--yes]
+agentsync device rotate-key
 agentsync device invite [--output PATH]
 ```
 
-`device list` asks for the storage passphrase because device records are
-encrypted with the same storage identity as session objects. `device rename`
-and `device remove` use the configured backend credentials and do not need to
-unlock session content. Removing a device always requires an interactive
-confirmation unless `--yes` is supplied.
+`device list` first uses the local device grant in a managed domain and falls
+back to an explicitly entered storage passphrase only for bootstrap or recovery.
+`device rename`, `device rotate-key` and `device remove` require an active local
+device grant; rotate/remove also prompt for the current and new passphrases.
+Removing a device always requires an interactive confirmation unless `--yes` is
+supplied. The passphrase and Recovery Key are never accepted as command-line
+arguments.
 
 `device invite` reads the local configuration and identifier key without
 contacting the Remote. It writes a portable JSON package atomically when
@@ -73,19 +76,28 @@ needed to discover legacy branches. It does not read session metadata, shard
 bodies, local Agent files, pull cursors, observed tips, or configuration state
 beyond the backend setup and local device identity.
 
-`device remove` refuses to remove the current local device. It deletes the
-target's device record and all valid session-branch objects owned by that
-device. It never deletes the shared keyfile or objects owned by another device.
+`device remove` refuses to remove the current local device. It first performs
+a managed key rotation: the target member is tombstoned at the new generation,
+the old passphrase and Recovery Key stop unlocking the bundle, and the target
+receives no grant for the new content key. Only after the rotated keyfile is
+published does it delete the target's device record and valid session-branch
+objects. The keyfile and objects owned by another active device remain untouched.
 Cleanup is explicit administrative maintenance and is allowed even when the
 local synchronization mode is push-only or disabled.
 
-Removal is not access revocation: the target device still retains its local
-credentials and can publish again if it can reach the backend. To revoke
-access, rotate the backend credentials or storage key material separately.
+`device rotate-key` performs the same passphrase, Recovery Key and content-key
+generation change without tombstoning a member. Every active device receives
+a grant for the new generation; retained historical grants let compliant
+devices read data published before rotation.
 
-An invitation confirms pairing and namespace consistency. It does not provide
-one-time enrollment or strong per-device revocation; those require a separate
-credential or domain-key lifecycle design.
+This is cryptographic forward revocation, not data recall. A removed device may
+still read plaintext or old keys it copied before removal. A dumb backend also
+cannot stop anyone holding its storage credentials from deleting or replacing
+objects; backend ACLs or credential rotation are outside this client contract.
+
+An invitation confirms pairing and namespace consistency. In a managed domain,
+init also checks the issuer's active membership and current generation before
+registering the new device grant.
 
 ## 4. Output and failure behavior
 
@@ -107,15 +119,18 @@ Rename persists the local name atomically before the best-effort remote
 publication. A remote publication error does not roll back the local name and
 includes the repair action in its message.
 
-Removal reports the number of deleted objects. Deletion is idempotent and
-sorted, but object stores do not provide a transaction: if a later delete
-fails, the error includes the number already removed and no retry is hidden.
-The keyfile and data belonging to other devices remain untouched.
+Rotation reports the new generation after the Recovery Key has been confirmed
+as saved. The Recovery Key is printed only to the interactive prompt and is not
+included in machine-readable output. Removal additionally reports the number of
+deleted objects. Deletion is idempotent and sorted, but object stores do not
+provide a transaction: if a later delete fails, the error includes the number
+already removed. A cleanup failure never rolls back cryptographic revocation; a repeated `device remove --yes DEVICE_ID` only retries cleanup for a member already tombstoned at the current generation.
 
 ## 5. Test plan
 
 Tests cover encrypted record round trips, exact-key authentication, bounded and
 strict record parsing, legacy branch discovery, deterministic device merging,
 option parsing, JSON/text output, rename persistence, current-device removal
-protection, confirmation handling, partial cleanup reporting, and the absence
-of session-body reads during device listing.
+protection, managed key rotation, revoked-device rejection, confirmation handling,
+partial cleanup reporting, and the absence of session-body reads during device
+listing.

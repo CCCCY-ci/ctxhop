@@ -11,8 +11,16 @@ import (
 // keyfileVersion is the format of the stored envelope.
 const keyfileVersion = 1
 
-// keyfilePath is where the envelope lives. It is fixed and unencrypted: it
-// holds no secret, only the salt and two wrapped copies of the data key.
+// managedKeyfileVersion is the device-authorized envelope introduced after
+// the original passphrase-only format. Keep keyfileVersion at 1 because the
+// legacy migration path deliberately continues to create v1 files before a
+// local device identity exists.
+const managedKeyfileVersion = 2
+
+// keyfilePath is where the envelope lives. It is fixed and unencrypted. v1
+// stores public KDF metadata and two wrapped copies of the data key; managed v2
+// also stores public membership/epoch metadata while its key bundle and grants
+// remain encrypted.
 const keyfilePath = "v1/keyfile"
 
 // ErrWrongPassphrase reports that the passphrase did not open the envelope.
@@ -21,12 +29,11 @@ var ErrWrongPassphrase = errors.New("crypto: passphrase does not unlock this sto
 // ErrWrongRecoveryKey reports that the recovery key did not open the envelope.
 var ErrWrongRecoveryKey = errors.New("crypto: recovery key does not unlock this storage")
 
-// Keyfile is the envelope holding the data key.
-//
-// Both wrappings protect the same key, so a new device needs only one of them
-// and nothing else - in particular, no existing device has to be online. That
-// is what makes "continue on another machine while the first one is off" work
-// at all (spec §3.2).
+// Keyfile is the envelope holding the content-key material. In v1 both
+// wrappings protect the same data key. In managed v2 they protect a bundle of
+// retained epoch keys and the stable identifier key; per-device grants provide
+// the unattended authorization boundary. A new device still needs only one
+// wrapping plus its own enrollment, and no existing device has to be online.
 type Keyfile struct {
 	Version int       `json:"version"`
 	KDF     KDFParams `json:"kdf"`
@@ -36,6 +43,11 @@ type Keyfile struct {
 	IdentityPublic       []byte `json:"identityPublic"`
 	WrappedByPassphrase  []byte `json:"wrappedByPassphrase"`
 	WrappedByRecoveryKey []byte `json:"wrappedByRecoveryKey"`
+	// Generation and the fields below are present only in managed v2 files.
+	// They are public metadata; epoch keys remain in encrypted wrappers.
+	Generation uint64          `json:"generation,omitempty"`
+	Members    []KeyfileMember `json:"members,omitempty"`
+	Epochs     []KeyfileEpoch  `json:"epochs,omitempty"`
 }
 
 // KeyfilePath is the object key the envelope is stored under.
@@ -73,26 +85,11 @@ func NewKeyfile(passphrase string) (*Keyfile, string, error) {
 
 // UnlockWithPassphrase opens the envelope.
 func (k *Keyfile) UnlockWithPassphrase(passphrase string) (*DataKey, error) {
-	if err := k.check(); err != nil {
-		return nil, err
-	}
-	if len(k.WrappedByPassphrase) == 0 {
-		// Otherwise this spends a full derivation and then reports the
-		// passphrase as wrong, so the user retypes one that can never work.
-		return nil, errors.New("crypto: this storage has no passphrase wrapping; unlock with your recovery key")
-	}
-
-	kek, err := passphraseKEK(passphrase, k.KDF)
+	raw, err := k.unlockPassphraseMaterial(passphrase)
 	if err != nil {
 		return nil, err
 	}
-	defer zero(kek)
-
-	raw, err := unwrap(kek, wrapPathPassphrase, k.WrappedByPassphrase)
-	if err != nil {
-		return nil, translateUnwrapError(err, ErrWrongPassphrase)
-	}
-	return k.verified(&DataKey{raw: raw})
+	return k.dataKeyFromMaterial(raw)
 }
 
 // translateUnwrapError decides what a failed unwrap means to the user.
@@ -116,32 +113,11 @@ func translateUnwrapError(err error, wrongSecret error) error {
 
 // UnlockWithRecoveryKey opens the envelope with the written recovery key.
 func (k *Keyfile) UnlockWithRecoveryKey(recoveryText string) (*DataKey, error) {
-	if err := k.check(); err != nil {
-		return nil, err
-	}
-	if len(k.WrappedByRecoveryKey) == 0 {
-		return nil, errors.New("crypto: this storage has no recovery-key wrapping; unlock with your passphrase")
-	}
-
-	// A mistyped key is reported as a mistyped key, before anything is tried
-	// against the envelope.
-	recoveryRaw, err := ParseRecoveryKey(recoveryText)
+	raw, err := k.unlockRecoveryMaterial(recoveryText)
 	if err != nil {
 		return nil, err
 	}
-	defer zero(recoveryRaw)
-
-	kek, err := recoveryKEK(recoveryRaw)
-	if err != nil {
-		return nil, err
-	}
-	defer zero(kek)
-
-	raw, err := unwrap(kek, wrapPathRecovery, k.WrappedByRecoveryKey)
-	if err != nil {
-		return nil, translateUnwrapError(err, ErrWrongRecoveryKey)
-	}
-	return k.verified(&DataKey{raw: raw})
+	return k.dataKeyFromMaterial(raw)
 }
 
 // ErrPublicKeyMismatch reports a keyfile whose public key is not the public
@@ -195,29 +171,47 @@ func (k *Keyfile) IdentityPublicKey() (*ecdh.PublicKey, error) {
 // readable. Re-deriving the content key from the passphrase instead would have
 // meant re-encrypting the user's entire history to change a password.
 func (k *Keyfile) ChangePassphrase(current, next string) error {
-	dataKey, err := k.UnlockWithPassphrase(current)
+	material, err := k.unlockPassphraseMaterial(current)
 	if err != nil {
 		return err
 	}
+	if k.IsManaged() {
+		params := DefaultKDFParams()
+		sealed, err := k.wrapMaterialWithPassphrase(material, next, params)
+		zero(material)
+		if err != nil {
+			return err
+		}
+		k.KDF = params
+		k.WrappedByPassphrase = sealed
+		return nil
+	}
+	dataKey := &DataKey{raw: material}
 	defer dataKey.Close()
-
-	// A new salt too: reusing the old one would let anyone holding both
-	// versions of the file confirm a guess against either.
-	params := DefaultKDFParams()
-	return k.rewrap(dataKey, next, params)
+	return k.rewrap(dataKey, next, DefaultKDFParams())
 }
 
 // ResetPassphrase sets a new passphrase using the recovery key, for the user
 // who has forgotten the old one.
 func (k *Keyfile) ResetPassphrase(recoveryText, next string) error {
-	dataKey, err := k.UnlockWithRecoveryKey(recoveryText)
+	material, err := k.unlockRecoveryMaterial(recoveryText)
 	if err != nil {
 		return err
 	}
+	if k.IsManaged() {
+		params := DefaultKDFParams()
+		sealed, err := k.wrapMaterialWithPassphrase(material, next, params)
+		zero(material)
+		if err != nil {
+			return err
+		}
+		k.KDF = params
+		k.WrappedByPassphrase = sealed
+		return nil
+	}
+	dataKey := &DataKey{raw: material}
 	defer dataKey.Close()
-
-	params := DefaultKDFParams()
-	return k.rewrap(dataKey, next, params)
+	return k.rewrap(dataKey, next, DefaultKDFParams())
 }
 
 // rewrap replaces the passphrase wrapping and its parameters together, or
@@ -244,24 +238,29 @@ func (k *Keyfile) rewrap(dataKey *DataKey, passphrase string, params KDFParams) 
 // Reports whether anything changed, so a caller only writes the file back when
 // it must. Existing ciphertext is untouched either way.
 func (k *Keyfile) UpgradeKDF(passphrase string) (bool, error) {
-	// Before touching k.KDF: every other method on *Keyfile survives a nil
-	// receiver through check, and a caller on a "no keyfile yet" path should
-	// get the same error here rather than a panic.
 	if err := k.check(); err != nil {
 		return false, err
 	}
-
 	defaults := DefaultKDFParams()
 	if k.KDF.Time >= defaults.Time && k.KDF.MemoryKiB >= defaults.MemoryKiB {
 		return false, nil
 	}
-
-	dataKey, err := k.UnlockWithPassphrase(passphrase)
+	material, err := k.unlockPassphraseMaterial(passphrase)
 	if err != nil {
 		return false, err
 	}
+	if k.IsManaged() {
+		sealed, err := k.wrapMaterialWithPassphrase(material, passphrase, defaults)
+		zero(material)
+		if err != nil {
+			return false, err
+		}
+		k.KDF = defaults
+		k.WrappedByPassphrase = sealed
+		return true, nil
+	}
+	dataKey := &DataKey{raw: material}
 	defer dataKey.Close()
-
 	if err := k.rewrap(dataKey, passphrase, defaults); err != nil {
 		return false, err
 	}
@@ -311,11 +310,19 @@ func (k *Keyfile) check() error {
 	if k == nil {
 		return errors.New("crypto: no keyfile")
 	}
-	if k.Version > keyfileVersion {
+	if k.Version > managedKeyfileVersion {
 		return fmt.Errorf("%w: keyfile version %d", ErrUnsupportedVersion, k.Version)
 	}
 	if len(k.WrappedByPassphrase) == 0 && len(k.WrappedByRecoveryKey) == 0 {
 		return errors.New("crypto: keyfile holds no wrapped key")
+	}
+	if k.Version == managedKeyfileVersion {
+		if k.Generation == 0 || len(k.IdentityPublic) == 0 || len(k.Members) == 0 || len(k.Epochs) == 0 {
+			return errors.New("crypto: managed keyfile has no active device authorization")
+		}
+		if len(k.Members) > maxManagedMembers || len(k.Epochs) > maxManagedEpochs {
+			return errors.New("crypto: managed keyfile exceeds its member or epoch limit")
+		}
 	}
 	return nil
 }

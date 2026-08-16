@@ -95,7 +95,21 @@ v1/keyfile
 }
 ```
 
-新设备只需：拉取 keyfile → 用口令（或 Recovery Key）解开 → 即可解密一切。**全程不需要任何已有设备在线**，这正是 PRD §5.1.1 那条核心卖点成立的原因。
+在 v1 中，新设备只需：拉取 keyfile → 用口令（或 Recovery Key）解开 → 即可解密一切。**全程不需要任何已有设备在线**，这正是 PRD §5.1.1 那条核心卖点成立的原因；托管 v2 在此基础上还要求新设备完成 invitation 入组并持有自己的设备私钥。
+
+### 3.6 托管 v2 keyfile 与强撤销
+
+v1 keyfile 是口令/Recovery Key 共同包裹一个长期不变的 master/data key 的兼容格式。它适合单设备或管理员完全依赖口令的场景，但不能区分设备，也不能在不更换全部历史密钥的情况下撤销某一台设备。
+
+v2 仍使用同一个 `v1/keyfile` 传输位置，但把内容密钥改为代际管理：
+
+- `IdentifierKey` 在加密 bundle 中保持稳定，因此项目和 session namespace 不会因为轮换改变；
+- 每个 generation 有自己的 DataKey、X25519 identity public key 和一组设备 grant；
+- grant 使用设备公钥加密，包含该 generation 的 DataKey 和稳定 IdentifierKey；
+- 成员表记录设备公钥和撤销代际；当前 generation 没有 grant 的设备不能通过合规客户端写入或读取新的对象；
+- 授权读取可以同时尝试当前及保留历史 identity，因而轮换不会让已发布历史失效。
+
+`device rotate-key` 生成新的 DataKey、口令和 Recovery Key，并向所有活跃成员发放新 grant。`device remove` 额外把目标成员标记为 revoked，并省略它的新 grant；随后删除目标设备的 branch 只是清理，不承担授权语义。已被复制到设备上的明文或旧密钥不能通过轮换追回，存储凭据本身造成的删除/篡改能力也需要后端 ACL 解决。
 
 ---
 
@@ -147,7 +161,7 @@ PRD §10.2 要求首次设置时**强制引导保存，未完成不得进入正�
 `masterKey`，不会生成新的 Recovery Key，也不会改变 Recovery Key 包裹。
 命令在读取 Recovery Key 前明确提醒用户继续保管原 Recovery Key；它不会把
 Recovery Key 写入配置、远端或普通命令输出。若需要更换 Recovery Key，必须
-另行设计显式轮换流程，不能把口令重置误认为 Recovery Key 备份。
+另行设计显式轮换流程，不能把口令重置误认为 Recovery Key 备份。托管 v2 的 `device rotate-key` 和 `device remove` 就是该显式轮换流程：它们会生成新的 Recovery Key，并要求用户在发布前确认已经保存。
 
 ### 5.3 Recovery Key 不经 Argon2id
 

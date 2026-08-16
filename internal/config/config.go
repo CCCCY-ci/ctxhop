@@ -77,9 +77,10 @@ type Config struct {
 	// user's bucket, so anyone holding it could swap the advertised key and
 	// every later push would be encrypted to them and unreadable by its owner
 	// (crypto-spec §3.4).
-	IdentityPublic []byte                `json:"identityPublic"`
-	Projects       Projects              `json:"projects"`
-	Agents         map[string]AgentState `json:"agents,omitempty"`
+	IdentityPublic   []byte                `json:"identityPublic"`
+	DomainGeneration uint64                `json:"domainGeneration,omitempty"`
+	Projects         Projects              `json:"projects"`
+	Agents           map[string]AgentState `json:"agents,omitempty"`
 }
 
 // Load reads the configuration from dir.

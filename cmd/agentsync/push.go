@@ -145,17 +145,13 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: derive project identity: %w", err)
 	}
-	public, err := ecdh.X25519().NewPublicKey(c.IdentityPublic)
+	access, err := openAuthorizedDomain(ctx, c, configDir, "push")
 	if err != nil {
-		return pushSummary{}, fmt.Errorf("push: validate encryption identity: %w", err)
-	}
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return pushSummary{}, fmt.Errorf("push: configure backend: %s", safeBackendSetupError(err))
-	}
-	if _, err := fetchValidatedRemoteKeyfile(ctx, c, store, "push"); err != nil {
 		return pushSummary{}, err
 	}
+	defer access.close()
+	store := access.Store
+	public := access.Public
 	queue, err := syncer.NewQueueStore(configDir)
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: prepare pending queue: %w", err)

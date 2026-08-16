@@ -152,30 +152,15 @@ func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, pro
 		return listReport{}, fmt.Errorf("list: derive project identity: %w", err)
 	}
 
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return listReport{}, fmt.Errorf("list: configure backend: %s", safeBackendSetupError(err))
-	}
-	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "list")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "list")
 	if err != nil {
 		return listReport{}, err
 	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	passphrase, err := readListPassphrase(input, prompt)
-	if err != nil {
-		return listReport{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return listReport{}, fmt.Errorf("list: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return listReport{}, fmt.Errorf("list: open remote identity: %w", err)
-	}
-
-	remoteSessions, err := syncer.FetchProjectMetadata(ctx, store, projectID, identity)
+	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if err != nil && !errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return listReport{}, fmt.Errorf("list: read encrypted session metadata: %w", err)
 	}

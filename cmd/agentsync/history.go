@@ -183,30 +183,15 @@ func collectHistory(ctx context.Context, c *config.Config, configDir, projectDir
 	if err != nil {
 		return historyReport{}, fmt.Errorf("history: derive project identity: %w", err)
 	}
-	store, err := buildConfiguredRemote(c, configDir)
-	if err != nil {
-		return historyReport{}, fmt.Errorf("history: configure backend: %s", safeBackendSetupError(err))
-	}
-	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "history")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "history")
 	if err != nil {
 		return historyReport{}, err
 	}
+	defer access.close()
+	store := access.Store
+	identities := access.Identities
 
-	passphrase, err := readCommandPassphrase(input, prompt, "history")
-	if err != nil {
-		return historyReport{}, err
-	}
-	dataKey, err := keyfile.UnlockWithPassphrase(passphrase)
-	if err != nil {
-		return historyReport{}, fmt.Errorf("history: unlock remote keyfile: %w", err)
-	}
-	defer dataKey.Close()
-	identity, err := dataKey.IdentityPrivate()
-	if err != nil {
-		return historyReport{}, fmt.Errorf("history: open remote identity: %w", err)
-	}
-
-	groups, err := syncer.FetchProjectMetadata(ctx, store, projectID, identity)
+	groups, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return historyReport{}, errors.New("history: no encrypted sessions are available for this project")
 	}
@@ -218,7 +203,7 @@ func collectHistory(ctx context.Context, c *config.Config, configDir, projectDir
 		return historyReport{}, err
 	}
 
-	branches, err := syncer.FetchCompleteBranches(ctx, store, projectID, candidate.Group.SessionID, identity)
+	branches, err := syncer.FetchCompleteBranchesWithIdentitiesAndDevices(ctx, store, projectID, candidate.Group.SessionID, identities, access.allowedDevices())
 	if err != nil {
 		return historyReport{}, safeHistoryReadError(ctx, err)
 	}

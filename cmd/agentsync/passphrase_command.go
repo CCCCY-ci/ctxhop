@@ -101,10 +101,13 @@ func rotatePassphrase(ctx context.Context, c *config.Config, configDir, action s
 	if c == nil {
 		return errors.New("passphrase: configuration is unavailable")
 	}
-	store, keyfile, err := openDeviceRemote(ctx, c, configDir, "passphrase")
+	access, err := openAuthorizedDomain(ctx, c, configDir, "passphrase")
 	if err != nil {
 		return err
 	}
+	defer access.close()
+	store := access.Store
+	keyfile := access.Keyfile
 
 	secretInput := bufio.NewReader(input)
 	var next string

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Partially implemented; domain fingerprinting, persisted namespace binding, signed device invitations and init --invite pairing are implemented, while strong per-device authorization and revocation remain unfinished |
+| Status | Implemented locally; domain fingerprinting, persisted namespace binding, signed device invitations, managed per-device authorization, key rotation and revocation are implemented; external multi-device acceptance remains pending |
 | Date | 2026-08-16 |
 | Depends on | cli-init-spec.md, cli-project-spec.md, cli-push-spec.md, cli-watch-spec.md, device-mode-spec.md, crypto-spec.md |
 
@@ -35,16 +35,28 @@ of the configured Remote namespace and the Remote keyfile/data-key identity:
   its own Remote branch.
 
 The same storage bucket with different prefixes is therefore a different
-namespace. Two devices using the same namespace, keyfile, and passphrase are
-currently treated as members of the same domain.
+namespace. In legacy v1, any holder of the keyfile passphrase can open the
+domain. Managed v2 additionally requires an enrolled device private key grant;
+the namespace and passphrase alone do not authorize unattended device access.
 
 The keyfile public-identity pin prevents a local configuration from silently
-accepting a different encryption identity. It does not implement per-device
-authorization. The explicit invitation flow below provides pairing and tamper
-detection, but a person who already holds the Remote credentials and domain
-passphrase can still access the domain. Device removal currently deletes that
-device's Remote objects but does not revoke credentials already held by the
-device.
+accepting a different encryption identity. Managed v2 keyfiles add a membership
+table, a current generation, and an encrypted grant for each active device.
+The grant is wrapped to that device's X25519 public key and contains the
+generation's content key plus the stable identifier key.
+
+A managed device must prove possession of its local private key and unlock the
+current-generation grant before unattended writes or remote maintenance. Read
+commands may use the retained historical grants to read objects published before
+a rotation. `device remove` creates a new content-key generation, changes the
+passphrase and Recovery Key, tombstones the target member, and omits its new
+grant. `device rotate-key` performs the same generation change without removing
+a member. The previous passphrase and Recovery Key no longer unlock the bundle.
+
+This is cryptographic forward revocation, not data recall. Plaintext or old keys
+already copied by a removed device remain available to it. The dumb Remote also
+cannot prevent an actor with valid backend credentials from deleting or replacing
+objects; provider ACLs or backend credential rotation are needed for that boundary.
 
 ### 2.2 Implemented domain fingerprint
 
@@ -90,12 +102,17 @@ The invitation package carries:
   the domain identifier key;
 - no credentials, passphrase, session content, or private key material.
 
-The invitation is a pairing and namespace-consistency check, not a strong
-membership or revocation mechanism. The design must also define what happens
-after device removal. Deleting a branch is not enough when the removed device
-retains material that can read future objects. Per-device key wrapping, a
-domain-key rotation, or an equivalent revocation mechanism is required before
-claiming strong membership control.
+The invitation is a signed pairing and namespace-consistency check. For a
+managed keyfile, it also carries the current generation so an issuer from an
+older generation cannot enroll a device after a rotation. Init verifies that
+the issuer is still an active member before it registers the new device public
+key and grants every retained epoch.
+
+Removal is a key lifecycle operation, not only branch cleanup. The administrator
+must confirm a new passphrase and save the newly generated Recovery Key before
+the rotated keyfile is published. Cleanup of the removed device's old branch is
+then best-effort and reports partial failure separately from cryptographic
+revocation.
 
 ## 3. Multiple projects in one domain
 
@@ -168,7 +185,7 @@ same root is rejected rather than guessed.
 | Scenario | Expected result |
 |---|---|
 | Same Remote namespace/keyfile, two installations | Same domain, different device branches |
-| Device A creates an invitation and device B uses `init --invite` | Device B gets a different device ID, the same domain fingerprint and the same pinned keyfile identity |
+| Device A creates an invitation and device B uses `init --invite` | Device B gets a different device ID, the same domain fingerprint and the same pinned keyfile identity; the managed keyfile adds a grant for B |
 | Invitation payload or proof is tampered with | Join fails before local secrets/configuration are saved |
 | Same bucket, different prefix | Separate domains |
 | Existing keyfile, wrong passphrase | Join fails before data access |
@@ -180,6 +197,9 @@ same root is rejected rather than guessed.
 | Multiple configured projects | Only the current project is processed by push/watch |
 | Excluded project | No upload or remote inspection for that project |
 | Push-only project | Upload allowed; remote session reads blocked |
+| Managed device removal | A new generation is published; the target has no current-generation grant and compliant clients fail closed |
+| Device key rotation | Active devices retain access to retained history and receive the new generation; old passphrase and Recovery Key fail |
+| Removal cleanup failure | Cryptographic revocation remains complete; partial branch deletion is reported and retryable |
 
 ## 6. Non-goals
 

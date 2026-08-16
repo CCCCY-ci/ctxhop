@@ -11,7 +11,7 @@ import (
 
 var completionSubcommands = map[string][]string{
 	"completion": {"bash", "zsh", "fish", "powershell", "pwsh"},
-	"device":     {"status", "mode", "list", "rename", "remove", "invite"},
+	"device":     {"status", "mode", "list", "rename", "remove", "rotate-key", "invite"},
 	"history":    {"cleanup", "prune"},
 	"passphrase": {"change", "reset"},
 	"project":    {"bind", "unbind", "mode", "list"},
@@ -38,6 +38,7 @@ var completionOptions = map[string][]string{
 	"device status":         {"--json"},
 	"device list":           {"--json"},
 	"device remove":         {"--yes"},
+	"device rotate-key":     {},
 	"device invite":         {"--output"},
 	"project bind":          {"--path", "--identity", "--name"},
 	"project unbind":        {"--path", "--identity"},
