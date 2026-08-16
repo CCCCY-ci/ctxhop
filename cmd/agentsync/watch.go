@@ -15,7 +15,6 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
-	"github.com/CCCCY-ci/agentsync/internal/project"
 )
 
 const (
@@ -206,7 +205,7 @@ func runWatchCycle(ctx context.Context, c *config.Config, configDir, projectDir 
 	cycleCtx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
 
-	snapshot, err := discoverWatchSnapshot(cycleCtx, projectDir)
+	snapshot, err := discoverWatchSnapshot(cycleCtx, c, projectDir)
 	if err != nil {
 		return watchCycleResult{}, err
 	}
@@ -226,14 +225,14 @@ func runWatchCycle(ctx context.Context, c *config.Config, configDir, projectDir 
 	return result, nil
 }
 
-func discoverWatchSnapshot(ctx context.Context, projectDir string) (watchSnapshot, error) {
+func discoverWatchSnapshot(ctx context.Context, c *config.Config, projectDir string) (watchSnapshot, error) {
 	if ctx == nil {
 		return watchSnapshot{}, errors.New("watch: context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return watchSnapshot{}, fmt.Errorf("watch: %w", err)
 	}
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return watchSnapshot{}, fmt.Errorf("watch: identify the current project: %w", err)
 	}

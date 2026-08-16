@@ -153,7 +153,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		return resumeReport{}, errors.New("resume: encryption identity is not configured; run 'agentsync init'")
 	}
 
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return resumeReport{}, fmt.Errorf("resume: identify the current project: %w", err)
 	}

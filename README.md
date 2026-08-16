@@ -58,7 +58,9 @@ A sync domain is currently implicit: the configured Remote namespace and its
 keyfile/data-key identity define the domain, while each installation gets a
 different device branch. A domain may contain multiple projects. The current
 project is selected from the working directory; push and watch do not scan every
-project on the machine. Project policy can be changed locally:
+project on the machine. Init prints a non-secret domain fingerprint; a new
+device can pass `--expect-domain-fingerprint VALUE` to reject an unexpected
+namespace. Project policy can be changed locally:
 
     agentsync project mode normal
     agentsync project mode push-only
@@ -70,9 +72,9 @@ cross-device identity. The intended manual form is:
 
     agentsync project bind --name client-project --path /path/to/project
 
-The same manual identity must be used on the other device. The binding command
-is already present, but the current push/watch/list/pull/resume paths still need
-to consume manual bindings; see
+The same manual identity must be used on the other device. The shared
+current-project resolver now consumes this binding for project-consuming
+commands; see
 [`docs/specs/sync-domain-project-scope-spec.md`](docs/specs/sync-domain-project-scope-spec.md).
 
 Useful follow-up commands:
@@ -127,9 +129,9 @@ workspace semantics.
 |---|---|---|
 | Encrypted local sync/restore path | Implemented locally | `internal/syncflow`, `internal/syncer`, CLI commands and tests |
 | Cross-device device identity and modes | Implemented locally | `device`, `device-mode-spec.md` and sync-flow guards |
-| Sync domain membership | Proposed | Domain fingerprint, invite/join and revocation are documented in `sync-domain-project-scope-spec.md` |
+| Sync domain membership | In progress | Domain fingerprint and expected-fingerprint confirmation are implemented; invite/join and revocation remain pending |
 | Multi-project scope | Implemented locally | `push`/`watch` process the current project; project policies are `normal`, `push-only` or `excluded` |
-| No-Git manual project identity | Pending | `project bind --name` is documented, but current project-consuming commands still need the shared resolver |
+| No-Git manual project identity | Implemented locally | `project bind --name` is consumed by the shared current-project resolver across project-consuming commands |
 | Workspace fingerprint safety | Implemented locally | PoC-2, restore checks and local-only difference context |
 | MVP acceptance matrix | Reproducible locally | `go run ./poc/mvp` |
 | Real Windows/macOS/Linux Agent matrix | Pending | Requires installed Agents and separate devices |

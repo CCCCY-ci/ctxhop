@@ -35,12 +35,13 @@ type statusReport struct {
 }
 
 type statusConfiguration struct {
-	Version  int              `json:"version"`
-	Remote   statusRemote     `json:"remote"`
-	Device   statusDevice     `json:"device"`
-	Identity statusReadiness  `json:"identity"`
-	Projects statusProjectSet `json:"projects"`
-	Agents   []statusAgent    `json:"agents,omitempty"`
+	Version           int              `json:"version"`
+	Remote            statusRemote     `json:"remote"`
+	Device            statusDevice     `json:"device"`
+	Identity          statusReadiness  `json:"identity"`
+	DomainFingerprint string           `json:"domainFingerprint,omitempty"`
+	Projects          statusProjectSet `json:"projects"`
+	Agents            []statusAgent    `json:"agents,omitempty"`
 }
 
 type statusRemote struct {
@@ -138,6 +139,7 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 	}
 
 	summary := c.Summarise()
+	domainFingerprint, _ := syncDomainFingerprint(c)
 	report := statusReport{
 		Scope: "global",
 		Configuration: statusConfiguration{
@@ -147,8 +149,9 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 				Configured: summary.RemoteConfigured,
 				Endpoint:   summary.EndpointSet,
 			},
-			Device:   statusDevice{Configured: summary.DeviceIdentified, Mode: summary.DeviceMode},
-			Identity: statusReadiness{Configured: summary.IdentityPinned},
+			Device:            statusDevice{Configured: summary.DeviceIdentified, Mode: summary.DeviceMode},
+			Identity:          statusReadiness{Configured: summary.IdentityPinned},
+			DomainFingerprint: domainFingerprint,
 			Projects: statusProjectSet{
 				Bound:    summary.BoundProjects,
 				Excluded: summary.ExcludedProjects,
@@ -169,7 +172,7 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), statusProjectTimeout)
 	defer cancel()
-	current, err := project.Identify(ctx, dir)
+	current, err := resolveCurrentProject(ctx, c, dir)
 	if err != nil {
 		return statusReport{}, fmt.Errorf("status: identify the current project: %w", err)
 	}
@@ -244,6 +247,13 @@ func writeStatusText(w io.Writer, report statusReport) error {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  encryption identity: %s\n", readiness(report.Configuration.Identity.Configured)); err != nil {
+		return err
+	}
+	domainFingerprint := report.Configuration.DomainFingerprint
+	if domainFingerprint == "" {
+		domainFingerprint = "unavailable"
+	}
+	if _, err := fmt.Fprintf(w, "  domain fingerprint: %s\n", domainFingerprint); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  projects: bound=%d excluded=%d push-only=%d\n",

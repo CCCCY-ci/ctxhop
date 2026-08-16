@@ -25,6 +25,11 @@ backend. It is the only command that creates the first remote keyfile.
    failure must not invalidate the local configuration; the command reports
    the failure so `doctor` can explain it later.
 
+8. Init displays a non-secret sync-domain fingerprint derived from the
+   normalized Remote namespace and the pinned public identity. When joining an
+   existing namespace, `--expect-domain-fingerprint` may require an exact
+   fingerprint match; a mismatch stops before local configuration is saved.
+
 ## Failure boundary
 
 No remote keyfile is published when backend probing, passphrase confirmation,

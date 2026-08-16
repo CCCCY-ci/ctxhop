@@ -89,7 +89,7 @@ func runProjectWithIO(args []string, output io.Writer) error {
 		}
 		return writeProjectListText(output, report)
 	case projectActionBind:
-		identity, root, err := resolveProjectBinding(ctx, options)
+		identity, root, err := resolveProjectBinding(ctx, c, options)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func runProjectWithIO(args []string, output io.Writer) error {
 		}
 		return writeProjectUnbind(output, removed)
 	case projectActionMode:
-		identity, err := resolveProjectPolicyTarget(ctx, options)
+		identity, err := resolveProjectPolicyTarget(ctx, c, options)
 		if err != nil {
 			return err
 		}
@@ -252,8 +252,8 @@ func validateProjectIdentityArgument(value string) error {
 	return nil
 }
 
-func resolveProjectBinding(ctx context.Context, options projectOptions) (string, string, error) {
-	current, err := project.Identify(ctx, options.path)
+func resolveProjectBinding(ctx context.Context, c *config.Config, options projectOptions) (string, string, error) {
+	current, err := resolveCurrentProject(ctx, c, options.path)
 	if err != nil {
 		return "", "", fmt.Errorf("project bind: identify directory: %w", err)
 	}
@@ -298,7 +298,7 @@ func resolveProjectUnbind(ctx context.Context, options projectOptions) (string, 
 	return identity, filepath.Clean(current.Root), nil
 }
 
-func resolveProjectPolicyTarget(ctx context.Context, options projectOptions) (string, error) {
+func resolveProjectPolicyTarget(ctx context.Context, c *config.Config, options projectOptions) (string, error) {
 	if options.identity != "" {
 		identity, err := normalizeProjectIdentity(options.identity)
 		if err != nil {
@@ -306,7 +306,7 @@ func resolveProjectPolicyTarget(ctx context.Context, options projectOptions) (st
 		}
 		return identity, nil
 	}
-	current, err := project.Identify(ctx, options.path)
+	current, err := resolveCurrentProject(ctx, c, options.path)
 	if err != nil {
 		return "", fmt.Errorf("project mode: identify directory: %w", err)
 	}

@@ -13,7 +13,6 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 )
 
@@ -79,7 +78,7 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 
 	switch options.action {
 	case remoteActionDeleteSession:
-		projectID, sessionID, err := resolveRemoteSession(ctx, configDir, options.path, options.target, options.remoteID)
+		projectID, sessionID, err := resolveRemoteSession(ctx, c, configDir, options.path, options.target, options.remoteID)
 		if err != nil {
 			return err
 		}
@@ -102,7 +101,7 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 		}
 		return writeRemoteDeletionResult(output, options.action, removed)
 	case remoteActionDeleteProject:
-		projectID, err := resolveRemoteProject(ctx, configDir, options.path)
+		projectID, err := resolveRemoteProject(ctx, c, configDir, options.path)
 		if err != nil {
 			return err
 		}
@@ -201,8 +200,8 @@ func parseRemoteOptions(args []string) (remoteOptions, error) {
 	}
 }
 
-func resolveRemoteProject(ctx context.Context, configDir, projectDir string) (string, error) {
-	projectID, identifierKey, err := resolveRemoteProjectInputs(ctx, configDir, projectDir)
+func resolveRemoteProject(ctx context.Context, c *config.Config, configDir, projectDir string) (string, error) {
+	projectID, identifierKey, err := resolveRemoteProjectInputs(ctx, c, configDir, projectDir)
 	if err != nil {
 		return "", err
 	}
@@ -210,8 +209,8 @@ func resolveRemoteProject(ctx context.Context, configDir, projectDir string) (st
 	return projectID, nil
 }
 
-func resolveRemoteSession(ctx context.Context, configDir, projectDir, requested string, remoteID bool) (string, string, error) {
-	projectID, identifierKey, err := resolveRemoteProjectInputs(ctx, configDir, projectDir)
+func resolveRemoteSession(ctx context.Context, c *config.Config, configDir, projectDir, requested string, remoteID bool) (string, string, error) {
+	projectID, identifierKey, err := resolveRemoteProjectInputs(ctx, c, configDir, projectDir)
 	if err != nil {
 		return "", "", err
 	}
@@ -231,8 +230,8 @@ func resolveRemoteSession(ctx context.Context, configDir, projectDir, requested 
 	return projectID, sessionID, nil
 }
 
-func resolveRemoteProjectInputs(ctx context.Context, configDir, projectDir string) (string, []byte, error) {
-	current, err := project.Identify(ctx, projectDir)
+func resolveRemoteProjectInputs(ctx context.Context, c *config.Config, configDir, projectDir string) (string, []byte, error) {
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("remote: identify the current project: %w", err)
 	}

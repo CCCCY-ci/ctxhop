@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed; the current pre-alpha behavior is documented, but domain fingerprinting, enrollment, and manual-identity consumption remain unfinished |
+| Status | Proposed; domain fingerprinting and manual-identity consumption are implemented, while enrollment and revocation remain unfinished |
 | Date | 2026-08-16 |
 | Depends on | cli-init-spec.md, cli-project-spec.md, cli-push-spec.md, cli-watch-spec.md, device-mode-spec.md, crypto-spec.md |
 
@@ -45,24 +45,25 @@ and the passphrase or Recovery Key can join the domain. Device removal currently
 deletes that device's Remote objects but does not revoke credentials already held
 by the device.
 
-### 2.2 Planned domain fingerprint
+### 2.2 Implemented domain fingerprint
 
-Before a device joins an existing domain, the CLI should display a short,
-non-secret domain fingerprint derived from the normalized Remote namespace and
-the keyfile public identity. The fingerprint must not contain the passphrase,
-Recovery Key, storage credentials, local paths, or session contents.
+The CLI now displays a short, non-secret domain fingerprint derived from the
+normalized Remote namespace and the keyfile public identity. The fingerprint
+text does not contain the passphrase, Recovery Key, storage credentials, local
+paths, or session contents.
 
-The intended user flow is:
+The implemented flow is:
 
-- first init creates and displays the domain fingerprint;
-- later init reports that it opened an existing domain and displays the same
-  fingerprint;
-- a status/doctor command can display the redacted fingerprint;
-- an explicit confirmation or expected-fingerprint option prevents accidental
-  attachment to the wrong Remote namespace.
+- first init creates the keyfile and displays the domain fingerprint;
+- later init opens the existing keyfile and displays the same fingerprint when
+  the normalized namespace and public identity match;
+- `status` and `doctor` display the redacted fingerprint without contacting the
+  backend in their normal local-only mode;
+- `init --expect-domain-fingerprint VALUE` rejects a mismatch before a new
+  keyfile is published or local configuration is saved.
 
-A fingerprint confirms which domain a device is opening; it is not, by itself, an
-access-control mechanism.
+A fingerprint confirms which configured namespace a device is opening; it is
+not, by itself, an access-control mechanism.
 
 ### 2.3 Enrollment and revocation
 
@@ -129,25 +130,21 @@ Manual identities are user-declared capabilities, not proof that two directories
 contain the same files. Workspace fingerprints and restore safety checks remain
 responsible for detecting divergent content.
 
-### 4.2 Current implementation gap
+### 4.2 Shared current-project resolver
 
-The project package can identify a manual name and the project command can persist
-a binding, but the current push/watch/list/pull/resume paths still call the
-automatic Git-based identifier resolver directly. As a result, a no-Git
-directory is reported as unstable and a binding alone does not yet make the
-normal sync path work.
-
-This is an implementation gap, not an intentional security boundary. The fix
-must introduce one shared current-project resolver:
+The shared CLI resolver now applies one rule to the current-project consumers:
 
 1. use a stable Git-remote identity when one exists;
-2. otherwise look up an explicit binding for the current canonical root;
+2. otherwise look up an explicit binding for the current canonical root or its
+   containing bound root;
 3. fail closed when neither identity exists;
 4. return the same identity to push, watch, list, pull, resume, history, status,
-   and project-policy checks.
+   remote lifecycle, and project-policy checks.
 
-The resolver must never fall back to an absolute path or silently invent a
-machine-specific identity.
+It never falls back to an absolute path or silently invents a
+machine-specific identity. A no-Git directory with no binding remains unstable
+and produces an actionable error. A binding with conflicting identities for the
+same root is rejected rather than guessed.
 
 ## 5. Acceptance matrix
 
@@ -158,7 +155,7 @@ machine-specific identity.
 | Existing keyfile, wrong passphrase | Join fails before data access |
 | Existing keyfile, unexpected public identity | Configuration/keyfile mismatch fails closed |
 | Two Git checkouts of one project | Same project ID when their canonical Git remote matches |
-| Two no-Git roots with the same manual identity | Same project namespace after the shared resolver is implemented |
+| Two no-Git roots with the same manual identity | Same project namespace through the shared resolver |
 | Two no-Git roots with different manual identities | Separate project namespaces |
 | No-Git root without a binding | No push, no remote read, and an actionable error |
 | Multiple configured projects | Only the current project is processed by push/watch |

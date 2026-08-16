@@ -13,7 +13,6 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
@@ -134,7 +133,7 @@ func collectPullCheck(ctx context.Context, c *config.Config, configDir, projectD
 		return pullCheckReport{}, errors.New("pull: prompt output is required")
 	}
 
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return pullCheckReport{}, fmt.Errorf("pull: identify the current project: %w", err)
 	}

@@ -19,10 +19,10 @@
 | 范围 | 状态 | 结论 |
 |---|---|---|
 | 核心同步链路 | ✅ | 配置、密钥、Adapter、Remote、增量 push、元数据、恢复、队列和 CLI 主链路均已落地 |
-| 同步域与设备入组 | 🟡 | 当前以 Remote namespace + keyfile 隐式划分；设备分支已隔离，但域指纹、邀请加入和访问撤销尚未实现 |
-| 多项目范围与项目策略 | 🟡 | push/watch 当前只处理当前项目，normal/push-only/excluded 已有；无 Git 手工身份尚未接入主同步路径 |
+| 同步域与设备入组 | 🟡 | 当前同步域由 Remote namespace + keyfile 隐式确定；domain fingerprint 已在 init/status/doctor 落地，邀请加入和访问撤销仍未实现 |
+| 多项目范围与项目策略 | ✅ | push/watch 当前只处理当前项目，normal/push-only/excluded 和无 Git manual identity 主同步路径均已接入 |
 | PRD P0 功能 | 🟡 | 主要代码、MVP 合成验收、CI 和发布基础链路已实现；真实跨平台、Agent 和 Remote 验收仍待闭环 |
-| PRD P1 功能 | 🟡 | project、device、stats、watch、history、工作区上下文、doctor、shell completion 均有基础实现；同步域确认、无 Git 项目和真实跨设备验收仍待补 |
+| PRD P1 功能 | 🟡 | project、device、stats、watch、history、工作区上下文、doctor、shell completion 和 manual identity 均有基础实现；同步域入组与真实跨设备验收仍待补 |
 | PoC-1 路径与恢复 | 🟡 | 同操作系统/同机模拟通过部分范围，真实 Windows ↔ POSIX 和复杂会话仍待验证 |
 | PoC-1b 新设备恢复 | ✅ | 同机模拟的第二设备流程已通过；真实跨系统和复杂会话仍属于补充验收 |
 | PoC-2 工作区指纹 | ✅ | 9 个场景和 454 文件基准已有 PoC 记录与实现 |
@@ -63,7 +63,7 @@
 | touched 记录和增量读取 | ✅ | 已有 touched 状态、游标和增量读取逻辑 |
 | Hook | ✅ | 已实现 Claude 相关 hook 的安装/检查基础能力 |
 | Git 项目识别 | ✅ | 已实现 Git identity、项目目录识别和项目元数据 |
-| 手工/无 Git 项目身份 | 🟡 | project bind --name 已能保存 manual identity，但 push/watch/list/pull/resume 尚未统一读取该 binding |
+| 手工/无 Git 项目身份 | ✅ | project bind --name 保存的 manual identity 已由共享 current-project resolver 接入 push/watch/list/pull/resume/history/status/remote |
 | 工作区指纹 | ✅ | internal/project/fingerprint.go 已实现 Git 状态、相对路径和排除规则相关指纹 |
 | 模糊测试 | ✅ | ReadRecords、Canonicalize、Decrypt、ParseShard 等关键边界已有 fuzz 测试 |
 
@@ -93,7 +93,7 @@
 | agentsync resume | ✅ | 选择版本并执行恢复；远端 body 读取前有设备模式和工作区检查 |
 | agentsync push | ✅ | 增量上传、元数据发布、队列重试 |
 | agentsync doctor | ✅ | 配置、backend、Agent、版本、兼容性、hook、项目检查和脱敏的最近错误历史均已覆盖 |
-| agentsync project | 🟡 | 项目策略、Git/manual identity 配置命令已实现；manual binding 尚未接入所有当前项目消费命令 |
+| agentsync project | ✅ | 项目策略、Git/manual identity 配置命令和当前项目共享解析已实现 |
 | agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；真实 Remote 故障验收待补 |
 | agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
 | agentsync remote | ✅ | 支持按会话、按项目和清空 Remote；删除前统一确认并支持 --yes，失败时报告已删除对象数 |
@@ -121,11 +121,11 @@
 - 一个同步域可以包含多个项目；project ID 从同步域密钥和项目稳定身份派生，项目之间不会共享 session 历史；
 - 当前 push/watch/list/pull/resume/history 都围绕当前项目运行，不会默认扫描整台机器的所有 Claude Code 项目；
 - project mode 的 normal、push-only、excluded 是项目级策略，与设备级 normal、push-only、disabled 分开；
-- 当前同步域是 Remote namespace + keyfile 的隐式组合；设备 ID 只区分组内 branch，不负责入组授权；
-- 需要新增非秘密 domain fingerprint，用于 init/status/doctor 确认两台设备打开的是同一个同步域；
+- 当前同步域是 Remote namespace + keyfile 的隐式组合；设备 ID 只区分组内 branch，不负责入组授权；domain fingerprint 已用于确认配置是否指向同一同步域；
+- domain fingerprint：✅ 已接入 init 输出、`--expect-domain-fingerprint` 校验、status 和 doctor 展示；
 - 需要后续设计一次性 invite/join 和真正的设备访问撤销；当前 device remove 只删除远端数据，不能撤销设备已有的密钥材料；
-- 无 Git 项目应使用跨设备稳定的 manual identity，例如 manual:client-project，不能使用绝对路径、用户名或主机名；
-- 当前 project bind --name 可以保存 manual identity，但主同步命令尚未统一读取 binding，这是下一项 P1 代码修复。
+- 无 Git 项目应使用跨设备稳定的 manual identity，例如 manual:client-project，不能使用绝对路径、用户名或主机名；共享 resolver 已接入主同步路径；
+- 当前 project bind --name 的 binding 已由主同步命令统一读取；无 binding 时仍按 fail-closed 规则拒绝自动同步。
 
 ## 3. 仍需推进的 P0 / MVP 项
 
@@ -213,7 +213,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ### 4.2 P1 用户体验
 
-状态：🟡（已有基础实现，同步域确认和无 Git 项目主链路仍待补）。
+状态：🟡（已有基础实现，显式入组和真实跨设备验收仍待补）。
 
 - 工作区差异上下文注入：✅ 已实现；resume 默认把差异说明作为本地 isMeta 记录追加到恢复会话，后续 push 会过滤该记录，--no-workspace-context 可关闭；
 - shell completion：✅ 已实现 Bash、Zsh、Fish、PowerShell 补全，入口为 agentsync completion <shell>；
@@ -221,9 +221,9 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 失败场景的文档：✅ README 和 docs/specs 已说明 metadata-only check、body read、工作区差异、设备模式和远端清理边界；
 - 设备模式的默认推荐：✅ README 已说明 normal、push-only、disabled 的适用行为；
 
-- 同步域指纹与入组确认：🟡 已记录设计，尚未实现 domain fingerprint、invite/join 和访问撤销；
+- 同步域指纹与入组确认：🟡 domain fingerprint、init expected fingerprint、status/doctor 展示已实现；invite/join 和访问撤销仍待实现；
 - 多项目选择：✅ 当前 push/watch 只处理当前项目，project mode 支持 normal、push-only、excluded；全局 --all 未规划为默认行为；
-- 无 Git 项目：🟡 manual identity 设计已记录，等待共享 current-project resolver 接入 push/watch/list/pull/resume/history/status；
+- 无 Git 项目：✅ manual identity 设计和共享 current-project resolver 已接入主同步路径，并有边界测试；
 
 ### 4.3 测试与可观测性闭环
 
@@ -310,7 +310,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 ## 8. 建议推进顺序
 
-1. 实现同步域 fingerprint、显式入组确认和共享 current-project resolver，先补齐无 Git 项目主链路。
+1. 完成显式 invite/join、设备撤销设计和真实同步域成员验收。
 2. 完成 PoC-3 真实 S3/dir 和第三方目录同步工具验收，锁定最终一致性和部分同步行为。
 3. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 4. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。

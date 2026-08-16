@@ -21,15 +21,16 @@ import (
 const initBackendTimeout = 15 * time.Second
 
 type initOptions struct {
-	backend    string
-	path       string
-	endpoint   string
-	bucket     string
-	region     string
-	prefix     string
-	device     string
-	deviceMode string
-	noHook     bool
+	backend                   string
+	path                      string
+	endpoint                  string
+	bucket                    string
+	region                    string
+	prefix                    string
+	device                    string
+	deviceMode                string
+	noHook                    bool
+	expectedDomainFingerprint string
 }
 
 type initPrompter struct {
@@ -81,6 +82,22 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		options.path = directory.Root
 	}
 
+	c := config.New()
+	c.Device.Name = options.device
+	c.Device.Mode = config.DeviceMode(options.deviceMode)
+	c.Remote = config.Remote{
+		Type:     options.backend,
+		Endpoint: options.endpoint,
+		Bucket:   options.bucket,
+		Region:   options.region,
+		Prefix:   options.prefix,
+		Path:     options.path,
+	}
+	namespace, err := syncDomainNamespace(c.Remote)
+	if err != nil {
+		return fmt.Errorf("init: derive sync domain namespace: %w", err)
+	}
+
 	passphrase, err := prompter.secret("Passphrase: ")
 	if err != nil {
 		return err
@@ -106,24 +123,17 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return fmt.Errorf("init: backend probe failed: %s", safeBackendProbeError(err))
 	}
 
-	public, identifierKey, created, err := prepareKeyMaterial(ctx, store, passphrase, prompter)
+	public, identifierKey, created, err := prepareKeyMaterial(ctx, store, passphrase, prompter, namespace, options.expectedDomainFingerprint)
 	if err != nil {
 		return err
 	}
 	defer zeroInitBytes(identifierKey)
 
-	c := config.New()
-	c.Device.Name = options.device
-	c.Device.Mode = config.DeviceMode(options.deviceMode)
-	c.Remote = config.Remote{
-		Type:     options.backend,
-		Endpoint: options.endpoint,
-		Bucket:   options.bucket,
-		Region:   options.region,
-		Prefix:   options.prefix,
-		Path:     options.path,
-	}
 	c.IdentityPublic = public
+	domainFingerprint, err := syncDomainFingerprint(c)
+	if err != nil {
+		return fmt.Errorf("init: derive sync domain fingerprint: %w", err)
+	}
 
 	secrets := &config.Secrets{
 		Credentials:   credentials,
@@ -152,6 +162,9 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	} else if _, err := fmt.Fprintln(output, "remote keyfile: opened"); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(output, "sync domain fingerprint:", domainFingerprint); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintln(output, "agentsync initialization complete")
 	return err
 }
@@ -169,12 +182,19 @@ func parseInitOptions(args []string) (initOptions, error) {
 	flags.StringVar(&options.device, "device-name", "", "display name for this device")
 	flags.StringVar(&options.deviceMode, "device-mode", "", "device mode: normal, push-only, or disabled")
 	flags.BoolVar(&options.noHook, "no-hook", false, "do not offer Agent hook installation")
+	flags.StringVar(&options.expectedDomainFingerprint, "expect-domain-fingerprint", "", "require this sync domain fingerprint")
 	if err := flags.Parse(args); err != nil {
 		return initOptions{}, fmt.Errorf("init: %w", err)
 	}
 	if flags.NArg() != 0 {
 		return initOptions{}, fmt.Errorf("init: unexpected argument %q", flags.Arg(0))
 	}
+	expectedFingerprint, err := normalizeExpectedDomainFingerprint(options.expectedDomainFingerprint)
+	if err != nil {
+		return initOptions{}, err
+	}
+	options.expectedDomainFingerprint = expectedFingerprint
+
 	if options.backend != "" {
 		options.backend = strings.ToLower(strings.TrimSpace(options.backend))
 		if options.backend != "dir" && options.backend != "s3" {
@@ -310,7 +330,7 @@ func initCredentials(configDir string, p *initPrompter) (config.Credentials, err
 	return config.Credentials{AccessKeyID: access, SecretAccessKey: secret, SessionToken: token}, nil
 }
 
-func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase string, p *initPrompter) ([]byte, []byte, bool, error) {
+func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase string, p *initPrompter, namespace, expectedFingerprint string) ([]byte, []byte, bool, error) {
 	keyfile, err := syncer.FetchKeyfile(ctx, store)
 	created := false
 	var recovery string
@@ -337,6 +357,16 @@ func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase str
 	if err != nil {
 		zeroInitBytes(identifierKey)
 		return nil, nil, false, fmt.Errorf("init: read remote identity: %w", err)
+	}
+
+	fingerprint, err := crypto.DomainFingerprint(namespace, public.Bytes())
+	if err != nil {
+		zeroInitBytes(identifierKey)
+		return nil, nil, false, fmt.Errorf("init: derive sync domain fingerprint: %w", err)
+	}
+	if expectedFingerprint != "" && !strings.EqualFold(expectedFingerprint, fingerprint) {
+		zeroInitBytes(identifierKey)
+		return nil, nil, false, errors.New("init: expected domain fingerprint does not match the configured remote")
 	}
 
 	if created {

@@ -123,6 +123,24 @@ func ManualIdentity(name string) (Identity, error) {
 	return Identity{Kind: KindManual, Value: "manual:" + name}, nil
 }
 
+// IdentityFromValue reconstructs the source kind of an identity persisted in
+// a project binding. Values outside the manual namespace are retained as
+// explicit remote-style identities for compatibility with --identity.
+func IdentityFromValue(value string) (Identity, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsRune(value, 0) {
+		return Identity{}, errors.New("project: identity value is required")
+	}
+	kind := KindRemote
+	if strings.HasPrefix(value, "manual:") {
+		if strings.TrimPrefix(value, "manual:") == "" {
+			return Identity{}, errors.New("project: manual identity name is required")
+		}
+		kind = KindManual
+	}
+	return Identity{Kind: kind, Value: value}, nil
+}
+
 func absoluteDirectory(dir string) (string, error) {
 	if strings.TrimSpace(dir) == "" {
 		dir = "."

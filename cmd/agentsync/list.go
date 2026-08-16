@@ -17,7 +17,6 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
@@ -124,7 +123,7 @@ func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, pro
 	if err := devicePullError("list", c); err != nil {
 		return listReport{}, err
 	}
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return listReport{}, fmt.Errorf("list: identify the current project: %w", err)
 	}

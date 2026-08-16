@@ -15,7 +15,6 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
@@ -159,7 +158,7 @@ func collectHistory(ctx context.Context, c *config.Config, configDir, projectDir
 		return historyReport{}, errors.New("history: encryption identity is not configured; run 'agentsync init'")
 	}
 
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return historyReport{}, fmt.Errorf("history: identify the current project: %w", err)
 	}

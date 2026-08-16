@@ -122,7 +122,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		return pushSummary{}, errors.New("push: encryption identity is not configured; run 'agentsync init'")
 	}
 
-	current, err := project.Identify(ctx, projectDir)
+	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: identify the current project: %w", err)
 	}

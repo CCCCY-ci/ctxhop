@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed; manual identity resolution in push/read paths is still pending |
+| Status | Proposed; manual identity resolution is implemented, while domain enrollment remains pending |
 | Date | 2026-08-15 |
 | Depends on | `config-layer-spec.md`, `internal/project`, `device-mode-spec.md` |
 
@@ -43,10 +43,10 @@ The same manual identity must be configured on every device that represents
 that logical project. Binding is local configuration only; it does not contact
 the backend or start a push.
 
-The current project-consuming commands still need a shared resolver that
-consults these bindings when automatic Git identification is unavailable. Until
-that resolver is implemented, a manual binding is visible to project policy
-commands but does not make push/watch/list/pull/resume work for a no-Git root.
+A shared current-project resolver now consults these bindings when automatic
+Git identification is unavailable. It is used by push, watch, list, pull, resume,
+history, status, remote lifecycle, and project policy checks. A no-Git root
+without a binding remains unstable and fails closed with actionable guidance.
 
 ## 3. Unbinding and modes
 

@@ -134,7 +134,7 @@ func runHistoryPruneWithStreams(args []string, input io.Reader, output, prompt i
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
 	defer cancel()
 
-	projectID, sessionID, err := resolveRemoteSession(ctx, configDir, options.path, options.session, options.remoteID)
+	projectID, sessionID, err := resolveRemoteSession(ctx, c, configDir, options.path, options.session, options.remoteID)
 	if err != nil {
 		return err
 	}
