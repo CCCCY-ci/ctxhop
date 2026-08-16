@@ -94,7 +94,7 @@
 | agentsync push | ✅ | 增量上传、元数据发布、队列重试 |
 | agentsync doctor | ✅ | 配置、backend、Agent、版本、兼容性、hook、项目检查和脱敏的最近错误历史均已覆盖 |
 | agentsync project | ✅ | 项目策略、Git/manual identity 配置命令和当前项目共享解析已实现 |
-| agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；真实 Remote 故障验收待补 |
+| agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；本地故障注入回归已补，真实 Remote 故障验收待补 |
 | agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
 | agentsync remote | ✅ | 支持按会话、按项目和清空 Remote；删除前统一确认并支持 --yes，失败时报告已删除对象数 |
 | agentsync stats | ✅ | 输出本地恢复统计 |
