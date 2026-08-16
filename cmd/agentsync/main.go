@@ -51,6 +51,7 @@ var commands = []command{
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},
+	{name: "completion", summary: "print shell completion script"},
 }
 
 func init() {
