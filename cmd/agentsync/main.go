@@ -40,6 +40,7 @@ var commands = []command{
 	{name: "list", summary: "list sessions available for this project"},
 	{name: "resume", summary: "restore a session onto this machine"},
 	{name: "history", summary: "list recoverable versions for a session"},
+	{name: "passphrase", summary: "change or reset the storage passphrase"},
 	{name: "stats", summary: "show local cross-device restore statistics"},
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "watch", summary: "watch local sessions and push changes"},

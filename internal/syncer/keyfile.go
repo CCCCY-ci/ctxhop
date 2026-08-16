@@ -64,6 +64,41 @@ func PublishKeyfile(ctx context.Context, store remote.Remote, keyfile *crypto.Ke
 	return nil
 }
 
+// ReplaceKeyfile updates an already initialised remote keyfile.
+//
+// Replacing the envelope is an explicit lifecycle operation: the caller must
+// fetch and validate the current keyfile first. Refusing to create a missing
+// keyfile prevents a mistyped backend from looking like a successful password
+// rotation that created a second, empty storage.
+func ReplaceKeyfile(ctx context.Context, store remote.Remote, keyfile *crypto.Keyfile) error {
+	if ctx == nil {
+		return errors.New("syncer: context is required")
+	}
+	if store == nil {
+		return errors.New("syncer: remote store is required")
+	}
+	data, err := crypto.MarshalKeyfile(keyfile)
+	if err != nil {
+		return fmt.Errorf("syncer: encode keyfile: %w", err)
+	}
+	if len(data) > maxKeyfileBytes {
+		return fmt.Errorf("%w: maximum is %d bytes", ErrRemoteKeyfileTooLarge, maxKeyfileBytes)
+	}
+	if _, err := store.Stat(ctx, crypto.KeyfilePath()); err != nil {
+		if errors.Is(err, remote.ErrNotFound) {
+			return ErrNoRemoteKeyfile
+		}
+		return fmt.Errorf("syncer: check remote keyfile before replacement: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("syncer: replace keyfile: %w", err)
+	}
+	if err := store.Put(ctx, crypto.KeyfilePath(), bytesReader(data), int64(len(data))); err != nil {
+		return fmt.Errorf("syncer: replace keyfile: %w", err)
+	}
+	return nil
+}
+
 // FetchKeyfile reads and parses the bounded remote envelope. It never unlocks
 // the keyfile: passphrases and recovery keys belong to the CLI interaction
 // layer, not to remote storage plumbing.

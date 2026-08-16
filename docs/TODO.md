@@ -40,7 +40,7 @@
 | 配置层 | ✅ | internal/config 已提供配置加载、校验、保存和默认值处理 |
 | 初始化流程 | ✅ | agentsync init 创建配置、设备身份和本地密钥材料；口令通过交互输入，不从命令行参数接收 |
 | 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力 |
-| 口令 API | ✅ | keyfile 已有 ChangePassphrase 和 ResetPassphrase API；CLI 入口仍列在未完成项 |
+| 口令 API | ✅ | keyfile 已有 ChangePassphrase 和 ResetPassphrase API；agentsync passphrase change/reset CLI 已接入，真实远端验收待补 |
 | 本地目录 Remote | ✅ | internal/remote/dir 已实现对象读写、列表和目录布局 |
 | S3 Remote | ✅ | internal/remote/s3 与 SigV4 相关实现已存在 |
 | 远端对象布局 | ✅ | 项目、会话、设备、分片和元数据使用稳定的版本化布局 |
@@ -188,8 +188,8 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 状态：⬜ / 🟡。
 
-- 口令更换 CLI：crypto 层已有 ChangePassphrase，但尚无用户可执行的 change-passphrase 命令和完整发布流程；
-- Recovery Key 重置 CLI：底层 API 已有，尚未提供清晰的交互入口、备份确认和失败恢复说明；
+- 口令更换 CLI：✅ 已实现 `agentsync passphrase change`；保留数据密钥并替换已存在的远端 keyfile，仍需真实远端故障验收；
+- Recovery Key 重置 CLI：✅ 已实现 `agentsync passphrase reset`；使用 Recovery Key 替换远端 keyfile，仍需补充 Recovery Key 备份提示和真实故障验收；
 - 远端删除会话：PRD 要求按会话删除，当前没有对应 CLI；
 - 远端删除项目：当前没有对应 CLI；
 - 清空整个 Remote：当前没有对应 CLI；
@@ -296,7 +296,7 @@ PRD §18 要求目前尚未形成完整交付链：
 1. 完成 PoC-3 真实 S3/dir 和第三方目录同步工具验收，锁定最终一致性和部分同步行为。
 2. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 3. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。
-4. 补齐远端删除、历史清理、口令更换/重置 CLI 等安全与生命周期能力。
+4. 补齐远端删除和历史清理，并对 passphrase change/reset 做真实远端故障验收。
 5. 实现工作区差异上下文注入，并完善 doctor 最近错误。
 6. 建立 CI、发布包、安装方式和 README 五分钟指南。
 7. 最后推进 shell completion、P2 Remote 和更多 Agent。
