@@ -60,6 +60,9 @@ func CanonicalizeSession(data adapter.SessionData, space adapter.PathSpace, inst
 	canonicalizer := adapter.NewCanonicalizer(space)
 	records := make([][]byte, 0, len(data.Records))
 	for i, record := range data.Records {
+		if isWorkspaceContextRecord(record) {
+			continue
+		}
 		canonical, err := canonicalizer.Record(record)
 		if err != nil {
 			cause := errors.Join(ErrInvalidSessionSnapshot, err)

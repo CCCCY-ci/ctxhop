@@ -26,21 +26,23 @@ import (
 const resumeTimeout = 60 * time.Second
 
 type resumeOptions struct {
-	json            bool
-	allowLimited    bool
-	allowDivergent  bool
-	replaceExisting bool
-	version         int
-	session         string
+	json               bool
+	allowLimited       bool
+	allowDivergent     bool
+	noWorkspaceContext bool
+	replaceExisting    bool
+	version            int
+	session            string
 }
 
 type resumeReport struct {
-	Session     string   `json:"session"`
-	Title       string   `json:"title"`
-	Workspace   string   `json:"workspace"`
-	Differences int      `json:"differences"`
-	Replaced    bool     `json:"replaced"`
-	Sources     []string `json:"sources"`
+	Session         string   `json:"session"`
+	Title           string   `json:"title"`
+	Workspace       string   `json:"workspace"`
+	Differences     int      `json:"differences"`
+	Replaced        bool     `json:"replaced"`
+	ContextInjected bool     `json:"contextInjected"`
+	Sources         []string `json:"sources"`
 }
 
 type resumeCandidate struct {
@@ -109,6 +111,7 @@ func parseResumeOptions(args []string) (resumeOptions, error) {
 	flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
 	flags.BoolVar(&options.allowLimited, "allow-limited", false, "allow restore for an unverified agent version")
 	flags.BoolVar(&options.allowDivergent, "allow-divergent", false, "allow restore despite a divergent workspace")
+	flags.BoolVar(&options.noWorkspaceContext, "no-workspace-context", false, "do not inject workspace differences into the restored session")
 	flags.BoolVar(&options.replaceExisting, "replace-existing", false, "replace an existing local session")
 	flags.IntVar(&options.version, "version", -1, "select a zero-based remote fork version")
 	if err := flags.Parse(args); err != nil {
@@ -243,10 +246,11 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		return resumeReport{}, errors.New("resume: selected session has no matching workspace fingerprint; push it again from the source device")
 	}
 	result, err := syncflow.ApplyRestore(ctx, layout, current.Root, candidate.Summary.NativeID, plan, syncflow.RestoreApplyOptions{
-		Fingerprint:     fingerprint,
-		AllowLimited:    options.allowLimited,
-		AllowDivergent:  options.allowDivergent,
-		ReplaceExisting: options.replaceExisting,
+		Fingerprint:            fingerprint,
+		AllowLimited:           options.allowLimited,
+		AllowDivergent:         options.allowDivergent,
+		InjectWorkspaceContext: !options.noWorkspaceContext,
+		ReplaceExisting:        options.replaceExisting,
 	})
 	if err != nil {
 		return resumeReport{}, safeResumeApplyError(err)
@@ -260,12 +264,13 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	sources := append([]string(nil), plan.Devices...)
 	sort.Strings(sources)
 	return resumeReport{
-		Session:     candidate.Summary.NativeID,
-		Title:       safeListText(candidate.Summary.Title),
-		Workspace:   result.Workspace.Verdict.String(),
-		Differences: len(result.Workspace.Files),
-		Replaced:    result.Replaced,
-		Sources:     sources,
+		Session:         candidate.Summary.NativeID,
+		Title:           safeListText(candidate.Summary.Title),
+		Workspace:       result.Workspace.Verdict.String(),
+		Differences:     len(result.Workspace.Files),
+		Replaced:        result.Replaced,
+		ContextInjected: result.ContextInjected,
+		Sources:         sources,
 	}, nil
 }
 
@@ -411,7 +416,7 @@ func safeResumePlanError(err error) error {
 
 func safeResumeApplyError(err error) error {
 	switch {
-	case errors.Is(err, syncflow.ErrWorkspaceDiverged), errors.Is(err, syncflow.ErrWorkspaceFingerprintRequired), errors.Is(err, syncflow.ErrRestoreCompatibility), errors.Is(err, adapter.ErrSessionExists):
+	case errors.Is(err, syncflow.ErrWorkspaceDiverged), errors.Is(err, syncflow.ErrWorkspaceFingerprintRequired), errors.Is(err, syncflow.ErrWorkspaceContextInjection), errors.Is(err, syncflow.ErrRestoreCompatibility), errors.Is(err, adapter.ErrSessionExists):
 		return fmt.Errorf("resume: %w", err)
 	default:
 		return errors.New("resume: session was not written because a safety check failed")
@@ -444,6 +449,10 @@ func writeResumeText(w io.Writer, report resumeReport) error {
 	}
 	if report.Replaced {
 		_, err := fmt.Fprintln(w, "existing session: replaced")
+		return err
+	}
+	if report.ContextInjected {
+		_, err := fmt.Fprintln(w, "workspace context: injected")
 		return err
 	}
 	return nil

@@ -22,6 +22,10 @@ var (
 	// source fingerprint and was not explicitly approved.
 	ErrWorkspaceDiverged = errors.New("syncflow: target workspace diverges from the session")
 
+	// ErrWorkspaceContextInjection reports a failure to build the local-only
+	// explanation that is appended when the caller enables it for a non-consistent workspace.
+	ErrWorkspaceContextInjection = errors.New("syncflow: workspace context injection failed")
+
 	// ErrWorkspaceCheck reports a failure while comparing the target project.
 	ErrWorkspaceCheck = errors.New("syncflow: workspace comparison failed")
 
@@ -60,6 +64,10 @@ type RestoreApplyOptions struct {
 
 	// ReplaceExisting selects the adapter's explicit replacement operation.
 	ReplaceExisting bool
+	// InjectWorkspaceContext appends a local-only explanation when the caller
+	// enables a non-consistent workspace explanation. The marker is filtered from
+	// future remote pushes.
+	InjectWorkspaceContext bool
 }
 
 // RestoreApplyResult reports the workspace decision and whether an existing
@@ -68,6 +76,9 @@ type RestoreApplyOptions struct {
 type RestoreApplyResult struct {
 	Workspace project.Report
 	Replaced  bool
+	// ContextInjected reports that the restored local session received a
+	// local-only workspace difference explanation.
+	ContextInjected bool
 }
 
 type workspaceComparer func(context.Context, string, project.Fingerprint) (project.Report, error)
@@ -119,11 +130,21 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 		return result, fmt.Errorf("syncflow: apply restore: %w", err)
 	}
 
+	localized := plan.LocalizedRecords
+	if options.InjectWorkspaceContext && report.Verdict != project.Consistent {
+		contextRecord, err := workspaceContextRecordFor(report)
+		if err != nil {
+			return result, fmt.Errorf("%w: %v", ErrWorkspaceContextInjection, err)
+		}
+		localized = append(cloneRestoreRecords(plan.LocalizedRecords), contextRecord)
+		result.ContextInjected = true
+	}
+
 	var writeErr error
 	if options.ReplaceExisting {
-		writeErr = writer.ReplaceSession(projectRoot, sessionID, plan.LocalizedRecords)
+		writeErr = writer.ReplaceSession(projectRoot, sessionID, localized)
 	} else {
-		writeErr = writer.WriteSession(projectRoot, sessionID, plan.LocalizedRecords)
+		writeErr = writer.WriteSession(projectRoot, sessionID, localized)
 	}
 	if writeErr != nil {
 		return result, fmt.Errorf("%w: %w", ErrRestoreWrite, writeErr)
