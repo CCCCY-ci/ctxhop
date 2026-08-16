@@ -159,6 +159,7 @@ endpoint、region、bucket、access key、secret key、路径前缀、寻址方�
 * **`NoSuchKey` / 404 映射为 `remote.ErrNotFound`**；**其他任何错误一律不得映射为 ErrNotFound**。把传输故障当成"对象不存在"，会让同步层断定其他设备没推过东西（PRD 明确点名的错误）。
 * List 的分页（continuation token），不得只取第一页。
 * 所有请求必须有超时，后端不可达时快速失败（§11.2）。
+* 所有 Remote 操作必须尊重调用方 context；Put 在读取调用方 body 期间也必须响应取消，并在取消后不发布半成品对象。
 * 重试限于幂等操作与可重试状态码，需退避；不得无限重试。
 * 错误信息必须指出下一步（例：`cannot reach bucket "x": check endpoint and credentials with 'agentsync doctor'`），且不得包含凭据。
 
@@ -186,6 +187,7 @@ endpoint、region、bucket、access key、secret key、路径前缀、寻址方�
 * **分页**：多页列举必须取全。
 * **键校验**：`..`、绝对路径、反斜杠、空键一律拒绝，且拒绝时不得创建任何文件。
 * **原子性**：`dir` 写入中断后目录中不得出现半个分片，也不得残留临时文件。
+* 取消：在 Put body 读取期间取消 context，dir 和 S3 都必须返回 context.Canceled（或等价取消错误），且不可留下已发布对象。
 * **path-style 与 virtual-host** 两种寻址各自的 URL 构造。
 * **最终一致性**：模拟 List 滞后，断言上层能区分"缺口"与"确实没有"。
 

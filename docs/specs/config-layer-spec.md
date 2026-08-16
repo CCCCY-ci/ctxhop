@@ -132,6 +132,7 @@ func (c *Config) Redacted() Config          // 供 doctor 使用
 | secrets 存在但 device.key 丢失 | 报错说明凭据无法解开，指向重新 `init` 后端凭据（**不会影响已加密的会话**） |
 | device.key 存在但 secrets 丢失 | 同上 |
 | 环境变量只提供了一半凭据 | 报错，**绝不与磁盘上的凭据混用**——半套凭据比没有更难排查 |
+| 生成 device.key 的随机源失败 | 报错并中止，**不得发布半成品 device.key** |
 | 写入过程中断电 | 原子替换，只可能留下旧的或新的 |
 | 两个进程同时写 | 后写者胜。绑定丢失是可察觉且可重做的，不做锁 |
 | Windows 上 0600 不生效 | 记录在案；不假装权限位在所有平台等效 |
@@ -164,6 +165,7 @@ func (c *Config) Redacted() Config          // 供 doctor 使用
 * 权限：POSIX 上断言 0600；Windows 上跳过并说明。
 * 中断：写入中途失败 → 断言旧内容完好（用 `atomicfile` 已有的注入方式）。
 * device.key 与 secrets 各自缺失时的两条错误路径。
+* 设备密钥随机源失败：断言返回错误且 device.key 不存在或仍保持旧内容。
 
 ### 5.2 不测
 

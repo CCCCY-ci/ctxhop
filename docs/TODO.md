@@ -1,6 +1,6 @@
 # AgentSync 开发 TODO 与完成情况
 
-> 盘点基线：2026-08-16；实现基线：16b7b4e feat(sync): bind configs to sync domain；本次 TODO 同步随当前提交完成。
+> 盘点基线：2026-08-16；实现基线：9d8b1ef test(cli): isolate watch agent absence fixture；本次 TODO 同步随当前提交完成。
 > 依据：PRD v2.0、docs/specs 下的模块规格、poc 记录、当前源代码和测试。
 > 本文只记录当前仓库已经能证明的状态；“代码存在”不等于“跨平台验收已经完成”。
 
@@ -41,7 +41,7 @@
 |---|---|---|
 | 配置层 | ✅ | internal/config 已提供配置加载、校验、保存和默认值处理 |
 | 初始化流程 | ✅ | agentsync init 创建配置、设备身份和本地密钥材料；口令通过交互输入，不从命令行参数接收 |
-| 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力 |
+| 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力；internal/config/secrets.go 及其回归测试已纳入版本控制，随机源失败时不会发布半成品 device.key |
 | 口令 API | ✅ | keyfile 已有 ChangePassphrase 和 ResetPassphrase API；agentsync passphrase change/reset CLI 已接入，真实远端验收待补 |
 | 本地目录 Remote | ✅ | internal/remote/dir 已实现对象读写、列表和目录布局 |
 | S3 Remote | ✅ | internal/remote/s3 与 SigV4 相关实现已存在 |
@@ -231,6 +231,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 - 关键包已有单元测试、集成测试和部分 fuzz 测试，且稳定回归测试已纳入仓库；
 - 稳定回归测试：✅ 已取消测试代码的全局忽略并纳入仓库；本地真实 Agent 数据和敏感 fixture 仍按 .gitignore 忽略；
+- 基础契约回归：✅ dir/S3 写入在 body 读取期间响应取消且不发布对象；命令注册表完整性、归档干净树构建和 watch 缺少 Agent fixture 隔离均已覆盖；
 - 还缺少真实 Agent、真实 Remote、跨系统和故障注入矩阵；
 - CI 已上传 go test JSON 报告，docs/acceptance/README.md 已提供失败样本和版本兼容记录模板；真实失败样本仍需在外部矩阵中补齐。
 
@@ -246,6 +247,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 已完成：CI 运行交叉构建并上传六个产物；交叉编译和发布脚本均使用 trimpath。
 - 仍需：真实 Agent 集成测试、本地目录 Remote 之外的真实 S3/第三方同步工具矩阵。
 - 已完成：scripts/build.sh 和 scripts/build.ps1 在当前主机目标属于六目标矩阵时执行 `version`/`help` 启动烟测；非主机目标仍只做交叉编译。
+- 已完成：使用 `git archive HEAD` 在无未跟踪文件的干净树中执行 `go test ./...`，验证发布提交包含必要源码（包括本地 secrets 实现）。
 - 仍需：对非主机目标做目标系统启动检查和可复现构建抽样验证。
 ### 5.2 发布和安装
 
