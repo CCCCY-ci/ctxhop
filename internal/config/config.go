@@ -66,6 +66,11 @@ type Config struct {
 	Version int    `json:"version"`
 	Device  Device `json:"device"`
 	Remote  Remote `json:"remote"`
+	// DomainFingerprint binds this installation to the normalized Remote
+	// namespace and the pinned encryption identity recorded during init. It is
+	// non-secret and lets commands fail closed when a configuration is pointed
+	// at a different storage namespace by hand.
+	DomainFingerprint string `json:"domainFingerprint,omitempty"`
 	// IdentityPublic is the key this machine encrypts to, pinned at init.
 	//
 	// Pinned rather than read from storage each time: the keyfile lives in the

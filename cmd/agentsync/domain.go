@@ -100,3 +100,16 @@ func normalizeExpectedDomainFingerprint(value string) (string, error) {
 	}
 	return value, nil
 }
+
+func domainBindingState(c *config.Config, current string) string {
+	if c == nil || strings.TrimSpace(c.DomainFingerprint) == "" {
+		return "unbound"
+	}
+	if current == "" {
+		return "invalid"
+	}
+	if strings.EqualFold(strings.TrimSpace(c.DomainFingerprint), current) {
+		return "bound"
+	}
+	return "mismatch"
+}

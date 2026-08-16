@@ -28,7 +28,7 @@ backend. It is the only command that creates the first remote keyfile.
 8. Init displays a non-secret sync-domain fingerprint derived from the
    normalized Remote namespace and the pinned public identity. When joining an
    existing namespace, `--expect-domain-fingerprint` may require an exact
-   fingerprint match; a mismatch stops before local configuration is saved.
+   fingerprint match; a mismatch stops before local configuration is saved. The accepted fingerprint is persisted in `config.json` as a non-secret binding for later commands.
 
 ## Failure boundary
 

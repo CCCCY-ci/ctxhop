@@ -48,8 +48,9 @@ or human-readable error strings.
 
 The local device ID is part of both the queue key and object layout. A device
 publishes to its own branch only. Uploading on device A does not list, fetch,
-or restore A's remote branch, so the normal upload path performs no redundant
-self-pull. Foreign branch inspection belongs to the metadata-only pull check
+or restore A's remote branch. It reads only the small remote keyfile first to
+verify the pinned identity and persisted namespace binding, so the normal
+upload path performs no redundant self-pull. Foreign branch inspection belongs to the metadata-only pull check
 and explicit restore flow.
 
 The effective local device mode is applied before backend setup. `push-only`

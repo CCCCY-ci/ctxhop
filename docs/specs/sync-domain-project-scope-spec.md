@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed; domain fingerprinting and manual-identity consumption are implemented, while enrollment and revocation remain unfinished |
+| Status | Proposed; domain fingerprinting, persisted namespace binding, keyfile validation and manual-identity consumption are implemented, while capability-based enrollment and revocation remain unfinished |
 | Date | 2026-08-16 |
 | Depends on | cli-init-spec.md, cli-project-spec.md, cli-push-spec.md, cli-watch-spec.md, device-mode-spec.md, crypto-spec.md |
 
@@ -60,10 +60,17 @@ The implemented flow is:
 - `status` and `doctor` display the redacted fingerprint without contacting the
   backend in their normal local-only mode;
 - `init --expect-domain-fingerprint VALUE` rejects a mismatch before a new
-  keyfile is published or local configuration is saved.
+  keyfile is published or local configuration is saved;
+- new configurations persist the accepted fingerprint in `config.json`;
+- core Remote commands compare the current namespace with that binding, and
+  push reads only the keyfile object before writing session data;
+- `status` and `doctor` report a namespace binding mismatch without treating a
+  reachable but different Remote as healthy.
 
-A fingerprint confirms which configured namespace a device is opening; it is
-not, by itself, an access-control mechanism.
+A fingerprint confirms which configured namespace a device is opening and
+prevents accidental namespace drift; it is not, by itself, an access-control
+mechanism. The expected-fingerprint init flag is the current explicit join
+confirmation; it does not grant a one-time capability.
 
 ### 2.3 Enrollment and revocation
 

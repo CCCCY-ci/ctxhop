@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -157,16 +156,9 @@ func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, pro
 	if err != nil {
 		return listReport{}, fmt.Errorf("list: configure backend: %s", safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "list")
 	if err != nil {
-		return listReport{}, fmt.Errorf("list: read remote keyfile: %w", err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return listReport{}, fmt.Errorf("list: validate remote identity: %w", err)
-	}
-	if !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return listReport{}, errors.New("list: remote encryption identity does not match this configuration")
+		return listReport{}, err
 	}
 
 	passphrase, err := readListPassphrase(input, prompt)

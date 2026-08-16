@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -182,16 +181,9 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, fmt.Errorf("resume: configure backend: %s", safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "resume")
 	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: read remote keyfile: %w", err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: validate remote identity: %w", err)
-	}
-	if !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return resumeReport{}, errors.New("resume: remote encryption identity does not match this configuration")
+		return resumeReport{}, err
 	}
 
 	prompter := &resumePrompter{reader: bufio.NewReader(input), output: prompt}

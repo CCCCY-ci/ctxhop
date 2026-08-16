@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/ecdh"
 	"encoding/json"
@@ -258,16 +257,9 @@ func openDeviceRemote(ctx context.Context, c *config.Config, configDir, command 
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: configure backend: %s", command, safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, command)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s: read remote keyfile: %w", command, err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s: validate remote identity: %w", command, err)
-	}
-	if len(c.IdentityPublic) == 0 || !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return nil, nil, fmt.Errorf("%s: remote encryption identity does not match this configuration", command)
+		return nil, nil, err
 	}
 	return store, keyfile, nil
 }

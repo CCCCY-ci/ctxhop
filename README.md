@@ -60,7 +60,10 @@ different device branch. A domain may contain multiple projects. The current
 project is selected from the working directory; push and watch do not scan every
 project on the machine. Init prints a non-secret domain fingerprint; a new
 device can pass `--expect-domain-fingerprint VALUE` to reject an unexpected
-namespace. Project policy can be changed locally:
+namespace. New configurations persist that fingerprint locally; core Remote
+commands reject a manually changed namespace, and push reads only the small
+keyfile object to verify the pinned identity before uploading. Project policy
+can be changed locally:
 
     agentsync project mode normal
     agentsync project mode push-only
@@ -129,7 +132,7 @@ workspace semantics.
 |---|---|---|
 | Encrypted local sync/restore path | Implemented locally | `internal/syncflow`, `internal/syncer`, CLI commands and tests |
 | Cross-device device identity and modes | Implemented locally | `device`, `device-mode-spec.md` and sync-flow guards |
-| Sync domain membership | In progress | Domain fingerprint and expected-fingerprint confirmation are implemented; invite/join and revocation remain pending |
+| Sync domain membership | In progress | Domain fingerprint, persisted namespace binding and keyfile checks are implemented; capability-based invite/join and revocation remain pending |
 | Multi-project scope | Implemented locally | `push`/`watch` process the current project; project policies are `normal`, `push-only` or `excluded` |
 | No-Git manual project identity | Implemented locally | `project bind --name` is consumed by the shared current-project resolver across project-consuming commands |
 | Workspace fingerprint safety | Implemented locally | PoC-2, restore checks and local-only difference context |

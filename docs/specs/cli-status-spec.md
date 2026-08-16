@@ -31,7 +31,9 @@ mode is reported without prompting for the passphrase.
 
 The local device mode is included in the redacted configuration report. A
 push-only or disabled device reports its remote boundary without opening local
-secrets or contacting the backend.
+secrets or contacting the backend. The configuration report also exposes the
+non-secret domain fingerprint and whether the persisted namespace binding is
+`bound`, `mismatch`, `invalid`, or `unbound`.
 
 ## 3. Reported counters
 

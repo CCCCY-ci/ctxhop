@@ -40,6 +40,7 @@ type statusConfiguration struct {
 	Device            statusDevice     `json:"device"`
 	Identity          statusReadiness  `json:"identity"`
 	DomainFingerprint string           `json:"domainFingerprint,omitempty"`
+	DomainBinding     string           `json:"domainBinding"`
 	Projects          statusProjectSet `json:"projects"`
 	Agents            []statusAgent    `json:"agents,omitempty"`
 }
@@ -140,6 +141,7 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 
 	summary := c.Summarise()
 	domainFingerprint, _ := syncDomainFingerprint(c)
+	domainBinding := domainBindingState(c, domainFingerprint)
 	report := statusReport{
 		Scope: "global",
 		Configuration: statusConfiguration{
@@ -152,6 +154,7 @@ func collectStatus(c *config.Config, dir string) (statusReport, error) {
 			Device:            statusDevice{Configured: summary.DeviceIdentified, Mode: summary.DeviceMode},
 			Identity:          statusReadiness{Configured: summary.IdentityPinned},
 			DomainFingerprint: domainFingerprint,
+			DomainBinding:     domainBinding,
 			Projects: statusProjectSet{
 				Bound:    summary.BoundProjects,
 				Excluded: summary.ExcludedProjects,
@@ -253,7 +256,7 @@ func writeStatusText(w io.Writer, report statusReport) error {
 	if domainFingerprint == "" {
 		domainFingerprint = "unavailable"
 	}
-	if _, err := fmt.Fprintf(w, "  domain fingerprint: %s\n", domainFingerprint); err != nil {
+	if _, err := fmt.Fprintf(w, "  domain fingerprint: %s (binding=%s)\n", domainFingerprint, report.Configuration.DomainBinding); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  projects: bound=%d excluded=%d push-only=%d\n",

@@ -129,6 +129,10 @@ func probeBackend(ctx context.Context, c *config.Config, configDir string) docto
 		return doctorCheck{Status: "not-configured", Reason: "configuration is unavailable; run agentsync init"}
 	}
 
+	if err := validateConfiguredDomain(c, "doctor"); err != nil {
+		return doctorCheck{Status: "failed", Reason: "configured sync domain binding does not match the local Remote settings"}
+	}
+
 	store, err := buildConfiguredRemote(c, configDir)
 	if err != nil {
 		return doctorCheck{Status: "not-configured", Reason: safeBackendSetupError(err)}

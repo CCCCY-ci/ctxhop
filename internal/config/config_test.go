@@ -21,6 +21,7 @@ func fullConfig() *Config {
 		Prefix:   "agentsync/",
 	}
 	c.IdentityPublic = []byte{1, 2, 3, 4}
+	c.DomainFingerprint = "domain-fingerprint-test"
 	c.Projects = Projects{
 		Bindings: []Binding{
 			{Identity: "github.com/acme/secret-app", LocalRoot: filepath.Join("C:", "work", "secret app")},
@@ -49,6 +50,9 @@ func TestConfigRoundTrip(t *testing.T) {
 	}
 	if got.Remote != want.Remote {
 		t.Errorf("remote = %+v, want %+v", got.Remote, want.Remote)
+	}
+	if got.DomainFingerprint != want.DomainFingerprint {
+		t.Errorf("domain fingerprint = %q, want %q", got.DomainFingerprint, want.DomainFingerprint)
 	}
 	if len(got.Projects.Bindings) != 1 || got.Projects.Bindings[0] != want.Projects.Bindings[0] {
 		t.Errorf("bindings = %+v", got.Projects.Bindings)

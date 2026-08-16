@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -188,16 +187,9 @@ func collectHistory(ctx context.Context, c *config.Config, configDir, projectDir
 	if err != nil {
 		return historyReport{}, fmt.Errorf("history: configure backend: %s", safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "history")
 	if err != nil {
-		return historyReport{}, fmt.Errorf("history: read remote keyfile: %w", err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return historyReport{}, fmt.Errorf("history: validate remote identity: %w", err)
-	}
-	if !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return historyReport{}, errors.New("history: remote encryption identity does not match this configuration")
+		return historyReport{}, err
 	}
 
 	passphrase, err := readCommandPassphrase(input, prompt, "history")

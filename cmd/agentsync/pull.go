@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -169,16 +168,9 @@ func collectPullCheck(ctx context.Context, c *config.Config, configDir, projectD
 	if err != nil {
 		return pullCheckReport{}, fmt.Errorf("pull: configure backend: %s", safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "pull")
 	if err != nil {
-		return pullCheckReport{}, fmt.Errorf("pull: read remote keyfile: %w", err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return pullCheckReport{}, fmt.Errorf("pull: validate remote identity: %w", err)
-	}
-	if !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return pullCheckReport{}, errors.New("pull: remote encryption identity does not match this configuration")
+		return pullCheckReport{}, err
 	}
 
 	passphrase, err := readCommandPassphrase(input, prompt, "pull")

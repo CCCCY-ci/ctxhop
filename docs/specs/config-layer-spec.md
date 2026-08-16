@@ -97,6 +97,7 @@ type Config struct {
     Version        int
     Device         Device
     Remote         Remote
+    DomainFingerprint string           // init 固化的非秘密同步域指纹
     IdentityPublic []byte              // pin 住的公钥
     Projects       Projects
     Agents         map[string]AgentState

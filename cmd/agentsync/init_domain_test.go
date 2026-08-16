@@ -39,6 +39,9 @@ func TestInitDisplaysAndChecksDomainFingerprint(t *testing.T) {
 		t.Fatalf("init output does not show fingerprint %q: %s", fingerprint, firstOutput.String())
 	}
 
+	if first.DomainFingerprint != fingerprint {
+		t.Fatalf("persisted domain fingerprint = %q, want %q", first.DomainFingerprint, fingerprint)
+	}
 	secondConfig := t.TempDir()
 	t.Setenv("AGENTSYNC_CONFIG_DIR", secondConfig)
 	secondInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\n")

@@ -135,6 +135,8 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return fmt.Errorf("init: derive sync domain fingerprint: %w", err)
 	}
 
+	c.DomainFingerprint = domainFingerprint
+
 	secrets := &config.Secrets{
 		Credentials:   credentials,
 		IdentifierKey: identifierKey,

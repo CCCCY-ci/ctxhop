@@ -153,6 +153,9 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: configure backend: %s", safeBackendSetupError(err))
 	}
+	if _, err := fetchValidatedRemoteKeyfile(ctx, c, store, "push"); err != nil {
+		return pushSummary{}, err
+	}
 	queue, err := syncer.NewQueueStore(configDir)
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: prepare pending queue: %w", err)

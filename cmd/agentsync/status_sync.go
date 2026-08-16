@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -105,16 +104,9 @@ func collectRemoteStatus(ctx context.Context, c *config.Config, configDir, proje
 	if err != nil {
 		return statusSync{}, fmt.Errorf("status: configure backend: %s", safeBackendSetupError(err))
 	}
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	keyfile, err := fetchValidatedRemoteKeyfile(ctx, c, store, "status")
 	if err != nil {
-		return statusSync{}, fmt.Errorf("status: read remote keyfile: %w", err)
-	}
-	public, err := keyfile.IdentityPublicKey()
-	if err != nil {
-		return statusSync{}, fmt.Errorf("status: validate remote identity: %w", err)
-	}
-	if !bytes.Equal(public.Bytes(), c.IdentityPublic) {
-		return statusSync{}, errors.New("status: remote encryption identity does not match this configuration")
+		return statusSync{}, err
 	}
 
 	passphrase, err := readListPassphrase(input, prompt)
