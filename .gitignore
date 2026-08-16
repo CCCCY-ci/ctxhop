@@ -12,8 +12,7 @@
 *.a
 
 # === Test code and data ===
-# Tests stay local and are never committed.
-**/*_test.go
+# Repository regression tests are versioned; local fixtures remain ignored.
 **/testdata/
 **/__snapshots__/
 *.test
