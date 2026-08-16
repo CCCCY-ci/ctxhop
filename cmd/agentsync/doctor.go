@@ -13,6 +13,7 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
+	"github.com/CCCCY-ci/agentsync/internal/diagnostic"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 )
 
@@ -23,6 +24,7 @@ type doctorReport struct {
 	Backend       doctorCheck         `json:"backend"`
 	Agent         doctorAgent         `json:"agent"`
 	Project       statusProject       `json:"project"`
+	RecentErrors  doctorRecentErrors  `json:"recentErrors"`
 }
 
 type doctorCheck struct {
@@ -37,6 +39,13 @@ type doctorAgent struct {
 	Compatibility string `json:"compatibility,omitempty"`
 	Hook          string `json:"hook"`
 	Reason        string `json:"reason,omitempty"`
+}
+
+type doctorRecentErrors struct {
+	Status string                  `json:"status"`
+	Count  int                     `json:"count"`
+	Events []diagnostic.ErrorEvent `json:"events,omitempty"`
+	Reason string                  `json:"reason,omitempty"`
 }
 
 func init() {
@@ -93,12 +102,26 @@ func collectDoctor(c *config.Config, configDir, projectDir string) (doctorReport
 	ctx, cancel := context.WithTimeout(context.Background(), doctorProbeTimeout)
 	defer cancel()
 
+	recentErrors := collectRecentErrors(configDir)
+
 	return doctorReport{
 		Configuration: status.Configuration,
 		Backend:       probeBackend(ctx, c, configDir),
 		Agent:         detectAgent(ctx),
 		Project:       status.Project,
+		RecentErrors:  recentErrors,
 	}, nil
+}
+
+func collectRecentErrors(configDir string) doctorRecentErrors {
+	events, err := diagnostic.Recent(configDir)
+	if err != nil {
+		return doctorRecentErrors{Status: "unavailable", Reason: "recent error history is unavailable"}
+	}
+	if len(events) == 0 {
+		return doctorRecentErrors{Status: "none"}
+	}
+	return doctorRecentErrors{Status: "available", Count: len(events), Events: events}
 }
 
 func probeBackend(ctx context.Context, c *config.Config, configDir string) doctorCheck {
@@ -281,9 +304,32 @@ func writeDoctorText(w io.Writer, report doctorReport) error {
 	}
 	if report.Project.Reason != "" {
 		_, err := fmt.Fprintf(w, "  note: %s\n", report.Project.Reason)
-		return err
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	return writeDoctorRecentErrors(w, report.RecentErrors)
+}
+
+func writeDoctorRecentErrors(w io.Writer, recent doctorRecentErrors) error {
+	switch recent.Status {
+	case "none":
+		_, err := fmt.Fprintln(w, "recent errors: none")
+		return err
+	case "unavailable":
+		_, err := fmt.Fprintf(w, "recent errors: unavailable (%s)\n", recent.Reason)
+		return err
+	default:
+		if _, err := fmt.Fprintf(w, "recent errors: %d recorded\n", recent.Count); err != nil {
+			return err
+		}
+		for _, event := range recent.Events {
+			if _, err := fmt.Fprintf(w, "  - %s command=%s class=%s\n", event.Time.Format(time.RFC3339), event.Command, event.Class); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func agentState(agent doctorAgent) string {

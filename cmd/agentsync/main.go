@@ -63,6 +63,7 @@ func init() {
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		recordCommandFailure(os.Args[1:], err)
 		fmt.Fprintf(os.Stderr, "agentsync: %v\n", err)
 		os.Exit(1)
 	}
