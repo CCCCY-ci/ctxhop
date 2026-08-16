@@ -19,7 +19,7 @@ put into a public CI job.
 ## 2. Local and tagged builds
 
 `scripts/build.sh` and `scripts/build.ps1` cross-compile with `CGO_ENABLED=0`
-and inject version, commit and UTC build time. `scripts/release.sh` copies
+and inject version, commit and UTC build time. When the current host target is one of the six targets, each build script starts that binary and checks both `version` and `help`; other targets remain compile-only until a native target acceptance job runs. `scripts/release.sh` copies
 versioned binaries into `dist/release`, writes `checksums.txt`, and renders
 the Homebrew and Scoop manifests from `packaging/` templates.
 
@@ -52,6 +52,6 @@ must not delete or rewrite user configuration as part of installation.
 
 ## 5. Test plan
 
-CI covers the Go test/vet/race matrix and cross-build outputs. The release
+CI covers the Go test/vet/race matrix and cross-build outputs. The build scripts smoke-test the native host target when available. The release
 script validates version characters, requires all six binaries before
 rendering manifests, and fails when a checksum entry is missing.

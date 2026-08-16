@@ -48,6 +48,38 @@ for target in "${TARGETS[@]}"; do
     go build -trimpath -ldflags "$LDFLAGS" -o "$out" "$PKG"
 done
 
+# When the current host is part of the target matrix, start that binary before
+# publishing the build directory. Cross-target binaries remain compile-only
+# here and are covered by native acceptance jobs on their target systems.
+host_os="$(go env GOOS)"
+host_arch="$(go env GOARCH)"
+host_suffix=""
+if [[ "$host_os" = "windows" ]]; then
+  host_suffix=".exe"
+fi
+host_binary="dist/agentsync_${host_os}_${host_arch}${host_suffix}"
+if [[ -f "$host_binary" ]]; then
+  echo "smoke-testing ${host_os}/${host_arch}"
+  if ! version_output="$("$host_binary" version)"; then
+    echo "build: host binary failed to start for version" >&2
+    exit 1
+  fi
+  if [[ "$version_output" != agentsync\ * ]]; then
+    echo "build: host binary returned an unexpected version line" >&2
+    exit 1
+  fi
+  if ! help_output="$("$host_binary" help)"; then
+    echo "build: host binary failed to start for help" >&2
+    exit 1
+  fi
+  if [[ "$help_output" != *"commands:"* ]]; then
+    echo "build: host binary returned incomplete help" >&2
+    exit 1
+  fi
+else
+  echo "host target ${host_os}/${host_arch} is outside the build matrix; startup smoke skipped"
+fi
+
 echo
 echo "built ${#TARGETS[@]} binaries into dist/"
 ls -lh dist

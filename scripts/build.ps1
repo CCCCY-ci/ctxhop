@@ -64,5 +64,26 @@ foreach ($target in $targets) {
     }
 }
 
+$hostOs = (& go env GOOS).Trim()
+$hostArch = (& go env GOARCH).Trim()
+$hostSuffix = ""
+if ($hostOs -eq "windows") {
+    $hostSuffix = ".exe"
+}
+$hostOutput = Join-Path $dist ("agentsync_{0}_{1}{2}" -f $hostOs, $hostArch, $hostSuffix)
+if (Test-Path -LiteralPath $hostOutput) {
+    Write-Host ("smoke-testing {0}/{1}" -f $hostOs, $hostArch)
+    $versionOutput = (& $hostOutput version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $versionOutput.StartsWith("agentsync ")) {
+        throw "host binary failed the version startup smoke test"
+    }
+    $helpOutput = (& $hostOutput help | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $helpOutput.Contains("commands:")) {
+        throw "host binary failed the help startup smoke test"
+    }
+}
+else {
+    Write-Host ("host target {0}/{1} is outside the build matrix; startup smoke skipped" -f $hostOs, $hostArch)
+}
 Write-Host "built $($targets.Count) binaries into $dist"
 Get-ChildItem -LiteralPath $dist | Format-Table Name, Length
