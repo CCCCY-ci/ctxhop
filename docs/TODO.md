@@ -93,6 +93,7 @@
 | agentsync project | ✅ | 项目策略、识别和相关配置命令已实现 |
 | agentsync history | 🟡 | 能读取和展示版本历史；尚无 prune/cleanup |
 | agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
+| agentsync remote | ✅ | 支持按会话、按项目和清空 Remote；删除前统一确认并支持 --yes，失败时报告已删除对象数 |
 | agentsync stats | ✅ | 输出本地恢复统计 |
 | agentsync pull | ✅ | 当前作为显式的 metadata-only pull check 使用；不是自动下载全部远端会话 |
 | agentsync watch | ✅ | 轮询本地变化并 push，支持本地快照去重、失败重试、once/json；当前是 push-only |
@@ -190,10 +191,10 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 
 - 口令更换 CLI：✅ 已实现 `agentsync passphrase change`；保留数据密钥并替换已存在的远端 keyfile，仍需真实远端故障验收；
 - Recovery Key 重置 CLI：✅ 已实现 `agentsync passphrase reset`；使用 Recovery Key 替换远端 keyfile，仍需补充 Recovery Key 备份提示和真实故障验收；
-- 远端删除会话：PRD 要求按会话删除，当前没有对应 CLI；
-- 远端删除项目：当前没有对应 CLI；
-- 清空整个 Remote：当前没有对应 CLI；
-- 上述删除操作需要统一的显式确认、--yes 语义、错误恢复和审计提示；
+- 远端删除会话：✅ 已实现 `agentsync remote delete-session`；默认从当前项目和 native session ID 推导不透明 remote ID，也支持 `--remote-id`；
+- 远端删除项目：✅ 已实现 `agentsync remote delete-project`；仅按当前稳定项目身份生成项目前缀，不接受任意远端前缀；
+- 清空整个 Remote：✅ 已实现 `agentsync remote delete-all`；显式确认会提示包含 keyfile 和设备记录，`--yes` 可用于无人交互；
+- 上述删除操作：✅ 统一使用显式确认和 `--yes` 语义；部分失败会返回已删除对象数，避免把不完整清理误报为成功；
 - history cleanup/prune：当前 history 主要用于读取和展示，尚未提供保留策略和清理命令。
 
 ### 4.2 P1 用户体验
@@ -296,7 +297,7 @@ PRD §18 要求目前尚未形成完整交付链：
 1. 完成 PoC-3 真实 S3/dir 和第三方目录同步工具验收，锁定最终一致性和部分同步行为。
 2. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 3. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。
-4. 补齐远端删除和历史清理，并对 passphrase change/reset 做真实远端故障验收。
+4. 补齐 history cleanup/prune，并对 passphrase change/reset 和删除命令做真实远端故障验收。
 5. 实现工作区差异上下文注入，并完善 doctor 最近错误。
 6. 建立 CI、发布包、安装方式和 README 五分钟指南。
 7. 最后推进 shell completion、P2 Remote 和更多 Agent。

@@ -46,6 +46,7 @@ var commands = []command{
 	{name: "watch", summary: "watch local sessions and push changes"},
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
 	{name: "device", summary: "inspect or change local device settings"},
+	{name: "remote", summary: "delete scoped or all remote data"},
 	{name: "project", summary: "bind projects and manage synchronization policy"},
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
