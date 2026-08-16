@@ -42,6 +42,9 @@ config.local.*
 *.credentials.json
 *credentials*
 *secret*
+# The encrypted local secret-storage implementation is versioned source, not user data.
+!internal/config/secrets.go
+!internal/config/secrets_test.go
 *.pem
 *.key
 *.p12
