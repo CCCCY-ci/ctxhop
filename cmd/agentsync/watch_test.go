@@ -136,6 +136,14 @@ func TestRunWatchOnceReportsSafeMissingAgentError(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
 
 	c := config.New()
+	root, pathErr := filepath.Abs(".")
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	c.Projects.Bindings = []config.Binding{{
+		Identity:  "manual:watch-test",
+		LocalRoot: root,
+	}}
 	c.Remote.Type = "dir"
 	c.Remote.Path = t.TempDir()
 	if err := c.Save(configDir); err != nil {
