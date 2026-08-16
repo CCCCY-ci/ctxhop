@@ -55,6 +55,21 @@ func DeleteRemoteProject(ctx context.Context, store remote.Remote, projectID str
 	return deleteRemotePrefix(ctx, store, prefix)
 }
 
+// DeleteRemoteDeviceBranch removes one device-owned branch, including its
+// mutable metadata and immutable shards. It leaves every other device branch in
+// the session untouched.
+func DeleteRemoteDeviceBranch(ctx context.Context, store remote.Remote, projectID, sessionID, deviceID string) (int, error) {
+	layout, err := NewObjectLayout(projectID, sessionID, deviceID)
+	if err != nil {
+		return 0, err
+	}
+	prefix, err := layout.DevicePrefix()
+	if err != nil {
+		return 0, err
+	}
+	return deleteRemotePrefix(ctx, store, prefix+"/")
+}
+
 // DeleteRemoteAll removes every valid object visible in the configured Remote,
 // including the keyfile and device records. This operation is intentionally
 // separate from the scoped deletion helpers because it cannot be undone by

@@ -91,7 +91,7 @@
 | agentsync push | ✅ | 增量上传、元数据发布、队列重试 |
 | agentsync doctor | 🟡 | 已覆盖配置、backend、Agent、版本、兼容性、hook、项目检查；缺少统一的最近错误持久化报告 |
 | agentsync project | ✅ | 项目策略、识别和相关配置命令已实现 |
-| agentsync history | 🟡 | 能读取和展示版本历史；尚无 prune/cleanup |
+| agentsync history | 🟡 | 支持读取和展示版本历史、cleanup，以及按 --keep/--before 的 prune；真实 Remote 故障验收待补 |
 | agentsync device | ✅ | 支持 status、mode、list、rename、remove，并处理确认 |
 | agentsync remote | ✅ | 支持按会话、按项目和清空 Remote；删除前统一确认并支持 --yes，失败时报告已删除对象数 |
 | agentsync stats | ✅ | 输出本地恢复统计 |
@@ -195,7 +195,7 @@ poc/mvp 已将 PRD §15 的核心同步、恢复、分叉和失败关闭场景�
 - 远端删除项目：✅ 已实现 `agentsync remote delete-project`；仅按当前稳定项目身份生成项目前缀，不接受任意远端前缀；
 - 清空整个 Remote：✅ 已实现 `agentsync remote delete-all`；显式确认会提示包含 keyfile 和设备记录，`--yes` 可用于无人交互；
 - 上述删除操作：✅ 统一使用显式确认和 `--yes` 语义；部分失败会返回已删除对象数，避免把不完整清理误报为成功；
-- history cleanup/prune：当前 history 主要用于读取和展示，尚未提供保留策略和清理命令。
+- history cleanup/prune：✅ 已实现显式 cleanup 和按 maximal version 的 `--keep`/`--before` prune；未知更新时间的版本默认保留，避免误删；真实远端验收待补。
 
 ### 4.2 P1 用户体验
 
@@ -297,7 +297,7 @@ PRD §18 要求目前尚未形成完整交付链：
 1. 完成 PoC-3 真实 S3/dir 和第三方目录同步工具验收，锁定最终一致性和部分同步行为。
 2. 组织 Windows ↔ macOS 的真实跨设备验收，并补齐 PoC-1 遗留项。
 3. 用 poc/mvp 持续执行合成矩阵，并补齐真实平台、Remote 和 Agent 验收记录。
-4. 补齐 history cleanup/prune，并对 passphrase change/reset 和删除命令做真实远端故障验收。
+4. 对 passphrase change/reset、远端删除和 history prune 做真实远端故障验收。
 5. 实现工作区差异上下文注入，并完善 doctor 最近错误。
 6. 建立 CI、发布包、安装方式和 README 五分钟指南。
 7. 最后推进 shell completion、P2 Remote 和更多 Agent。

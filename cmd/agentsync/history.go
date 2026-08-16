@@ -58,14 +58,23 @@ func init() {
 }
 
 func runHistory(args []string) error {
+	if isHistoryMaintenance(args) {
+		return runHistoryMaintenanceWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runHistoryWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
 func runHistoryWithIO(args []string, input io.Reader, output io.Writer) error {
+	if isHistoryMaintenance(args) {
+		return runHistoryMaintenanceWithStreams(args, input, output, output)
+	}
 	return runHistoryWithStreams(args, input, output, output)
 }
 
 func runHistoryWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
+	if isHistoryMaintenance(args) {
+		return runHistoryMaintenanceWithStreams(args, input, output, prompt)
+	}
 	options, err := parseHistoryOptions(args)
 	if err != nil {
 		return err
@@ -218,7 +227,7 @@ func collectHistory(ctx context.Context, c *config.Config, configDir, projectDir
 		return historyReport{}, err
 	}
 
-	branches, err := syncer.FetchBranches(ctx, store, projectID, candidate.Group.SessionID, identity)
+	branches, err := syncer.FetchCompleteBranches(ctx, store, projectID, candidate.Group.SessionID, identity)
 	if err != nil {
 		return historyReport{}, safeHistoryReadError(ctx, err)
 	}
@@ -309,6 +318,9 @@ func matchingHistoryUpdate(group syncer.ProjectMetadataRef, version syncer.Versi
 func safeHistoryReadError(ctx context.Context, err error) error {
 	if ctx != nil && ctx.Err() != nil {
 		return fmt.Errorf("history: %w", ctx.Err())
+	}
+	if errors.Is(err, syncer.ErrIncompleteRemoteSession) {
+		return errors.New("history: remote session is incomplete; retry later")
 	}
 	if errors.Is(err, syncer.ErrNoRemoteBranches) {
 		return errors.New("history: no complete remote versions are available")

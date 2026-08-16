@@ -398,6 +398,8 @@ func saveResumeObservedTips(ctx context.Context, stateRoot, projectID, sessionID
 
 func safeResumePlanError(err error) error {
 	switch {
+	case errors.Is(err, syncer.ErrIncompleteRemoteSession):
+		return errors.New("resume: remote session is incomplete; retry later")
 	case errors.Is(err, syncflow.ErrRestoreCompatibility):
 		return fmt.Errorf("resume: %w", err)
 	case errors.Is(err, syncflow.ErrForkSelectionRequired), errors.Is(err, syncflow.ErrInvalidVersionSelection):
