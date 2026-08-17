@@ -50,7 +50,7 @@ func TestFetchRestorePlanReadsResolvesAndLocalizes(t *testing.T) {
 		"session",
 		private,
 		adapter.PathSpace{ProjectRoot: `D:\Target\Project`, AgentHome: `D:\Target\Agent`},
-		adapter.Installation{Compatibility: adapter.CompatFull, CompatibilityReason: "agent version is verified"},
+		adapter.Installation{Compatibility: adapter.CompatFull, CompatibilityReason: "compatibility is determined from session path fields; agent version is informational"},
 		RestoreOptions{},
 	)
 	if err != nil {

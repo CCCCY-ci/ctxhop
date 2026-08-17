@@ -108,7 +108,7 @@ func parseResumeOptions(args []string) (resumeOptions, error) {
 	flags.SetOutput(io.Discard)
 	var options resumeOptions
 	flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
-	flags.BoolVar(&options.allowLimited, "allow-limited", false, "allow restore for an unverified agent version")
+	flags.BoolVar(&options.allowLimited, "allow-limited", false, "allow restore when structural compatibility is limited")
 	flags.BoolVar(&options.allowDivergent, "allow-divergent", false, "allow restore despite a divergent workspace")
 	flags.BoolVar(&options.noWorkspaceContext, "no-workspace-context", false, "do not inject workspace differences into the restored session")
 	flags.BoolVar(&options.replaceExisting, "replace-existing", false, "replace an existing local session")

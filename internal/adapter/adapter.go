@@ -24,22 +24,22 @@ import (
 // produce an error message or affect any other agent (§9.2).
 var ErrNotInstalled = errors.New("adapter: agent not installed")
 
-// Compatibility expresses how far we trust ourselves with a given agent
-// version. Agents ship frequently, so an unknown version must not stop the tool
-// entirely — it only restricts the operations that could damage data (§9.9,
-// BR-12).
+// Compatibility expresses whether the adapter can safely handle the session
+// structure it actually observed. Agent versions are diagnostic metadata only;
+// a release is not limited merely because its version is new or unrecognised.
 type Compatibility int
 
 const (
 	// CompatUnknown means compatibility has not been evaluated yet.
 	CompatUnknown Compatibility = iota
 
-	// CompatFull means this agent version is verified. All operations allowed.
+	// CompatFull means the observed session fields are understood. All
+	// operations are allowed.
 	CompatFull
 
-	// CompatLimited means the version is unrecognised but sessions still parse.
-	// Pushing and backup continue; restoring requires explicit user
-	// confirmation because writing is the operation that can destroy data.
+	// CompatLimited means the adapter has only partial structural evidence.
+	// Backup may continue, but restoring requires explicit user confirmation
+	// because writing is the operation that can destroy data.
 	CompatLimited
 
 	// CompatStopped means sessions cannot be parsed or fail validation. The
@@ -56,7 +56,7 @@ type Installation struct {
 	// DataDir is the root directory holding the agent's local state.
 	DataDir string
 
-	// Compatibility is the level this version was classified into.
+	// Compatibility is the level determined from the observed session fields.
 	Compatibility Compatibility
 
 	// CompatibilityReason explains the classification in user-facing terms and

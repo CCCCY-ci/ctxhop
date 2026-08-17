@@ -27,7 +27,7 @@ func TestCanonicalizeSessionProducesIndependentCanonicalRecords(t *testing.T) {
 	}
 	installation := adapter.Installation{
 		Compatibility:       adapter.CompatFull,
-		CompatibilityReason: "agent version is verified",
+		CompatibilityReason: "compatibility is determined from session path fields; agent version is informational",
 	}
 
 	stream, err := CanonicalizeSession(data, space, installation)
@@ -119,17 +119,17 @@ func TestCanonicalizeSessionRejectsUnsafeSnapshotsAndPathSchemas(t *testing.T) {
 	}
 }
 
-func TestCanonicalizeSessionAllowsLimitedCompatibilityAndPreservesFindingSafety(t *testing.T) {
+func TestCanonicalizeSessionClassifiesSupportedFieldsWithoutVersionGate(t *testing.T) {
 	space := adapter.PathSpace{ProjectRoot: `/source/project`, AgentHome: `/source/agent`}
 	installation := adapter.Installation{
 		Compatibility:       adapter.CompatLimited,
-		CompatibilityReason: "agent version has not been verified",
+		CompatibilityReason: "compatibility baseline is provisional",
 	}
 	stream, err := CanonicalizeSession(adapter.SessionData{Records: [][]byte{[]byte(`{"cwd":"/source/project"}`)}}, space, installation)
 	if err != nil {
 		t.Fatalf("CanonicalizeSession: %v", err)
 	}
-	if stream.Compatibility != adapter.CompatLimited || stream.CompatibilityReason != installation.CompatibilityReason {
+	if stream.Compatibility != adapter.CompatFull || stream.CompatibilityReason != "compatibility is determined from session path fields; agent version is informational" {
 		t.Fatalf("compatibility = %v, %q", stream.Compatibility, stream.CompatibilityReason)
 	}
 	if len(stream.UnknownPathFields) != 0 {

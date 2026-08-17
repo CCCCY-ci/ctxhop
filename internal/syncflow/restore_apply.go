@@ -55,7 +55,7 @@ type RestoreApplyOptions struct {
 	// was pushed. A nil value is never treated as a clean workspace.
 	Fingerprint *project.Fingerprint
 
-	// AllowLimited confirms that the caller accepts an unverified Agent
+	// AllowLimited confirms that the caller accepts a structurally limited
 	// compatibility level.
 	AllowLimited bool
 

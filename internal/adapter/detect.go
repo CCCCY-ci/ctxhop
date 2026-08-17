@@ -9,16 +9,7 @@ import (
 	"strings"
 )
 
-// verifiedVersions is a small baseline of Agent versions checked end to end.
-// It is not an upload allowlist: unknown versions still use structural
-// canonicalization and remain eligible for backup. The list only controls
-// whether restore can proceed without explicit limited-compatibility consent.
-var verifiedVersions = map[string]bool{
-	"2.1.226": true,
-	// Verified end to end by PoC-1b: read, canonicalise, localise, install and
-	// resume natively.
-	"2.1.227": true,
-}
+const structuralCompatibilityReason = "compatibility is determined from session path fields; agent version is informational"
 
 // DefaultHome returns the agent's data directory for this machine.
 //
@@ -42,16 +33,17 @@ func DefaultHome() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-// Detect locates Claude Code on this machine and grades our compatibility with
-// it. It returns ErrNotInstalled when the agent is absent, which is an expected
-// outcome and not a failure (§9.2).
+// Detect locates Claude Code on this machine and reports a structural
+// compatibility baseline. Individual sessions are classified after their fields
+// have been canonicalized. It returns ErrNotInstalled when the agent is absent,
+// which is an expected outcome and not a failure (§9.2).
 //
 // The agent's own executable is deliberately never run - not even for
 // `--version`. Starting it would hand our "no network traffic we did not ask
 // for" guarantee to somebody else's startup path, which does things like check
 // for updates (§4 P7). The version is read from what the agent wrote instead,
-// which is also the more useful figure: what matters for grading is the version
-// that produced the records we are about to parse.
+// and retained for diagnostics. It does not decide compatibility; the fields
+// in the records we are about to parse do.
 func (l Layout) Detect(ctx context.Context) (Installation, error) {
 	if l.Home == "" {
 		return Installation{}, errors.New("adapter: no agent home configured")
@@ -74,7 +66,7 @@ func (l Layout) Detect(ctx context.Context) (Installation, error) {
 
 	inst := Installation{DataDir: l.Home}
 	inst.Version = lookup(ctx)
-	inst.Compatibility, inst.CompatibilityReason = gradeVersion(inst.Version)
+	inst.Compatibility, inst.CompatibilityReason = compatibilityBaseline()
 	return inst, nil
 }
 
@@ -144,44 +136,27 @@ func (l Layout) newestSessionFile(ctx context.Context) (string, error) {
 	return newest, nil
 }
 
-// gradeVersion classifies a version, returning the level and a reason safe to
-// print in diagnostics.
-//
-// An unknown version does not stop the tool. Agents ship constantly, and
-// refusing everything on each release would leave users stranded far more often
-// than it would protect them; what an unknown version restricts is restoring
-// without consent, because writing is the operation that can destroy data.
-//
-// A version we could not determine at all grades no less strictly than one we
-// merely do not recognise. Grading the case with the least information as the
-// most permissive would invert the whole point: a caller asking "may I restore
-// without confirmation?" would be told yes precisely when we know least.
-func gradeVersion(version string) (Compatibility, string) {
-	switch {
-	case version == "":
-		return CompatLimited, "agent version could not be determined; backup continues, restoring needs confirmation"
-	case verifiedVersions[version]:
-		return CompatFull, "agent version is verified"
-	default:
-		return CompatLimited, "agent version has not been verified; backup continues, restoring needs confirmation"
-	}
+// compatibilityBaseline is deliberately independent of the Agent version.
+// The version is retained for diagnostics, while the session's actual fields
+// decide whether the adapter can safely canonicalize and restore it.
+func compatibilityBaseline() (Compatibility, string) {
+	return CompatFull, structuralCompatibilityReason
 }
 
-// GradeSession downgrades a compatibility level in light of what a session
-// actually contained.
-//
-// Version checks are intentionally coarse. Leaf values that are exact local
-// paths are rewritten structurally, so a new Claude Code field does not stop
-// backup. Findings are reserved for path-bearing object keys whose semantics
-// are ambiguous; those remain stopped rather than silently changed.
+// GradeSession classifies compatibility from the fields actually present in a
+// session. A new Agent release remains fully compatible when the structural
+// adapter can rewrite all path-bearing fields it encounters.
 //
 // findings are the field names reported by a Canonicalizer, which are already
 // redacted for diagnostics (BR-09).
 func GradeSession(level Compatibility, findings []string) (Compatibility, string) {
-	if len(findings) == 0 {
-		return level, ""
+	if len(findings) != 0 {
+		return CompatStopped, fmt.Sprintf(
+			"session contains %d path-bearing field(s) this adapter does not know how to rewrite: %s",
+			len(findings), strings.Join(findings, ", "))
 	}
-	return CompatStopped, fmt.Sprintf(
-		"session contains %d path-bearing field(s) this adapter does not know how to rewrite: %s",
-		len(findings), strings.Join(findings, ", "))
+	if level == CompatStopped {
+		return CompatStopped, "adapter compatibility policy stopped this session"
+	}
+	return CompatFull, structuralCompatibilityReason
 }
