@@ -35,12 +35,12 @@ type command struct {
 // Handlers that read this slice are attached in init rather than in the literal
 // below, because a self-referential initialiser is an initialisation cycle.
 var commands = []command{
-	{name: "init", summary: "configure storage backend, passphrase and agent hooks"},
+	{name: "init", summary: "configure storage backend, encryption password and agent hooks"},
 	{name: "status", summary: "show sync state for this project or globally"},
 	{name: "list", summary: "list sessions available for this project"},
 	{name: "resume", summary: "restore a session onto this machine"},
 	{name: "history", summary: "list recoverable versions for a session"},
-	{name: "passphrase", summary: "change or reset the storage passphrase"},
+	{name: "passphrase", summary: "change or reset the storage encryption password"},
 	{name: "stats", summary: "show local cross-device restore statistics"},
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "watch", summary: "watch local sessions and push changes"},

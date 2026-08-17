@@ -433,8 +433,8 @@ func rotateDeviceKey(ctx context.Context, c *config.Config, configDir, removeDev
 		secrets.DevicePrivateKey = append([]byte(nil), devicePrivate.Bytes()...)
 	}
 
-	secretInput := asBufferedReader(input)
-	currentPassphrase, err := readCommandSecretReader(secretInput, prompt, command, "Current passphrase: ")
+	secretInput := newCommandSecretReader(input)
+	currentPassphrase, err := secretInput.read(command, prompt, "Current encryption password: ")
 	if err != nil {
 		return deviceKeyRotationResult{}, err
 	}
@@ -451,7 +451,7 @@ func rotateDeviceKey(ctx context.Context, c *config.Config, configDir, removeDev
 		}
 	}
 
-	nextPassphrase, err := readNewPassphraseFromReader(secretInput, prompt, command)
+	nextPassphrase, err := readNewPassphraseFromSecretReader(secretInput, prompt, command)
 	if err != nil {
 		return deviceKeyRotationResult{}, err
 	}
@@ -465,7 +465,7 @@ func rotateDeviceKey(ctx context.Context, c *config.Config, configDir, removeDev
 	if _, err := fmt.Fprintln(prompt, recoveryKey); err != nil {
 		return deviceKeyRotationResult{}, err
 	}
-	saved, err := readDeviceRecoveryConfirmation(secretInput, prompt, command)
+	saved, err := readDeviceRecoveryConfirmation(secretInput.lines, prompt, command)
 	if err != nil {
 		return deviceKeyRotationResult{}, err
 	}

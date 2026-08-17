@@ -10,14 +10,14 @@ backend. It is the only command that creates the first remote keyfile.
 1. A valid local `config.json` is never replaced by `init`.
 2. The selected backend must pass its read, write, list, and cleanup probe
    before the remote keyfile or local configuration is written.
-3. Passphrases and credentials are read from stdin or the credential
+3. Encryption passwords and credentials are read from stdin or the credential
    environment. They are never accepted as command-line flags, printed, or
    written to `config.json`.
 4. If `v1/keyfile` is absent, init creates it once, displays the generated
    Recovery Key, and requires an explicit `saved` confirmation before
    publishing it.
 5. If `v1/keyfile` exists, init unlocks that envelope with the entered
-   passphrase and never replaces it.
+   encryption password and never replaces it.
 6. The local identifier key is derived from the unlocked data key and is stored
    only through `config.SaveSecrets`. The device ID is generated and persisted
    after the local secret has been saved.
@@ -33,10 +33,10 @@ backend. It is the only command that creates the first remote keyfile.
 9. `init --invite PATH` imports the Remote settings from a signed device
    invitation. It requires an existing remote keyfile and verifies the namespace,
    domain fingerprint, and proof before saving local secrets or configuration.
-   The invitation contains no credentials, passphrase, or session content.
+   The invitation contains no credentials, encryption password, or session content.
 
 ## Failure boundary
 
-No remote keyfile is published when backend probing, passphrase confirmation,
+No remote keyfile is published when backend probing, encryption password confirmation,
 or key derivation fails. A local write failure may leave an incomplete local
 setup, but it never rewrites an existing valid configuration or keyfile.

@@ -32,7 +32,7 @@ report the backend independently from the Agent state:
 - the same AgentSync binary build on device A and the server;
 - the R2 S3 endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` and signing
   region `auto`;
-- a passphrase shared out of band for the test domain;
+- an encryption password shared out of band for the test domain;
 - a temporary project directory. The server does not need Claude Code or Git.
 
 Run `init` once with the non-secret R2 settings. AgentSync persists the Remote
@@ -45,7 +45,7 @@ encrypted local `secrets` file.
 
 Use a fresh prefix for each run, for example
 `acceptance/r2-20260817-01`. Run the initialization command on device A; it
-prompts for backend credentials and the domain passphrase, then persists the
+prompts for backend credentials and the domain encryption password, then persists the
 configuration locally:
 
 ~~~bash
@@ -57,6 +57,9 @@ agentsync init --backend s3 \
   --device-name r2-source \
   --no-hook
 ~~~
+
+The Endpoint is account-level; do not append `/<BUCKET_NAME>` to it. The
+Bucket is supplied separately with `--bucket`.
 
 `--no-hook` keeps this acceptance run from changing the source Agent's hook
 configuration. The command still performs the backend probe and creates the
@@ -107,8 +110,8 @@ agentsync init --invite /srv/incoming/agentsync-invite.json \
 ~~~
 
 The invite carries the Remote settings and non-secret domain fingerprint, but
-not credentials, the passphrase, or session data. The server still needs the
-domain passphrase during initialization so it can enroll its own managed
+not credentials, the encryption password, or session data. The server still needs the
+domain encryption password during initialization so it can enroll its own managed
 device grant.
 
 Create or enter a temporary directory with no `.git` directory and bind the
@@ -120,7 +123,7 @@ cd /srv/agentsync-r2-20260817-01/project
 agentsync project bind --name r2-acceptance-20260817-01 --path .
 ~~~
 
-Run the following checks. The server should not prompt for the passphrase
+Run the following checks. The server should not prompt for the encryption password
 after invitation enrollment because its local device grant is used for reads:
 
 ~~~bash

@@ -37,8 +37,9 @@ type initOptions struct {
 }
 
 type initPrompter struct {
-	input  *bufio.Reader
-	output io.Writer
+	input       *bufio.Reader
+	secretInput io.Reader
+	output      io.Writer
 }
 
 func init() {
@@ -82,7 +83,11 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return err
 	}
 
-	prompter := &initPrompter{input: bufio.NewReader(input), output: output}
+	prompter := &initPrompter{
+		input:       bufio.NewReader(input),
+		secretInput: input,
+		output:      output,
+	}
 	if err := options.complete(prompter); err != nil {
 		return err
 	}
@@ -111,19 +116,19 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return fmt.Errorf("init: derive sync domain namespace: %w", err)
 	}
 
-	passphrase, err := prompter.secret("Passphrase: ")
+	passphrase, err := prompter.secret("Encryption password: ")
 	if err != nil {
 		return err
 	}
-	confirmation, err := prompter.secret("Repeat passphrase: ")
+	confirmation, err := prompter.secret("Repeat encryption password: ")
 	if err != nil {
 		return err
 	}
 	if passphrase == "" {
-		return errors.New("init: passphrase cannot be empty")
+		return errors.New("init: encryption password cannot be empty")
 	}
 	if passphrase != confirmation {
-		return errors.New("init: passphrases do not match; run init again")
+		return errors.New("init: encryption passwords do not match; run init again")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), initBackendTimeout)
@@ -556,14 +561,12 @@ func (p *initPrompter) lineIfEmpty(value, prompt, fallback string) (string, erro
 }
 
 func (p *initPrompter) secret(prompt string) (string, error) {
-	if _, err := fmt.Fprint(p.output, prompt); err != nil {
-		return "", err
+	if p.secretInput != nil {
+		if _, ok := terminalInput(p.secretInput); ok {
+			return readCommandSecret(p.secretInput, p.output, "init", prompt)
+		}
 	}
-	value, err := p.read()
-	if err != nil {
-		return "", fmt.Errorf("init: read secret: %w", err)
-	}
-	return value, nil
+	return readCommandSecretReader(p.input, p.output, "init", prompt)
 }
 
 func (p *initPrompter) confirm(prompt string) bool {

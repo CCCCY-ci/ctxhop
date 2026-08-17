@@ -106,7 +106,7 @@ func TestCollectPullCheckReadsMetadataOnlyAndDoesNotSaveObservedTips(t *testing.
 	if report.Sessions.Checked != 1 || report.Sessions.ForeignUpdates != 1 || report.Sessions.ForeignBranches != 1 || report.Sessions.Attention != 0 {
 		t.Fatalf("sessions = %+v", report.Sessions)
 	}
-	if prompt.String() != "Passphrase: " {
+	if prompt.String() != "Encryption password: " {
 		t.Errorf("prompt = %q", prompt.String())
 	}
 	if _, err := os.Stat(filepath.Join(fixture.configDir, "state")); !errors.Is(err, os.ErrNotExist) {

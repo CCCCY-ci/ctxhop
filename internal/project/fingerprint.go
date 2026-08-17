@@ -3,6 +3,7 @@ package project
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -77,24 +78,30 @@ type Report struct {
 	Files   []FileReport `json:"files,omitempty"`
 }
 
-// Capture records the relevant Git state for a project directory.
+// Capture records the relevant workspace state for a project directory.
+// Git repositories include Git-wide dirty-file coverage; non-Git roots use
+// the L3 touched-file fallback.
 func Capture(ctx context.Context, dir string, touched []string) (Fingerprint, error) {
-	root, err := repositoryRoot(ctx, dir)
+	root, gitBacked, err := fingerprintRoot(ctx, dir)
 	if err != nil {
 		return Fingerprint{}, err
 	}
 
-	head, branch, err := headAndBranch(ctx, root)
-	if err != nil {
-		return Fingerprint{}, fmt.Errorf("read Git state: %w", err)
-	}
-	dirty, err := dirtyPaths(ctx, root)
-	if err != nil {
-		return Fingerprint{}, fmt.Errorf("read Git working tree state: %w", err)
+	var head, branch string
+	var dirty []string
+	if gitBacked {
+		head, branch, err = headAndBranch(ctx, root)
+		if err != nil {
+			return Fingerprint{}, fmt.Errorf("read Git state: %w", err)
+		}
+		dirty, err = dirtyPaths(ctx, root)
+		if err != nil {
+			return Fingerprint{}, fmt.Errorf("read Git working tree state: %w", err)
+		}
 	}
 
 	paths := unionPaths(relativeTouched(root, dir, touched), dirty)
-	files, err := digestAll(ctx, root, paths)
+	files, err := digestAllForFingerprint(ctx, root, paths, gitBacked)
 	if err != nil {
 		return Fingerprint{}, fmt.Errorf("capture workspace digests: %w", err)
 	}
@@ -108,24 +115,28 @@ func Capture(ctx context.Context, dir string, touched []string) (Fingerprint, er
 }
 
 // Compare checks the current project against a previously captured
-// Fingerprint. It never returns a Consistent report when a required Git step
-// failed; uncertainty is handled as an error or a divergent result, never as
-// permission to resume silently (BR-12).
+// Fingerprint. Git-backed workspaces include Git state and dirty-file checks;
+// non-Git workspaces use the L3 touched-file fallback. It never returns a
+// Consistent report when a required check failed (BR-12).
 func Compare(ctx context.Context, dir string, fp Fingerprint) (Report, error) {
-	root, err := repositoryRoot(ctx, dir)
+	root, gitBacked, err := fingerprintRoot(ctx, dir)
 	if err != nil {
 		return Report{}, err
 	}
 
-	head, branch, err := headAndBranch(ctx, root)
-	if err != nil {
-		return Report{}, fmt.Errorf("read Git state: %w", err)
+	var head, branch string
+	var dirty []string
+	if gitBacked {
+		head, branch, err = headAndBranch(ctx, root)
+		if err != nil {
+			return Report{}, fmt.Errorf("read Git state: %w", err)
+		}
+		dirty, err = dirtyPaths(ctx, root)
+		if err != nil {
+			return Report{}, fmt.Errorf("read Git working tree state: %w", err)
+		}
 	}
-	dirty, err := dirtyPaths(ctx, root)
-	if err != nil {
-		return Report{}, fmt.Errorf("read Git working tree state: %w", err)
-	}
-	current, err := digestAll(ctx, root, sortedDigestPaths(fp.Files))
+	current, err := digestAllForFingerprint(ctx, root, sortedDigestPaths(fp.Files), gitBacked)
 	if err != nil {
 		return Report{}, fmt.Errorf("compare workspace digests: %w", err)
 	}
@@ -184,6 +195,40 @@ func repositoryRoot(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("read the Git project root: %w", err)
 	}
 	return root, nil
+}
+
+// fingerprintRoot returns the repository root when Git is available and the
+// requested directory itself when it is not a repository. The latter is the
+// deliberate L3 fallback: a manual project identity can still synchronize the
+// files a session touched, but it cannot claim Git-wide dirty-file coverage.
+// Any other Git failure remains an error so a damaged or inaccessible
+// repository is never silently treated as clean.
+func fingerprintRoot(ctx context.Context, dir string) (string, bool, error) {
+	root, err := repositoryRoot(ctx, dir)
+	if err == nil {
+		return root, true, nil
+	}
+	if !isNonRepositoryError(err) {
+		return "", false, err
+	}
+	root, err = absoluteDirectory(dir)
+	if err != nil {
+		return "", false, fmt.Errorf("locate non-Git project: %w", err)
+	}
+	return root, false, nil
+}
+
+func isNonRepositoryError(err error) bool {
+	if gitUnavailable(err) {
+		return true
+	}
+	var gitErr *gitError
+	if !errors.As(err, &gitErr) {
+		return false
+	}
+	message := strings.ToLower(gitErr.stderr)
+	return strings.Contains(message, "not a git repository") ||
+		strings.Contains(message, "not a repository")
 }
 
 func headAndBranch(ctx context.Context, dir string) (string, string, error) {
@@ -329,6 +374,14 @@ func sortedDigestPaths(files map[string]string) []string {
 }
 
 func digestAll(ctx context.Context, root string, paths []string) (map[string]string, error) {
+	return digestAllWithMode(ctx, root, paths, true)
+}
+
+func digestAllForFingerprint(ctx context.Context, root string, paths []string, gitBacked bool) (map[string]string, error) {
+	return digestAllWithMode(ctx, root, paths, gitBacked)
+}
+
+func digestAllWithMode(ctx context.Context, root string, paths []string, gitBacked bool) (map[string]string, error) {
 	result := make(map[string]string, len(paths))
 	var regular, special []string
 	for _, relative := range paths {
@@ -353,15 +406,28 @@ func digestAll(ctx context.Context, root string, paths []string) (map[string]str
 		}
 	}
 
-	if err := hashRegularPaths(ctx, root, regular, result); err != nil {
-		return nil, err
-	}
-	for _, relative := range special {
-		digest, err := hashOnePath(ctx, root, relative)
-		if err != nil {
+	if gitBacked {
+		if err := hashRegularPaths(ctx, root, regular, result); err != nil {
 			return nil, err
 		}
-		result[relative] = digest
+		for _, relative := range special {
+			digest, err := hashOnePath(ctx, root, relative)
+			if err != nil {
+				return nil, err
+			}
+			result[relative] = digest
+		}
+	} else {
+		for _, relative := range append(append([]string(nil), regular...), special...) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			digest, err := rawBlobDigest(filepath.Join(root, filepath.FromSlash(relative)))
+			if err != nil {
+				return nil, fmt.Errorf("hash a workspace file: %w", err)
+			}
+			result[relative] = digest
+		}
 	}
 	return result, nil
 }
@@ -423,6 +489,17 @@ func hashOnePath(ctx context.Context, root, relative string) (string, error) {
 		return "", errors.New("project: Git returned an invalid workspace digest")
 	}
 	return digest, nil
+}
+
+func rawBlobDigest(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", pathSafe(err)
+	}
+	hash := sha1.New()
+	_, _ = fmt.Fprintf(hash, "blob %d\x00", len(data))
+	_, _ = hash.Write(data)
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // rawDigest is a content-only fallback for paths Git cannot carry through its

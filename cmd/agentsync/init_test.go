@@ -42,7 +42,10 @@ func TestInitCreatesDirectoryBackendWithoutLeakingSecrets(t *testing.T) {
 	if !strings.Contains(output.String(), "Recovery Key") || !strings.Contains(output.String(), "initialization complete") {
 		t.Errorf("init output = %q", output.String())
 	}
-	if strings.Contains(output.String(), initTestPassphrase) {
+	if !strings.Contains(output.String(), "Encryption password: ") || !strings.Contains(output.String(), "Repeat encryption password: ") {
+		t.Errorf("init password prompts = %q", output.String())
+	}
+	if strings.Contains(output.String(), "Passphrase: ") || strings.Contains(output.String(), initTestPassphrase) {
 		t.Error("init output contains the passphrase")
 	}
 

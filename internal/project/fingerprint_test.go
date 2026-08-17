@@ -366,21 +366,42 @@ func TestPathsOutsideTheProjectAreDropped(t *testing.T) {
 	}
 }
 
-func TestCaptureAndCompareFailLoudly(t *testing.T) {
-	// Never Consistent on a failure: the check is worth having only because
-	// "consistent" can be believed (spec §7.1).
+func TestCaptureAndCompareSupportsNonGitL3(t *testing.T) {
 	plain := t.TempDir()
+	touched := filepath.Join(plain, "notes.txt")
+	write(t, touched, "initial\n")
 
-	if _, err := Capture(context.Background(), plain, nil); err == nil {
-		t.Error("a directory that is not a repository was fingerprinted")
+	fp, err := Capture(context.Background(), plain, []string{touched})
+	if err != nil {
+		t.Fatalf("Capture without Git: %v", err)
+	}
+	if fp.Head != "" || fp.Branch != "" || len(fp.Dirty) != 0 {
+		t.Fatalf("non-Git fingerprint carried Git state: %+v", fp)
+	}
+	if _, ok := fp.Files["notes.txt"]; !ok {
+		t.Fatalf("non-Git fingerprint omitted touched file: %+v", fp.Files)
 	}
 
-	repo, touched := sessionRepo(t)
-	fp := capture(t, repo, touched)
+	report, err := Compare(context.Background(), plain, fp)
+	if err != nil {
+		t.Fatalf("Compare without Git: %v", err)
+	}
+	if report.Verdict != Consistent {
+		t.Fatalf("unchanged non-Git workspace = %v, want consistent", report.Verdict)
+	}
+
+	write(t, touched, "changed\n")
+	report, err = Compare(context.Background(), plain, fp)
+	if err != nil {
+		t.Fatalf("Compare changed non-Git workspace: %v", err)
+	}
+	if report.Verdict != Divergent || len(report.Files) != 1 {
+		t.Fatalf("changed non-Git workspace = %+v, want one divergent file", report)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if report, err := Compare(ctx, repo, fp); err == nil && report.Verdict == Consistent {
+	if report, err := Compare(ctx, plain, fp); err == nil && report.Verdict == Consistent {
 		t.Error("a cancelled comparison reported consistency")
 	}
 }
@@ -579,15 +600,11 @@ func TestErrorsDoNotNamePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Capture(context.Background(), secret, nil)
-	if err == nil {
-		t.Fatal("a plain directory was fingerprinted")
-	}
-	if strings.Contains(err.Error(), "very-private-project") || strings.Contains(err.Error(), secret) {
-		t.Errorf("the error names the project: %v", err)
+	if _, err := Capture(context.Background(), secret, nil); err != nil {
+		t.Fatalf("non-Git L3 capture failed: %v", err)
 	}
 
-	_, err = Identify(context.Background(), filepath.Join(secret, "missing-child"))
+	_, err := Identify(context.Background(), filepath.Join(secret, "missing-child"))
 	if err == nil {
 		t.Fatal("a missing directory was identified")
 	}
@@ -727,13 +744,12 @@ func TestTheProjectVanishingMidCheck(t *testing.T) {
 	}
 }
 
-// TestNoGitStepReturnsABenignZeroValue. Every step that depends on git must
-// fail loudly when git cannot run. A zero value here would look like "clean
-// tree, no commits, nothing modified" - the shape of a healthy answer, arrived
-// at by not looking (spec §7.1).
+// TestNoGitStepReturnsABenignZeroValue keeps the low-level Git helpers fail
+// closed while the public fingerprint API falls back to L3 when Git is absent.
 func TestNoGitStepReturnsABenignZeroValue(t *testing.T) {
 	repo := newRepo(t)
-	write(t, filepath.Join(repo, "f.txt"), "x\n")
+	file := filepath.Join(repo, "f.txt")
+	write(t, file, "x\n")
 	ctx := context.Background()
 
 	// A PATH with no git on it, restored by t.Setenv when the test ends.
@@ -748,8 +764,12 @@ func TestNoGitStepReturnsABenignZeroValue(t *testing.T) {
 	if digests, err := digestAll(ctx, repo, []string{"f.txt"}); err == nil {
 		t.Errorf("digestAll succeeded without git: %v", digests)
 	}
-	if _, err := Capture(ctx, repo, nil); err == nil {
-		t.Error("Capture succeeded without git")
+	fp, err := Capture(ctx, repo, []string{file})
+	if err != nil {
+		t.Fatalf("L3 Capture failed without git: %v", err)
+	}
+	if fp.Head != "" || fp.Branch != "" || fp.Files["f.txt"] == "" {
+		t.Fatalf("L3 fingerprint without git = %+v", fp)
 	}
 
 	// These two answer false rather than erroring, which is safe in one

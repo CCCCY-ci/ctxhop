@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,15 +36,19 @@ func TestS3Integration(t *testing.T) {
 	}
 
 	createdKeys := make([]string, 0, 1)
+	var createdKeysMu sync.Mutex
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	t.Cleanup(func() {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancelCleanup()
-		for _, createdKey := range createdKeys {
-			if deleteErr := store.Delete(cleanupCtx, createdKey); deleteErr != nil {
-				t.Logf("S3 integration cleanup delete %q failed: %v", createdKey, deleteErr)
-			}
+		createdKeysMu.Lock()
+		keys := append([]string(nil), createdKeys...)
+		createdKeysMu.Unlock()
+		if cleanupErr := runS3IntegrationOperations(cleanupCtx, len(keys), false, func(ctx context.Context, index int) error {
+			return store.Delete(ctx, keys[index])
+		}); cleanupErr != nil {
+			t.Logf("S3 integration cleanup failed: %v", cleanupErr)
 		}
 	})
 
@@ -102,12 +107,17 @@ func TestS3Integration(t *testing.T) {
 	}
 
 	const paginationCount = 1001
-	for i := 0; i < paginationCount; i++ {
-		paginationKey := fmt.Sprintf("v1/pagination/%04d", i)
+	if err := runS3IntegrationOperations(ctx, paginationCount, true, func(ctx context.Context, index int) error {
+		paginationKey := fmt.Sprintf("v1/pagination/%04d", index)
 		if err := store.Put(ctx, paginationKey, strings.NewReader("x"), 1); err != nil {
-			t.Fatalf("S3 pagination put %d: %v", i, err)
+			return fmt.Errorf("S3 pagination put %d: %w", index, err)
 		}
+		createdKeysMu.Lock()
 		createdKeys = append(createdKeys, paginationKey)
+		createdKeysMu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatalf("S3 pagination puts: %v", err)
 	}
 	objects, err = store.List(ctx, "v1/pagination/")
 	if err != nil {
@@ -116,6 +126,67 @@ func TestS3Integration(t *testing.T) {
 	if len(objects) != paginationCount {
 		t.Fatalf("S3 pagination returned %d objects, want %d", len(objects), paginationCount)
 	}
+}
+
+const s3IntegrationWorkers = 16
+
+func runS3IntegrationOperations(ctx context.Context, count int, stopOnError bool, operation func(context.Context, int) error) error {
+	if count == 0 {
+		return nil
+	}
+	workers := s3IntegrationWorkers
+	if count < workers {
+		workers = count
+	}
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	var firstErr error
+	var firstErrOnce sync.Once
+	recordError := func(err error) {
+		if err == nil {
+			return
+		}
+		firstErrOnce.Do(func() {
+			firstErr = err
+			if stopOnError {
+				cancel()
+			}
+		})
+	}
+
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				if err := workCtx.Err(); err != nil {
+					if ctx.Err() != nil {
+						recordError(err)
+					}
+					continue
+				}
+				recordError(operation(workCtx, index))
+			}
+		}()
+	}
+
+dispatch:
+	for index := 0; index < count; index++ {
+		select {
+		case jobs <- index:
+		case <-workCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func TestS3IntegrationLoadsPersistedSettings(t *testing.T) {

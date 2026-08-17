@@ -156,7 +156,7 @@ func TestPassphraseChangeValidationFailureLeavesRemoteEnvelopeUntouched(t *testi
 	}
 
 	mismatched := strings.NewReader(oldPassphrase + "\n" + newPassphrase + "\nother-secret\n")
-	if err := runPassphraseWithIO([]string{"change"}, mismatched, &output); err == nil || !strings.Contains(err.Error(), "new passphrases do not match") {
+	if err := runPassphraseWithIO([]string{"change"}, mismatched, &output); err == nil || !strings.Contains(err.Error(), "new encryption passwords do not match") {
 		t.Fatalf("mismatched new passphrase error = %v", err)
 	}
 

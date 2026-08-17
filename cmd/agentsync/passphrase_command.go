@@ -109,15 +109,15 @@ func rotatePassphrase(ctx context.Context, c *config.Config, configDir, action s
 	store := access.Store
 	keyfile := access.Keyfile
 
-	secretInput := bufio.NewReader(input)
+	secretInput := newCommandSecretReader(input)
 	var next string
 	switch action {
 	case passphraseActionChange:
-		current, err := readCommandSecretReader(secretInput, prompt, "passphrase", "Current passphrase: ")
+		current, err := secretInput.read("passphrase", prompt, "Current encryption password: ")
 		if err != nil {
 			return err
 		}
-		next, err = readNewPassphraseFromReader(secretInput, prompt, "passphrase")
+		next, err = readNewPassphraseFromSecretReader(secretInput, prompt, "passphrase")
 		if err != nil {
 			return err
 		}
@@ -128,11 +128,11 @@ func rotatePassphrase(ctx context.Context, c *config.Config, configDir, action s
 		if err := writeRecoveryResetReminder(prompt); err != nil {
 			return err
 		}
-		recovery, err := readCommandSecretReader(secretInput, prompt, "passphrase", "Recovery key: ")
+		recovery, err := secretInput.read("passphrase", prompt, "Recovery key: ")
 		if err != nil {
 			return err
 		}
-		next, err = readNewPassphraseFromReader(secretInput, prompt, "passphrase")
+		next, err = readNewPassphraseFromSecretReader(secretInput, prompt, "passphrase")
 		if err != nil {
 			return err
 		}
@@ -153,20 +153,24 @@ func readNewPassphrase(input io.Reader, prompt io.Writer, command string) (strin
 	if input == nil {
 		return "", fmt.Errorf("%s: input is required", command)
 	}
-	return readNewPassphraseFromReader(bufio.NewReader(input), prompt, command)
+	return readNewPassphraseFromSecretReader(newCommandSecretReader(input), prompt, command)
 }
 
 func readNewPassphraseFromReader(input *bufio.Reader, prompt io.Writer, command string) (string, error) {
-	first, err := readCommandSecretReader(input, prompt, command, "New passphrase: ")
+	return readNewPassphraseFromSecretReader(&commandSecretReader{raw: input, lines: input}, prompt, command)
+}
+
+func readNewPassphraseFromSecretReader(input *commandSecretReader, prompt io.Writer, command string) (string, error) {
+	first, err := input.read(command, prompt, "New encryption password: ")
 	if err != nil {
 		return "", err
 	}
-	second, err := readCommandSecretReader(input, prompt, command, "Repeat new passphrase: ")
+	second, err := input.read(command, prompt, "Repeat new encryption password: ")
 	if err != nil {
 		return "", err
 	}
 	if first != second {
-		return "", fmt.Errorf("%s: new passphrases do not match", command)
+		return "", fmt.Errorf("%s: new encryption passwords do not match", command)
 	}
 	return first, nil
 }

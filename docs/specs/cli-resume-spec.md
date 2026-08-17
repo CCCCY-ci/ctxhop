@@ -52,7 +52,7 @@ metadata; paths, credentials, endpoints, and plaintext records are not printed
 by the command.
 
 Projects configured as excluded or push-only cannot be restored by this
-command; it stops before reading the remote keyfile or asking for a passphrase.
+command; it stops before reading the remote keyfile or asking for an encryption password.
 
 The local device mode is checked before this restore state is read. A
 push-only or disabled device cannot enter the remote body-read flow.
@@ -63,9 +63,13 @@ fork versions are not marked as observed. If this local marker cannot be
 saved, the command reports the error after the Agent write; it never attempts
 to roll back the restored session.
 
-The source fingerprint contains only Git state, relative file names, and
-content digests. It is encrypted inside the session summary and is used only
-for the target workspace comparison.
+The source fingerprint records Git state, relative file names, and content
+digests when the workspace is Git-backed. A manually bound non-Git project
+uses the L3 fallback: it has no Git state and includes content digests only
+for files the session reports as touched. This keeps restore possible, but
+changes to unreported files cannot be detected. The fingerprint is encrypted
+inside the session summary and is used only for the target workspace
+comparison.
 
 ## 4. Test plan
 

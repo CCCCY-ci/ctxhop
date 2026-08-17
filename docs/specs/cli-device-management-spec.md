@@ -26,7 +26,7 @@ agentsync device invite [--output PATH]
 ```
 
 `device list` first uses the local device grant in a managed domain and falls
-back to an explicitly entered storage passphrase only for bootstrap or recovery.
+back to an explicitly entered storage encryption password only for bootstrap or recovery.
 `device rename`, `device rotate-key` and `device remove` require an active local
 device grant; rotate/remove also prompt for the current and new passphrases.
 Removing a device always requires an interactive confirmation unless `--yes` is

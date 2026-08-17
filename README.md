@@ -35,7 +35,7 @@ directory synchroniser you already trust.
 # Build the binary
 go build -trimpath -o agentsync ./cmd/agentsync
 
-# On device A, initialise once; this prompts for the passphrase
+# On device A, initialise once; this prompts for the encryption password
 agentsync init --backend dir --path /path/to/agentsync-remote
 agentsync device invite --output agentsync-invite.json
 
@@ -57,9 +57,9 @@ The second device gets its own device identity. A normal device may push
 sessions and perform explicit metadata/list/resume operations. `push-only`
 devices never restore remote sessions; `disabled` devices skip automatic
 synchronisation.
-The invitation is a portable, signed pairing document. It carries the Remote settings and non-secret domain fingerprint, but no credentials, passphrase or session content. The second device verifies the existing keyfile before saving its local configuration. Managed domains then issue a device-specific encrypted grant, so each installation can be authorized and revoked independently.
+The invitation is a portable, signed pairing document. It carries the Remote settings and non-secret domain fingerprint, but no credentials, encryption password or session content. The second device verifies the existing keyfile before saving its local configuration. Managed domains then issue a device-specific encrypted grant, so each installation can be authorized and revoked independently.
 
-`agentsync device rotate-key` creates a new content-key generation, passphrase and
+`agentsync device rotate-key` creates a new content-key generation, encryption password and
 Recovery Key while retaining the stable project namespace. `agentsync device
 remove DEVICE_ID` performs the same rotation, tombstones the target device, and
 then removes its remote branch objects. The command prints a new Recovery Key
@@ -86,9 +86,12 @@ cross-device identity. The intended manual form is:
 
     agentsync project bind --name client-project --path /path/to/project
 
-The same manual identity must be used on the other device. The shared
-current-project resolver now consumes this binding for project-consuming
-commands; see
+The same manual identity must be used on the other device. A manually bound
+non-Git project can still sync: its workspace safety check uses the L3
+fallback and hashes only files reported as touched by the session. This means
+changes to unreported files cannot be detected; Git-backed projects retain
+broader dirty-file coverage. The shared current-project resolver now consumes
+this binding for project-consuming commands; see
 [`docs/specs/sync-domain-project-scope-spec.md`](docs/specs/sync-domain-project-scope-spec.md).
 
 Useful follow-up commands:
@@ -117,10 +120,13 @@ agentsync init --backend s3 \
   --bucket <BUCKET_NAME> --region auto --prefix agentsync
 ```
 
+The Endpoint is account-level. Do not append `/<BUCKET_NAME>` to it; provide the
+Bucket separately with `--bucket`.
+
 When no encrypted backend credentials exist yet, `init` prompts for the
 access key, secret key and optional session token, then stores them in the
 encrypted local `secrets` file. They are not written to `config.json` and
-should not be put in the command line.
+should not be put in the command line. Interactive secret prompts do not echo the entered value.
 
 After `init`, the opt-in integration test can read the complete S3
 configuration from `config.json` and the credentials from encrypted `secrets`:
@@ -233,7 +239,7 @@ in
 
 ## Known limitations
 
-- Losing both the passphrase and Recovery Key is not recoverable.
+- Losing both the encryption password and Recovery Key is not recoverable.
 - Managed domains provide cryptographic forward revocation: a removed device
   cannot unlock the next key generation. Plaintext or historical keys already
   copied by that device cannot be recalled, and a dumb backend can still accept
