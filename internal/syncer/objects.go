@@ -90,7 +90,11 @@ func SealShard(recipient *ecdh.PublicKey, objectKey string, shard Shard) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("syncer: encode shard for %q: %w", objectKey, err)
 	}
-	sealed, err := crypto.Encrypt(recipient, objectKey, plaintext)
+	compressed, err := compressPayload(plaintext, maxShardBytes)
+	if err != nil {
+		return nil, fmt.Errorf("syncer: compress shard: %w", err)
+	}
+	sealed, err := crypto.Encrypt(recipient, objectKey, compressed)
 	if err != nil {
 		return nil, fmt.Errorf("syncer: encrypt shard: %w", err)
 	}
@@ -106,7 +110,11 @@ func OpenShard(identity *ecdh.PrivateKey, objectKey string, sealed []byte) (Shar
 	if err != nil {
 		return Shard{}, fmt.Errorf("syncer: decrypt shard: %w", err)
 	}
-	shard, err := ParseShard(plaintext)
+	expanded, err := decompressPayload(plaintext, maxShardBytes)
+	if err != nil {
+		return Shard{}, fmt.Errorf("syncer: decompress shard: %w", err)
+	}
+	shard, err := ParseShard(expanded)
 	if err != nil {
 		return Shard{}, fmt.Errorf("syncer: parse decrypted shard: %w", err)
 	}
