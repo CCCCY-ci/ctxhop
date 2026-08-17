@@ -29,7 +29,9 @@ type PathSpace struct {
 	AgentHome string
 }
 
-// pathValueFields are leaf field names whose value is a single absolute path.
+// pathValueFields are common leaf field names whose values, or array elements,
+// are paths. They are hints for fields that can contain paths with spaces;
+// unknown leaf values use the structural bare-path fallback below.
 //
 // Every one of these is tried against both roots rather than being tied to one:
 // PoC-1 found `file_path` holding paths under the agent's own directory, not
@@ -38,7 +40,12 @@ var pathValueFields = map[string]bool{
 	"cwd":           true,
 	"file_path":     true,
 	"filePath":      true,
+	"fileName":      true,
+	"fileNames":     true,
+	"filename":      true,
+	"filenames":     true,
 	"planFilePath":  true,
+	"path":          true,
 	"trackingPath":  true,
 	"realParentDir": true,
 }
@@ -76,12 +83,12 @@ func (c *Canonicalizer) Record(raw []byte) ([]byte, error) {
 	return encode(c.walk("", v))
 }
 
-// UnknownPathFields returns field names, sorted, that held one of this
-// machine's known path prefixes but are not in the allowlist.
+// UnknownPathFields returns safe field names for path-bearing object keys.
+// Unknown leaf values use the structural fallback instead.
 //
-// Such a field means the agent gained a path-bearing field we do not rewrite,
-// so restoring would produce a session pointing at the source machine. The
-// caller downgrades compatibility rather than writing anything (spec §4.8).
+// Unknown object keys remain conservative because their semantics are ambiguous,
+// and changing arbitrary user content would be unsafe. The
+// caller downgrades compatibility when an unresolved path key is present.
 func (c *Canonicalizer) UnknownPathFields() []string {
 	out := make([]string, 0, len(c.unknown))
 	for k := range c.unknown {
@@ -135,8 +142,10 @@ func (c *Canonicalizer) key(parentField, k string) string {
 	return k
 }
 
-// text tokenizes a string value when its field is allowlisted, and otherwise
-// records it as a finding if it nonetheless carries one of our path prefixes.
+// text tokenizes a string value when its field is allowlisted. For unknown
+// fields, an exact bare value under one of the current machine's roots is also
+// rewritten. This structural fallback is what keeps ordinary Claude Code
+// minor releases from requiring a new field-specific adapter release.
 func (c *Canonicalizer) text(field, s string) string {
 	if pathValueFields[field] {
 		if out, ok := c.tokenize(s); ok {
@@ -149,8 +158,8 @@ func (c *Canonicalizer) text(field, s string) string {
 	}
 
 	if isBarePath(s) {
-		if _, ok := c.tokenize(s); ok {
-			c.report(field)
+		if out, ok := c.tokenize(s); ok {
+			return out
 		}
 	}
 	return s
@@ -160,8 +169,8 @@ func (c *Canonicalizer) text(field, s string) string {
 //
 // Findings surface in `agentsync doctor`, whose output must be safe to paste
 // into a public issue - no paths, project names or session content (BR-09).
-// Keys of a path-keyed container are themselves absolute paths, so a name that
-// is not a plain identifier is replaced rather than leaked.
+// Keys of an unknown path-keyed container are themselves absolute paths, so a
+// name that is not a plain identifier is replaced rather than leaked.
 func (c *Canonicalizer) report(field string) {
 	if !isFieldName(field) {
 		field = "<redacted>"
@@ -186,18 +195,27 @@ func isFieldName(s string) bool {
 
 // isBarePath reports whether a value is plausibly a path and nothing else.
 //
-// The finding it gates downgrades compatibility, which stops the agent from
-// syncing entirely, so the test errs towards silence. Prose routinely begins
-// with a path - a pasted filename followed by a question, a shell command in a
-// tool argument - and treating those as schema drift would kill sync for
-// ordinary sessions.
-//
-// Requiring the value to contain no whitespace means paths containing spaces go
-// unreported. That is an acceptable trade: detection is statistical across
-// every record of every session, so a genuinely new path field will show up on
-// some space-free path quickly, whereas a false positive is immediately fatal.
+// Prose can begin with a path - a pasted filename followed by a question,
+// a shell command in a tool argument - and rewriting such prose would change
+// the session's meaning. Unknown fields therefore use a conservative shape
+// check; named path fields still support spaces and non-ASCII paths.
 func isBarePath(s string) bool {
 	return s != "" && !strings.ContainsAny(s, " \t\r\n")
+}
+
+// isCanonicalPath reports whether s has the shape produced by tokenize for an
+// unknown leaf field. A canonical path is either the token itself or the token
+// followed by a slash-separated remainder.
+func isCanonicalPath(s string) bool {
+	if !isBarePath(s) {
+		return false
+	}
+	for _, token := range []string{TokenProject, TokenAgentHome} {
+		if s == token || strings.HasPrefix(s, token+"/") || strings.HasPrefix(s, token+"\\") {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenize replaces a leading path prefix with its token. The longer root is
@@ -303,7 +321,7 @@ func (l *localizer) walk(field string, v any) (any, error) {
 		return out, nil
 
 	case string:
-		return l.text(field, t, pathValueFields[field])
+		return l.text(field, t, pathValueFields[field] || isCanonicalPath(t))
 
 	default:
 		return v, nil

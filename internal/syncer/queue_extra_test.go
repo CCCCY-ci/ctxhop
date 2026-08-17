@@ -165,3 +165,37 @@ func TestQueueStoreWrapperErrorsAndReadFailures(t *testing.T) {
 		t.Fatal("cancelled wrapper Due unexpectedly succeeded")
 	}
 }
+
+func TestQueueSnapshotReopensOnlyExcludedFailures(t *testing.T) {
+	key, err := NewQueueKey("p", "s", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot QueueSnapshot
+	if err := snapshot.Enqueue(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshot.RecordFailure(key, FailureExcluded, time.Time{}, DefaultRetryPolicy()); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.Reopen(key, FailureExcluded); err != nil {
+		t.Fatalf("Reopen excluded: %v", err)
+	}
+	item, err := snapshot.Item(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != QueuePending || item.Failure != FailureNone || item.Attempt != 0 || !item.NextAttemptAt.IsZero() {
+		t.Fatalf("reopened item = %+v", item)
+	}
+
+	if err := snapshot.Enqueue(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshot.RecordFailure(key, FailureCredentials, time.Time{}, DefaultRetryPolicy()); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.Reopen(key, FailureCredentials); !errors.Is(err, ErrQueueItemBlocked) {
+		t.Fatalf("Reopen credentials = %v, want ErrQueueItemBlocked", err)
+	}
+}

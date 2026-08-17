@@ -133,3 +133,34 @@ func (p QueuedPusher) prepare(ctx context.Context, key syncer.QueueKey, now time
 	}
 	return nil
 }
+
+// prepareSession preserves the normal scheduling check, but identifies an
+// excluded task that may be safely reconsidered after the source session has
+// been canonicalized again. This repairs queue entries written by an older
+// adapter rule without reopening them before validation.
+func (p QueuedPusher) prepareSession(ctx context.Context, key syncer.QueueKey, now time.Time) (bool, error) {
+	if err := p.prepare(ctx, key, now); err == nil {
+		return false, nil
+	} else if !errors.Is(err, syncer.ErrQueueItemBlocked) {
+		return false, err
+	}
+
+	item, err := p.queue.Item(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("syncflow: inspect blocked task: %w", err)
+	}
+	if item.Failure != syncer.FailureExcluded {
+		return false, syncer.ErrQueueItemBlocked
+	}
+	return true, nil
+}
+
+func (p QueuedPusher) reopenExcluded(ctx context.Context, key syncer.QueueKey, needed bool) error {
+	if !needed {
+		return nil
+	}
+	if err := p.queue.Reopen(ctx, key, syncer.FailureExcluded); err != nil {
+		return fmt.Errorf("syncflow: reopen revalidated task: %w", err)
+	}
+	return nil
+}

@@ -78,8 +78,8 @@ func TestCanonicalizeSessionRejectsUnsafeSnapshotsAndPathSchemas(t *testing.T) {
 			want:  ErrInvalidSessionSnapshot,
 		},
 		{
-			name:  "unknown path field",
-			data:  adapter.SessionData{Records: [][]byte{[]byte(`{"unknownPath":"D:\\Source\\Project\\secret"}`)}},
+			name:  "unknown path-keyed container",
+			data:  adapter.SessionData{Records: [][]byte{[]byte(`{"unknownContainer":{"D:\\Source\\Project\\secret":true}}`)}},
 			space: space,
 			inst:  full,
 			want:  ErrSessionNotPushable,

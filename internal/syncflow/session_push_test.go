@@ -61,8 +61,8 @@ func TestPushSessionAtRetainsTerminalCanonicalizationFailuresWithoutRemoteWrites
 			wantFail: syncer.FailureSessionCorrupt,
 		},
 		{
-			name:     "unknown path field",
-			data:     adapter.SessionData{Records: [][]byte{[]byte(`{"unknownPath":"/source/project/secret"}`)}},
+			name:     "unknown path-keyed container",
+			data:     adapter.SessionData{Records: [][]byte{[]byte(`{"unknownContainer":{"/source/project/secret":true}}`)}},
 			space:    space,
 			install:  adapter.Installation{Compatibility: adapter.CompatFull},
 			wantErr:  ErrSessionNotPushable,
@@ -156,5 +156,36 @@ func TestClassifySessionFailureUsesFiniteTerminalClasses(t *testing.T) {
 	}
 	if got := ClassifySessionFailure(errors.New("unexpected canonicalization error")); got != syncer.FailureSessionCorrupt {
 		t.Fatalf("unknown classification = %q, want FailureSessionCorrupt", got)
+	}
+}
+
+func TestPushSessionAtReopensExcludedAfterCanonicalization(t *testing.T) {
+	fixture := newQueuedFixture(t, func(error) syncer.FailureClass {
+		return syncer.FailureNetwork
+	})
+	fixture.remote.failures = 0
+	policy := syncer.RetryPolicy{BaseDelay: 10 * time.Second, MaxDelay: time.Minute}
+	if err := fixture.queue.Enqueue(context.Background(), fixture.key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.queue.RecordFailure(context.Background(), fixture.key, syncer.FailureExcluded, time.Time{}, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	space := adapter.PathSpace{ProjectRoot: `/source/project`, AgentHome: `/source/agent`}
+	data := adapter.SessionData{Records: [][]byte{[]byte(`{"newPathField":"/source/project/secret"}`)}}
+	now := time.Date(2026, time.August, 14, 0, 0, 0, 0, time.UTC)
+	if _, err := fixture.pusher.PushSessionAt(context.Background(), fixture.key, data, space, adapter.Installation{Compatibility: adapter.CompatFull}, fixture.executor, fixture.cursor, now); err != nil {
+		t.Fatalf("PushSessionAt: %v", err)
+	}
+	if fixture.remote.puts != 1 {
+		t.Fatalf("remote puts = %d, want 1", fixture.remote.puts)
+	}
+	snapshot, err := fixture.queue.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Items) != 0 {
+		t.Fatalf("queue after revalidated success = %+v", snapshot.Items)
 	}
 }

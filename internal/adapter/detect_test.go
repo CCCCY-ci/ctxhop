@@ -100,6 +100,7 @@ func TestGradeVersion(t *testing.T) {
 	}{
 		{"2.1.226", CompatFull},
 		{"99.0.0", CompatLimited},
+		{"2.1.228", CompatLimited},
 		// A version we could not determine grades no less strictly than one we
 		// merely do not recognise, or a caller asking "may I restore without
 		// confirmation?" would be told yes precisely when we know least.

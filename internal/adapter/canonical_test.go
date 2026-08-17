@@ -182,7 +182,7 @@ func TestCanonicalizeDoesNotEscapeHTML(t *testing.T) {
 	}
 }
 
-func TestCanonicalizeReportsUnknownPathFields(t *testing.T) {
+func TestCanonicalizeReportsUnknownPathKeys(t *testing.T) {
 	c := NewCanonicalizer(winSpace)
 
 	records := []string{
@@ -197,7 +197,7 @@ func TestCanonicalizeReportsUnknownPathFields(t *testing.T) {
 		}
 	}
 
-	want := []string{"otherContainer.<key>", "someNewField"}
+	want := []string{"otherContainer.<key>"}
 	if got := c.UnknownPathFields(); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -366,18 +366,17 @@ func TestCanonicalizeIgnoresProseThatBeginsWithAPath(t *testing.T) {
 	}
 }
 
-func TestUnknownPathFieldAtTopLevelIsRedacted(t *testing.T) {
-	// A record that is a bare JSON string has no field name at all. Reporting
-	// it under an empty name would be meaningless, and the value itself is a
-	// path we must not put in diagnostics.
+func TestCanonicalizeTokenizesTopLevelPath(t *testing.T) {
+	// A top-level path has no field name, but the structural fallback still
+	// tokenizes it so it can be localized on another device.
 	c := NewCanonicalizer(winSpace)
 	if _, err := c.Record([]byte(`"D:\\Workspace\\Example\\a.go"`)); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
 	got := c.UnknownPathFields()
-	if len(got) != 1 || got[0] != "<redacted>" {
-		t.Errorf("got %v, want [<redacted>]", got)
+	if len(got) != 0 {
+		t.Errorf("got findings %v, want none", got)
 	}
 }
 
@@ -385,7 +384,7 @@ func TestUnknownPathFieldsNeverLeakContent(t *testing.T) {
 	// Findings reach `agentsync doctor`, whose output must be safe to paste
 	// into a public issue: no paths, project names or session content (BR-09).
 	c := NewCanonicalizer(winSpace)
-	in := `{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\x.md":"D:\\Workspace\\Example\\y"}}`
+	in := `{"otherContainer":{"C:\\Users\\alice\\.claude\\x.md":"D:\\Workspace\\Example\\y"}}`
 	if _, err := c.Record([]byte(in)); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -526,4 +525,32 @@ func FuzzCanonicalize(f *testing.F) {
 			t.Fatalf("record contains a newline: %s", out)
 		}
 	})
+}
+
+func TestCanonicalizeTokenizesUnknownLeafPaths(t *testing.T) {
+	c := NewCanonicalizer(winSpace)
+	out, err := c.Record([]byte(`{"newPathField":"D:\\Workspace\\Example\\src\\a.go","message":{"content":{"content":"C:\\Users\\alice\\.claude\\x"}}}`))
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	want := `{"message":{"content":{"content":"${AS_AGENT_HOME}/x"}},"newPathField":"${AS_PROJECT}/src/a.go"}`
+	if got := string(out); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if got := c.UnknownPathFields(); len(got) != 0 {
+		t.Errorf("got findings %v, want none", got)
+	}
+}
+
+func TestLocalizeTokenizesUnknownLeafPaths(t *testing.T) {
+	space := PathSpace{ProjectRoot: `D:\Target\Example`, AgentHome: `C:\Users\bob\.claude`}
+	in := []byte(`{"message":{"content":{"content":"${AS_PROJECT}/src/a.go"}}}`)
+	out, err := Localize(in, space)
+	if err != nil {
+		t.Fatalf("Localize: %v", err)
+	}
+	want := `{"message":{"content":{"content":"D:\\Target\\Example\\src\\a.go"}}}`
+	if string(out) != want {
+		t.Errorf("got %s, want %s", out, want)
+	}
 }

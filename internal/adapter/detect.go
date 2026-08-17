@@ -9,12 +9,10 @@ import (
 	"strings"
 )
 
-// verifiedVersions lists the agent versions this adapter has been checked
-// against.
-//
-// Kept as data rather than code so it can be updated without shipping a new
-// binary, which is what keeps the window of unavailability short after the
-// agent releases (spec §4.8).
+// verifiedVersions is a small baseline of Agent versions checked end to end.
+// It is not an upload allowlist: unknown versions still use structural
+// canonicalization and remain eligible for backup. The list only controls
+// whether restore can proceed without explicit limited-compatibility consent.
 var verifiedVersions = map[string]bool{
 	"2.1.226": true,
 	// Verified end to end by PoC-1b: read, canonicalise, localise, install and
@@ -151,8 +149,8 @@ func (l Layout) newestSessionFile(ctx context.Context) (string, error) {
 //
 // An unknown version does not stop the tool. Agents ship constantly, and
 // refusing everything on each release would leave users stranded far more often
-// than it would protect them; what an unknown version restricts is writing,
-// because writing is the operation that can destroy data (spec §4.8).
+// than it would protect them; what an unknown version restricts is restoring
+// without consent, because writing is the operation that can destroy data.
 //
 // A version we could not determine at all grades no less strictly than one we
 // merely do not recognise. Grading the case with the least information as the
@@ -172,10 +170,10 @@ func gradeVersion(version string) (Compatibility, string) {
 // GradeSession downgrades a compatibility level in light of what a session
 // actually contained.
 //
-// A version check alone is not enough: the risk is not that the version is new,
-// it is that the session holds a path-bearing field we do not rewrite, which
-// would restore a session still pointing at the machine that produced it. When
-// that happens the adapter stops rather than writing something broken.
+// Version checks are intentionally coarse. Leaf values that are exact local
+// paths are rewritten structurally, so a new Claude Code field does not stop
+// backup. Findings are reserved for path-bearing object keys whose semantics
+// are ambiguous; those remain stopped rather than silently changed.
 //
 // findings are the field names reported by a Canonicalizer, which are already
 // redacted for diagnostics (BR-09).

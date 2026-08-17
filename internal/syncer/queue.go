@@ -217,6 +217,45 @@ func (q *QueueSnapshot) Enqueue(key QueueKey) error {
 	return nil
 }
 
+// Item returns one queued task without changing the snapshot.
+func (q QueueSnapshot) Item(key QueueKey) (QueueItem, error) {
+	if err := key.Validate(); err != nil {
+		return QueueItem{}, err
+	}
+	for _, item := range q.Items {
+		if item.Key == key {
+			return item, nil
+		}
+	}
+	return QueueItem{}, ErrQueueItemMissing
+}
+
+// Reopen clears an excluded terminal failure after the caller has
+// revalidated the source data. Other terminal failures remain blocked because
+// they require an explicit credential, permission, or storage decision.
+func (q *QueueSnapshot) Reopen(key QueueKey, failure FailureClass) error {
+	if q == nil {
+		return errors.New("syncer: queue snapshot is required")
+	}
+	if err := key.Validate(); err != nil {
+		return err
+	}
+	if failure != FailureExcluded {
+		return ErrQueueItemBlocked
+	}
+	for index, item := range q.Items {
+		if item.Key != key {
+			continue
+		}
+		if item.State != QueueBlocked || item.Failure != failure {
+			return ErrQueueItemBlocked
+		}
+		q.Items[index] = QueueItem{Key: key, State: QueuePending}
+		return nil
+	}
+	return ErrQueueItemMissing
+}
+
 // Complete removes a task after a successful durable sync.
 func (q *QueueSnapshot) Complete(key QueueKey) error {
 	if q == nil {
@@ -499,6 +538,28 @@ func (s QueueStore) Enqueue(ctx context.Context, key QueueKey) error {
 		return err
 	}
 	if err := snapshot.Enqueue(key); err != nil {
+		return err
+	}
+	return s.Save(ctx, snapshot)
+}
+
+// Item loads one queued task without changing the queue.
+func (s QueueStore) Item(ctx context.Context, key QueueKey) (QueueItem, error) {
+	snapshot, err := s.Load(ctx)
+	if err != nil {
+		return QueueItem{}, err
+	}
+	return snapshot.Item(key)
+}
+
+// Reopen clears an excluded terminal task after the caller has independently
+// revalidated its source session.
+func (s QueueStore) Reopen(ctx context.Context, key QueueKey, failure FailureClass) error {
+	snapshot, err := s.Load(ctx)
+	if err != nil {
+		return err
+	}
+	if err := snapshot.Reopen(key, failure); err != nil {
 		return err
 	}
 	return s.Save(ctx, snapshot)
