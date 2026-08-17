@@ -31,6 +31,37 @@ type pushSummary struct {
 	Pushed  int
 	Failed  int
 	Skipped int
+
+	// failureDetails contains only fixed stage names and finite failure
+	// classes. It never carries session content, local paths, credentials or
+	// provider response text.
+	failureDetails string
+}
+
+func (s *pushSummary) fail(stage string, err error) {
+	s.Failed++
+
+	detail := fmt.Sprintf("push failure: stage=%s", stage)
+	switch stage {
+	case "remote-push", "device-record":
+		class := classifyPushFailure(err)
+		if class == syncer.FailureNone {
+			class = syncer.FailureUnknown
+		}
+		detail = fmt.Sprintf("%s, class=%s; run 'agentsync doctor'", detail, class)
+	}
+	if s.failureDetails != "" {
+		s.failureDetails += "\n"
+	}
+	s.failureDetails += detail
+}
+
+func writePushFailureDetails(output io.Writer, details string) error {
+	if details == "" {
+		return nil
+	}
+	_, err := fmt.Fprintln(output, details)
+	return err
 }
 
 func init() {
@@ -73,6 +104,9 @@ func runPushWithIO(args []string, output io.Writer) error {
 		return nil
 	}
 	if _, err := fmt.Fprintf(output, "pushed: %d, failed: %d, skipped: %d\n", summary.Pushed, summary.Failed, summary.Skipped); err != nil {
+		return err
+	}
+	if err := writePushFailureDetails(output, summary.failureDetails); err != nil {
 		return err
 	}
 	if summary.Failed != 0 {
@@ -188,7 +222,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	summary := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, layout, installation, space, store, public, pusher, configDir, current.Root, refs)
 	if summary.Pushed > 0 {
 		if err := publishPushDeviceRecord(ctx, c, store, public); err != nil {
-			summary.Failed++
+			summary.fail("device-record", err)
 		}
 	}
 	return summary, nil
@@ -198,58 +232,58 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 	var summary pushSummary
 	for _, ref := range refs {
 		if err := ctx.Err(); err != nil {
-			summary.Failed++
+			summary.fail("context", err)
 			continue
 		}
 		sessionID, err := crypto.SessionID(identifierKey, projectID, ref.NativeID)
 		if err != nil {
-			summary.Failed++
+			summary.fail("session-id", err)
 			continue
 		}
 		objectLayout, err := syncer.NewObjectLayout(projectID, sessionID, deviceID)
 		if err != nil {
-			summary.Failed++
+			summary.fail("object-layout", err)
 			continue
 		}
 		key, err := syncer.NewQueueKey(projectID, sessionID, deviceID)
 		if err != nil {
-			summary.Failed++
+			summary.fail("queue-key", err)
 			continue
 		}
 		cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
 		if err != nil {
-			summary.Failed++
+			summary.fail("cursor-store", err)
 			continue
 		}
 		cursor, err := cursorStore.Load(ctx)
 		if errors.Is(err, syncer.ErrNoPushCursor) {
 			cursor = syncer.NewPushCursor()
 		} else if err != nil {
-			summary.Failed++
+			summary.fail("cursor", err)
 			continue
 		}
 		executor, err := syncer.NewAppendExecutor(store, public, objectLayout, cursorStore, syncer.DefaultPlanOptions())
 		if err != nil {
-			summary.Failed++
+			summary.fail("executor", err)
 			continue
 		}
 		data, err := adapter.ReadSessionFile(layout.SessionFile(projectRoot, ref.NativeID))
 		if err != nil {
-			summary.Failed++
+			summary.fail("session-read", err)
 			continue
 		}
 		fingerprint, err := capturePushFingerprint(ctx, projectRoot, data)
 		if err != nil {
-			summary.Failed++
+			summary.fail("workspace-fingerprint", err)
 			continue
 		}
 		payload, err := syncflow.EncodeSessionSummaryWithFingerprint(ref, &fingerprint)
 		if err != nil {
-			summary.Failed++
+			summary.fail("metadata", err)
 			continue
 		}
 		if _, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload); err != nil {
-			summary.Failed++
+			summary.fail("remote-push", err)
 			continue
 		}
 		summary.Pushed++
