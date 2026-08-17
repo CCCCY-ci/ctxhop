@@ -10,6 +10,11 @@
 *.so
 *.dylib
 *.a
+.claude/
+.github/
+docs/
+scripts/
+examples/
 
 # === Test code and data ===
 # Repository regression tests are versioned; local fixtures remain ignored.
