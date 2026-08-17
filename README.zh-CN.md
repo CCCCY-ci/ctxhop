@@ -548,8 +548,7 @@ agentsync completion fish | source
 agentsync completion powershell | Invoke-Expression
 ~~~
 
-pwsh 可以作为 PowerShell 别名。持久安装方式见
-docs/specs/cli-completion-spec.md。
+pwsh 可以作为 PowerShell 别名。持久安装时，请按照所使用 Shell 的补全机制完成配置。
 
 ## 故障排查
 
@@ -636,14 +635,6 @@ syncer 和 syncflow。
 
 交叉编译产物写入 dist/。仓库包含发布 workflow、包管理模板和格式/版本规格，
 但生产签名和外部包渠道仍需显式配置。
-
-## 文档
-
-- [TODO 与验收台账](docs/TODO.md)
-- [验收记录](docs/acceptance/)
-- [CLI 与架构规格](docs/specs/)
-- [S3 兼容验收示例（使用 Cloudflare R2）](docs/acceptance/r2-single-device-2026-08-17.md)
-- [Remote memory 示例](examples/remote-memory/README.md)
 
 ## 许可证
 

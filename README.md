@@ -579,8 +579,7 @@ agentsync completion fish | source
 agentsync completion powershell | Invoke-Expression
 ~~~
 
-pwsh is accepted as a PowerShell alias. See
-docs/specs/cli-completion-spec.md for persistent installation examples.
+pwsh is accepted as a PowerShell alias. For persistent installation, use the completion mechanism documented by your shell.
 
 ## Troubleshooting
 
@@ -675,14 +674,6 @@ Build release targets:
 Cross-built artifacts go to dist/. Release workflows, package templates and
 format/versioning specifications are included, while production signing and
 external package channels remain opt-in.
-
-## Documentation
-
-- [TODO and acceptance ledger](docs/TODO.md)
-- [Acceptance records](docs/acceptance/)
-- [CLI and architecture specifications](docs/specs/)
-- [S3-compatible acceptance example using Cloudflare R2](docs/acceptance/r2-single-device-2026-08-17.md)
-- [Remote memory example](examples/remote-memory/README.md)
 
 ## License
 
