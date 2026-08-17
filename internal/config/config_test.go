@@ -14,11 +14,12 @@ func fullConfig() *Config {
 	c := New()
 	c.Device = Device{ID: "dev-abcdef", Name: "workstation-北京"}
 	c.Remote = Remote{
-		Type:     "s3",
-		Endpoint: "https://storage.example.invalid",
-		Bucket:   "acme-private-bucket",
-		Region:   "eu-west-1",
-		Prefix:   "agentsync/",
+		Type:      "s3",
+		Endpoint:  "https://storage.example.invalid",
+		Bucket:    "acme-private-bucket",
+		Region:    "eu-west-1",
+		Prefix:    "agentsync/",
+		PathStyle: true,
 	}
 	c.IdentityPublic = []byte{1, 2, 3, 4}
 	c.DomainFingerprint = "domain-fingerprint-test"

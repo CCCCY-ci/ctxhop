@@ -426,16 +426,45 @@ func TestS3URLConstruction(t *testing.T) {
 	}
 }
 
+func TestS3EndpointBasePathIsPreserved(t *testing.T) {
+	for _, pathStyle := range []bool{false, true} {
+		t.Run(fmt.Sprintf("path-style=%v", pathStyle), func(t *testing.T) {
+			s, err := NewS3(S3Config{
+				Endpoint:  "https://s3.example.com/gateway/",
+				Bucket:    "bucket",
+				AccessKey: "a",
+				SecretKey: "s",
+				PathStyle: pathStyle,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := s.urlFor("v1/a b").String()
+			want := "https://bucket.s3.example.com/gateway/v1/a%20b"
+			if pathStyle {
+				want = "https://s3.example.com/gateway/bucket/v1/a%20b"
+			}
+			if got != want {
+				t.Errorf("got %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestNewS3Validates(t *testing.T) {
 	valid := S3Config{Endpoint: "https://s3.example.com", Bucket: "b", AccessKey: "a", SecretKey: "s"}
 
 	tests := map[string]func(c *S3Config){
-		"no endpoint":      func(c *S3Config) { c.Endpoint = "  " },
-		"no bucket":        func(c *S3Config) { c.Bucket = "" },
-		"no access key":    func(c *S3Config) { c.AccessKey = "" },
-		"no secret key":    func(c *S3Config) { c.SecretKey = "" },
-		"endpoint no host": func(c *S3Config) { c.Endpoint = "not-a-url" },
-		"unsafe prefix":    func(c *S3Config) { c.Prefix = "../escape" },
+		"no endpoint":           func(c *S3Config) { c.Endpoint = "  " },
+		"no bucket":             func(c *S3Config) { c.Bucket = "" },
+		"no access key":         func(c *S3Config) { c.AccessKey = "" },
+		"no secret key":         func(c *S3Config) { c.SecretKey = "" },
+		"endpoint no host":      func(c *S3Config) { c.Endpoint = "not-a-url" },
+		"endpoint wrong scheme": func(c *S3Config) { c.Endpoint = "ftp://s3.example.com" },
+		"endpoint user info":    func(c *S3Config) { c.Endpoint = "https://user@s3.example.com" },
+		"endpoint query":        func(c *S3Config) { c.Endpoint = "https://s3.example.com?x=1" },
+		"endpoint empty query":  func(c *S3Config) { c.Endpoint = "https://s3.example.com?" },
+		"unsafe prefix":         func(c *S3Config) { c.Prefix = "../escape" },
 	}
 	for name, break_ := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -535,6 +564,25 @@ func TestS3DistinguishesAMissingBucketFromAMissingObject(t *testing.T) {
 	}
 }
 
+func TestS3DeleteDistinguishesAMissingBucket(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<Error><Code>NoSuchBucket</Code></Error>"))
+	}))
+	defer srv.Close()
+
+	s, err := NewS3(S3Config{
+		Endpoint: srv.URL, Bucket: "typo", AccessKey: "a", SecretKey: "s",
+		PathStyle: true, HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(context.Background(), "v1/a"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing bucket delete = %v, want configuration error", err)
+	}
+}
 func TestS3TruncatedListingWithoutATokenIsAnError(t *testing.T) {
 	// Returning the short page would look exactly like the end of the bucket,
 	// and the sync layer would read the missing shards as a gap in the session

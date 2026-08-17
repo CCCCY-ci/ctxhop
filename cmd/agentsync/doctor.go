@@ -170,6 +170,7 @@ func buildConfiguredRemote(c *config.Config, configDir string) (remote.Remote, e
 			AccessKey:    secrets.Credentials.AccessKeyID,
 			SecretKey:    secrets.Credentials.SecretAccessKey,
 			SessionToken: secrets.Credentials.SessionToken,
+			PathStyle:    c.Remote.PathStyle,
 		})
 	default:
 		return nil, errors.New("storage backend type is unknown")

@@ -94,7 +94,31 @@ go test ./...
 
 ### 4.1 S3 或兼容服务
 
-需要在至少一个真实 S3 兼容服务上执行：
+本地回归覆盖可用以下命令重复运行；它不会访问外部服务：
+
+```bash
+go test ./internal/remote -run 'TestS3|TestDir' -count=1
+```
+
+真实 S3/R2 验收使用显式开启的 `TestS3Integration`。它只写合成数据到
+本次运行生成的唯一前缀，并且清理时只删除本次成功写入并记录的 key：
+
+```bash
+AGENTSYNC_S3_INTEGRATION=1 \
+AGENTSYNC_S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
+AGENTSYNC_S3_BUCKET=<BUCKET_NAME> \
+AGENTSYNC_S3_REGION=auto \
+AGENTSYNC_S3_ACCESS_KEY_ID=<SHORT_LIVED_KEY> \
+AGENTSYNC_S3_SECRET_ACCESS_KEY=<SHORT_LIVED_SECRET> \
+go test ./internal/remote -run '^TestS3Integration$' -count=1
+```
+
+`AGENTSYNC_S3_SESSION_TOKEN` 和 `AGENTSYNC_S3_PATH_STYLE=true` 只在临时凭据或
+目标服务需要时设置；`AGENTSYNC_S3_INTEGRATION_PAGINATION=1` 会额外写入
+1001 个合成对象验证多页列表。不要在 shell 历史、CI 日志或仓库中保存真实
+凭据。
+
+仍需要在至少一个真实 S3 兼容服务上执行：
 
 - PutObject 后立即 ListObjectsV2；
 - 多页列表和 continuation token；

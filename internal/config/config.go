@@ -37,6 +37,9 @@ type Remote struct {
 	Region   string `json:"region,omitempty"`
 	Prefix   string `json:"prefix,omitempty"`
 	Path     string `json:"path,omitempty"`
+	// PathStyle selects URI path-style S3 addressing. The default is
+	// virtual-hosted style; some S3-compatible gateways require this option.
+	PathStyle bool `json:"pathStyle,omitempty"`
 }
 
 // Binding records that the user declared a directory to be a given project.

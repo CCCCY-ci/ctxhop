@@ -292,8 +292,8 @@ func (o *initOptions) applyDeviceInvite(invite *deviceInvite) error {
 	if err := invite.validateSigned(); err != nil {
 		return err
 	}
-	if o.backend != "" || o.path != "" || o.endpoint != "" || o.bucket != "" || o.region != "" || o.prefix != "" {
-		return errors.New("init: --invite carries the Remote settings; do not combine it with backend, path, endpoint, bucket, region, or prefix flags")
+	if o.backend != "" || o.path != "" || o.endpoint != "" || o.bucket != "" || o.region != "" || o.prefix != "" || o.pathStyle {
+		return errors.New("init: --invite carries the Remote settings; do not combine it with backend, path, endpoint, bucket, region, prefix, or path-style flags")
 	}
 	o.backend = strings.ToLower(strings.TrimSpace(invite.Remote.Type))
 	o.path = invite.Remote.Path
@@ -301,6 +301,7 @@ func (o *initOptions) applyDeviceInvite(invite *deviceInvite) error {
 	o.bucket = invite.Remote.Bucket
 	o.region = invite.Remote.Region
 	o.prefix = invite.Remote.Prefix
+	o.pathStyle = invite.Remote.PathStyle
 	if o.expectedDomainFingerprint != "" && !strings.EqualFold(o.expectedDomainFingerprint, invite.DomainFingerprint) {
 		return errors.New("init: --expect-domain-fingerprint does not match the invitation")
 	}

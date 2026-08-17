@@ -44,7 +44,7 @@
 | 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力；internal/config/secrets.go 及其回归测试已纳入版本控制，随机源失败时不会发布半成品 device.key |
 | 口令 API | ✅ | keyfile 已有 ChangePassphrase、ResetPassphrase 和托管 key rotation API；agentsync passphrase change/reset、device rotate-key CLI 已接入，真实远端验收待补 |
 | 本地目录 Remote | ✅ | internal/remote/dir 已实现对象读写、列表和目录布局 |
-| S3 Remote | ✅ | internal/remote/s3 与 SigV4 相关实现已存在 |
+| S3 Remote | ✅ | internal/remote/s3、SigV4、path-style/virtual-host 配置和 opt-in S3/R2 集成测试已实现；真实账号矩阵待验收 |
 | 远端对象布局 | ✅ | 项目、会话、设备、分片和元数据使用稳定的版本化布局 |
 | 隐私边界 | ✅ | 对象标识使用不透明 ID；明文会话内容和本地路径不直接写入 Remote 元数据 |
 | 设备身份和模式 | ✅ | 配置中保存设备 ID/名称，并支持 normal、push-only、disabled 三种设备模式 |
@@ -181,7 +181,7 @@
 - 网络中断、进程中断、重试和重复上传；
 - list 结果缺口不能被误判为永久删除；
 - 远端恢复、队列重试和重新扫描后的最终一致结果；
-- S3 与 dir 的相同场景对照测试。
+- S3 与 dir 的相同场景对照测试；真实 S3/R2 可用 `TestS3Integration` 显式运行。
 
 ### 3.4 MVP 端到端验收
 

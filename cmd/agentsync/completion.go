@@ -24,7 +24,7 @@ var completionValues = map[string][]string{
 }
 
 var completionOptions = map[string][]string{
-	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint", "--invite"},
+	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--path-style", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint", "--invite"},
 	"status":                {"--json", "--remote"},
 	"list":                  {"--json"},
 	"resume":                {"--json", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version"},

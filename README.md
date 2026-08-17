@@ -106,7 +106,19 @@ agentsync doctor
 For an S3-compatible backend, initialise with `--backend s3`, `--endpoint`,
 `--bucket`, `--region` and `--prefix`; credentials can be supplied through
 `AGENTSYNC_ACCESS_KEY_ID`, `AGENTSYNC_SECRET_ACCESS_KEY` and the optional
-`AGENTSYNC_SESSION_TOKEN` variables.
+`AGENTSYNC_SESSION_TOKEN` variables. Virtual-hosted addressing is the default;
+add `--path-style` for gateways that require the bucket in the URL path.
+
+For Cloudflare R2, use the account S3 endpoint and the `auto` signing region:
+
+```bash
+agentsync init --backend s3 \
+  --endpoint https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
+  --bucket <BUCKET_NAME> --region auto --prefix agentsync
+```
+
+The R2 access key and secret stay in the local secrets store or are supplied
+through the environment; do not put them in the command line.
 
 ## Shell completion
 

@@ -48,7 +48,7 @@
 {
   "version": 1,
   "device": { "id": "…", "name": "workstation" },
-  "remote": { "type": "s3", "endpoint": "…", "bucket": "…", "region": "…", "prefix": "…" },
+  "remote": { "type": "s3", "endpoint": "…", "bucket": "…", "region": "…", "prefix": "…", "pathStyle": false },
   "identityPublic": "<pin 住的 X25519 公钥>",
   "projects": { "bindings": [...], "excluded": [...], "pushOnly": [...] },
   "agents": { "claudeCode": { "hookInstalled": true } }

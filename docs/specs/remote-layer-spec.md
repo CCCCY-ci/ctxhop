@@ -150,7 +150,7 @@ S3 类后端的列举可能滞后于写入。这带来两条硬规则。
 
 ### 7.2 配置项
 
-endpoint、region、bucket、access key、secret key、路径前缀、寻址方式（path-style / virtual-host，默认 path-style）。
+endpoint、region、bucket、access key、secret key、路径前缀、寻址方式（path-style / virtual-host，默认 virtual-host；可显式选择 path-style）。
 
 凭据不得明文写入配置文件，也不得出现在进程参数中（code_style §5.3）；支持从环境变量提供。
 

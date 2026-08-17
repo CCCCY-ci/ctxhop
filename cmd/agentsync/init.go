@@ -27,6 +27,7 @@ type initOptions struct {
 	bucket                    string
 	region                    string
 	prefix                    string
+	pathStyle                 bool
 	device                    string
 	deviceMode                string
 	noHook                    bool
@@ -97,12 +98,13 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	c.Device.Name = options.device
 	c.Device.Mode = config.DeviceMode(options.deviceMode)
 	c.Remote = config.Remote{
-		Type:     options.backend,
-		Endpoint: options.endpoint,
-		Bucket:   options.bucket,
-		Region:   options.region,
-		Prefix:   options.prefix,
-		Path:     options.path,
+		Type:      options.backend,
+		Endpoint:  options.endpoint,
+		Bucket:    options.bucket,
+		Region:    options.region,
+		Prefix:    options.prefix,
+		Path:      options.path,
+		PathStyle: options.pathStyle,
 	}
 	namespace, err := syncDomainNamespace(c.Remote)
 	if err != nil {
@@ -246,6 +248,7 @@ func parseInitOptions(args []string) (initOptions, error) {
 	flags.StringVar(&options.bucket, "bucket", "", "S3 bucket")
 	flags.StringVar(&options.region, "region", "", "S3 signing region")
 	flags.StringVar(&options.prefix, "prefix", "", "S3 object prefix")
+	flags.BoolVar(&options.pathStyle, "path-style", false, "use URI path-style S3 addressing")
 	flags.StringVar(&options.device, "device-name", "", "display name for this device")
 	flags.StringVar(&options.deviceMode, "device-mode", "", "device mode: normal, push-only, or disabled")
 	flags.BoolVar(&options.noHook, "no-hook", false, "do not offer Agent hook installation")
@@ -358,6 +361,7 @@ func prepareInitBackend(options initOptions, configDir string, p *initPrompter) 
 			AccessKey:    credentials.AccessKeyID,
 			SecretKey:    credentials.SecretAccessKey,
 			SessionToken: credentials.SessionToken,
+			PathStyle:    options.pathStyle,
 		})
 		if err != nil {
 			return config.Credentials{}, nil, fmt.Errorf("init: invalid S3 backend: %s", safeBackendSetupError(err))

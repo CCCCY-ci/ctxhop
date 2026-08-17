@@ -160,6 +160,16 @@ func TestParseInitOptionsRefusesPassphraseFlags(t *testing.T) {
 	}
 }
 
+func TestParseInitOptionsAcceptsPathStyle(t *testing.T) {
+	options, err := parseInitOptions([]string{"--backend", "s3", "--path-style"})
+	if err != nil {
+		t.Fatalf("parseInitOptions: %v", err)
+	}
+	if !options.pathStyle {
+		t.Error("--path-style was not recorded")
+	}
+}
+
 func TestInitCommandIsRegistered(t *testing.T) {
 	for _, command := range commands {
 		if command.name == "init" {
