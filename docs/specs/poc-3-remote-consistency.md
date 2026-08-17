@@ -104,12 +104,8 @@ go test ./internal/remote -run 'TestS3|TestDir' -count=1
 本次运行生成的唯一前缀，并且清理时只删除本次成功写入并记录的 key：
 
 ```bash
+AGENTSYNC_CONFIG_DIR=/path/to/agentsync-config \
 AGENTSYNC_S3_INTEGRATION=1 \
-AGENTSYNC_S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
-AGENTSYNC_S3_BUCKET=<BUCKET_NAME> \
-AGENTSYNC_S3_REGION=auto \
-AGENTSYNC_S3_ACCESS_KEY_ID=<SHORT_LIVED_KEY> \
-AGENTSYNC_S3_SECRET_ACCESS_KEY=<SHORT_LIVED_SECRET> \
 go test ./internal/remote -run '^TestS3Integration$' -count=1
 ```
 
@@ -118,6 +114,8 @@ go test ./internal/remote -run '^TestS3Integration$' -count=1
 1001 个合成对象验证多页列表。不要在 shell 历史、CI 日志或仓库中保存真实
 凭据。
 
+配置驱动模式优先读取 `AGENTSYNC_CONFIG_DIR` 指向的 `config.json` 和加密
+`secrets`。旧的 `AGENTSYNC_S3_*` 变量仍只作为未初始化配置时的 CI fallback。
 仍需要在至少一个真实 S3 兼容服务上执行：
 
 - PutObject 后立即 ListObjectsV2；

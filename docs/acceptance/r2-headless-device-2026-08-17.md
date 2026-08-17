@@ -35,23 +35,20 @@ report the backend independently from the Agent state:
 - a passphrase shared out of band for the test domain;
 - a temporary project directory. The server does not need Claude Code or Git.
 
-Keep the credential values in the process environment or let `init` prompt
-for them. AgentSync accepts `AGENTSYNC_ACCESS_KEY_ID`,
-`AGENTSYNC_SECRET_ACCESS_KEY`, and the optional `AGENTSYNC_SESSION_TOKEN`; the
-environment values are not written to the secrets file.
+Run `init` once with the non-secret R2 settings. AgentSync persists the Remote
+endpoint, bucket, region, prefix and path-style choice in `config.json`. If
+the encrypted backend credentials do not exist yet, `init` prompts for the
+access key, secret key and optional session token, then stores them in the
+encrypted local `secrets` file.
 
 ## Device A: create the R2 domain
 
 Use a fresh prefix for each run, for example
-`acceptance/r2-20260817-01`. Set the credential variables in the shell
-without putting them in the command line or a saved script, then initialize
-the source device:
+`acceptance/r2-20260817-01`. Run the initialization command on device A; it
+prompts for backend credentials and the domain passphrase, then persists the
+configuration locally:
 
 ~~~bash
-export AGENTSYNC_ACCESS_KEY_ID='...'
-export AGENTSYNC_SECRET_ACCESS_KEY='...'
-export AGENTSYNC_SESSION_TOKEN='...'
-
 agentsync init --backend s3 \
   --endpoint https://<ACCOUNT_ID>.r2.cloudflarestorage.com \
   --bucket <BUCKET_NAME> \
@@ -103,9 +100,6 @@ avoid accidentally reusing device A's local identity:
 
 ~~~bash
 export AGENTSYNC_CONFIG_DIR=/srv/agentsync-r2-20260817-01
-export AGENTSYNC_ACCESS_KEY_ID='...'
-export AGENTSYNC_SECRET_ACCESS_KEY='...'
-export AGENTSYNC_SESSION_TOKEN='...'
 
 agentsync init --invite /srv/incoming/agentsync-invite.json \
   --device-name r2-server \

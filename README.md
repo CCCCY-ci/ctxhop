@@ -104,10 +104,10 @@ agentsync doctor
 ```
 
 For an S3-compatible backend, initialise with `--backend s3`, `--endpoint`,
-`--bucket`, `--region` and `--prefix`; credentials can be supplied through
-`AGENTSYNC_ACCESS_KEY_ID`, `AGENTSYNC_SECRET_ACCESS_KEY` and the optional
-`AGENTSYNC_SESSION_TOKEN` variables. Virtual-hosted addressing is the default;
-add `--path-style` for gateways that require the bucket in the URL path.
+`--bucket`, `--region` and `--prefix`. The non-secret Remote settings are
+persisted in `config.json`; virtual-hosted addressing is the default, and
+`--path-style` is available for gateways that require the bucket in the URL
+path.
 
 For Cloudflare R2, use the account S3 endpoint and the `auto` signing region:
 
@@ -117,8 +117,25 @@ agentsync init --backend s3 \
   --bucket <BUCKET_NAME> --region auto --prefix agentsync
 ```
 
-The R2 access key and secret stay in the local secrets store or are supplied
-through the environment; do not put them in the command line.
+When no encrypted backend credentials exist yet, `init` prompts for the
+access key, secret key and optional session token, then stores them in the
+encrypted local `secrets` file. They are not written to `config.json` and
+should not be put in the command line.
+
+After `init`, the opt-in integration test can read the complete S3
+configuration from `config.json` and the credentials from encrypted `secrets`:
+
+```bash
+AGENTSYNC_CONFIG_DIR=/path/to/agentsync-config \
+AGENTSYNC_S3_INTEGRATION=1 \
+go test ./internal/remote -run '^TestS3Integration$' -count=1
+```
+
+`AGENTSYNC_CONFIG_DIR` may be omitted when the platform-default AgentSync
+configuration directory is being used. The older `AGENTSYNC_S3_*` variables
+remain supported as a fallback for isolated CI runs without an initialized
+AgentSync configuration. Use a dedicated bucket or prefix and short-lived
+credentials for every external test.
 
 ## Shell completion
 
