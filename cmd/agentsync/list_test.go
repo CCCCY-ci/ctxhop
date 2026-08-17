@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +10,18 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
+
+func TestDiscoverListSessionsWithoutClaudeCodeReturnsEmpty(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+
+	refs, err := discoverListSessions(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("sessions = %+v, want empty local state", refs)
+	}
+}
 
 func TestMergeListSessionsCombinesLocalAndForeignMetadata(t *testing.T) {
 	identifierKey := make([]byte, 32)

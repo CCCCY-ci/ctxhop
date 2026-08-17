@@ -49,3 +49,8 @@ the adapter compatibility classification, whether push remains allowed, and
 whether restore requires explicit consent. Unknown versions must remain
 limited or stopped according to the adapter policy; never mark them full merely
 to make an acceptance run pass.
+
+The R2-specific headless-server procedure is in
+[r2-headless-device-2026-08-17.md](r2-headless-device-2026-08-17.md). It covers a second
+AgentSync device without Claude Code and deliberately stops at metadata
+inspection rather than claiming native session restore.
