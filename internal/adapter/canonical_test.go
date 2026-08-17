@@ -554,3 +554,47 @@ func TestLocalizeTokenizesUnknownLeafPaths(t *testing.T) {
 		t.Errorf("got %s, want %s", out, want)
 	}
 }
+
+func TestClaudeCode228StructuredPathFields(t *testing.T) {
+	in := `{"attachment":{"content":{"file":{"filePath":"D:\\Workspace\\Example\\attachments\\file with spaces.txt"}},"filename":"D:\\Workspace\\Example\\attachments\\file with spaces.txt","planFilePath":"D:\\Workspace\\Example\\plans\\plan.md"},"backup":{"realParentDir":"C:\\Users\\alice\\.claude\\backups"},"cwd":"D:\\Workspace\\Example","message":{"content":[{"content":"D:\\Workspace\\Example\\src\\a.go is discussed here","input":{"file_path":"D:\\Workspace\\Example\\src\\file with spaces.go","path":"D:\\Workspace\\Example\\src\\path with spaces.go"}}]},"snapshot":{"trackedFileBackups":{"C:\\Users\\alice\\.claude\\src\\a.go":{"realParentDir":"C:\\Users\\alice\\.claude"}}},"toolUseResult":{"file":{"filePath":"D:\\Workspace\\Example\\src\\nested.go"},"filePath":"D:\\Workspace\\Example\\src\\result.go","filenames":["D:\\Workspace\\Example\\src\\one.go","C:\\Users\\alice\\.claude\\src\\two.go"]}}`
+	want := `{"attachment":{"content":{"file":{"filePath":"${AS_PROJECT}/attachments/file with spaces.txt"}},"filename":"${AS_PROJECT}/attachments/file with spaces.txt","planFilePath":"${AS_PROJECT}/plans/plan.md"},"backup":{"realParentDir":"${AS_AGENT_HOME}/backups"},"cwd":"${AS_PROJECT}","message":{"content":[{"content":"D:\\Workspace\\Example\\src\\a.go is discussed here","input":{"file_path":"${AS_PROJECT}/src/file with spaces.go","path":"${AS_PROJECT}/src/path with spaces.go"}}]},"snapshot":{"trackedFileBackups":{"${AS_AGENT_HOME}/src/a.go":{"realParentDir":"${AS_AGENT_HOME}"}}},"toolUseResult":{"file":{"filePath":"${AS_PROJECT}/src/nested.go"},"filePath":"${AS_PROJECT}/src/result.go","filenames":["${AS_PROJECT}/src/one.go","${AS_AGENT_HOME}/src/two.go"]}}`
+
+	c := NewCanonicalizer(winSpace)
+	out, err := c.Record([]byte(in))
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got := string(out)
+	if !equivalentJSON(t, got, want) {
+		t.Errorf("canonical  %s\nwant       %s", got, want)
+	}
+	if findings := c.UnknownPathFields(); len(findings) != 0 {
+		t.Errorf("unexpected findings from the 2.1.228 structured fields: %v", findings)
+	}
+}
+
+func TestClaudeCode228NestedContentPath(t *testing.T) {
+	in := `{"message":{"content":{"content":"D:\\Workspace\\Example\\folder with spaces\\a.txt"}}}`
+	want := `{"message":{"content":{"content":"${AS_PROJECT}/folder with spaces/a.txt"}}}`
+
+	got := canonical(t, winSpace, in)
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+
+	localized, err := Localize([]byte(want), posixSpace)
+	if err != nil {
+		t.Fatalf("Localize: %v", err)
+	}
+	wantLocalized := `{"message":{"content":{"content":"/Users/bob/Projects/Example/folder with spaces/a.txt"}}}`
+	if string(localized) != wantLocalized {
+		t.Errorf("localized  %s\nwant       %s", localized, wantLocalized)
+	}
+}
+
+func TestClaudeCode228ContentArrayKeepsFreeText(t *testing.T) {
+	in := `{"message":{"content":[{"content":"D:\\Workspace\\Example\\folder with spaces\\a.txt is mentioned in the conversation"}]}}`
+	if got := canonical(t, winSpace, in); got != in {
+		t.Errorf("got  %s\nwant %s", got, in)
+	}
+}

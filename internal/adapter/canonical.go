@@ -50,6 +50,14 @@ var pathValueFields = map[string]bool{
 	"realParentDir": true,
 }
 
+// pathValuePaths contains exact nested paths whose leaf name is too generic
+// to add to pathValueFields. Claude Code 2.1.228 can emit a structured path in
+// message.content.content. The array form, message.content[].content, remains
+// conversation text and is deliberately not included here.
+var pathValuePaths = map[string]bool{
+	"message.content.content": true,
+}
+
 // pathKeyedContainers are objects whose *keys* are absolute paths. Rewriting
 // only values silently misses these, which is exactly the kind of omission that
 // produces a session the agent cannot resolve (spec §4.5).
@@ -98,28 +106,28 @@ func (c *Canonicalizer) UnknownPathFields() []string {
 	return out
 }
 
-// walk returns a copy of v with known path prefixes replaced by tokens. field
-// is the map key that led to v, or "" at the top level.
-func (c *Canonicalizer) walk(field string, v any) any {
+// walk returns a copy of v with known path prefixes replaced by tokens. path
+// is the dotted map path that led to v, or "" at the top level.
+func (c *Canonicalizer) walk(path string, v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			out[c.key(field, k)] = c.walk(k, child)
+			out[c.key(path, k)] = c.walk(joinFieldPath(path, k), child)
 		}
 		return out
 
 	case []any:
 		out := make([]any, len(t))
 		for i, child := range t {
-			// Array elements inherit the field name that led to the array, so
-			// that content[].input.file_path is still seen as file_path.
-			out[i] = c.walk(field, child)
+			// Keep an array marker for exact schema paths, while fieldLeaf
+			// still lets common leaf fields inherit their array's field name.
+			out[i] = c.walk(path+"[]", child)
 		}
 		return out
 
 	case string:
-		return c.text(field, t)
+		return c.text(path, t)
 
 	default:
 		return v
@@ -127,8 +135,8 @@ func (c *Canonicalizer) walk(field string, v any) any {
 }
 
 // key tokenizes a map key when the enclosing field is a path-keyed container.
-func (c *Canonicalizer) key(parentField, k string) string {
-	if pathKeyedContainers[parentField] {
+func (c *Canonicalizer) key(parentPath, k string) string {
+	if pathKeyedContainers[fieldLeaf(parentPath)] {
 		if out, ok := c.tokenize(k); ok {
 			return out
 		}
@@ -136,7 +144,7 @@ func (c *Canonicalizer) key(parentField, k string) string {
 	}
 	if isBarePath(k) {
 		if _, ok := c.tokenize(k); ok {
-			c.report(parentField + ".<key>")
+			c.report(joinFieldPath(parentPath, "<key>"))
 		}
 	}
 	return k
@@ -146,8 +154,8 @@ func (c *Canonicalizer) key(parentField, k string) string {
 // fields, an exact bare value under one of the current machine's roots is also
 // rewritten. This structural fallback is what keeps ordinary Claude Code
 // minor releases from requiring a new field-specific adapter release.
-func (c *Canonicalizer) text(field, s string) string {
-	if pathValueFields[field] {
+func (c *Canonicalizer) text(path, s string) string {
+	if isPathValuePath(path) {
 		if out, ok := c.tokenize(s); ok {
 			return out
 		}
@@ -163,6 +171,27 @@ func (c *Canonicalizer) text(field, s string) string {
 		}
 	}
 	return s
+}
+
+func isPathValuePath(path string) bool {
+	return pathValueFields[fieldLeaf(path)] || pathValuePaths[path]
+}
+
+func fieldLeaf(path string) string {
+	for strings.HasSuffix(path, "[]") {
+		path = strings.TrimSuffix(path, "[]")
+	}
+	if i := strings.LastIndexByte(path, '.'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+func joinFieldPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
 }
 
 // report records a schema finding, but only under a name that is safe to show.
@@ -185,7 +214,7 @@ func isFieldName(s string) bool {
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '_' || r == '.' || r == '<' || r == '>':
+		case r == '_' || r == '.' || r == '[' || r == ']' || r == '<' || r == '>':
 		default:
 			return false
 		}
@@ -292,16 +321,16 @@ type localizer struct {
 	space PathSpace
 }
 
-func (l *localizer) walk(field string, v any) (any, error) {
+func (l *localizer) walk(path string, v any) (any, error) {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			key, err := l.text(field, k, pathKeyedContainers[field])
+			key, err := l.text(path, k, pathKeyedContainers[fieldLeaf(path)])
 			if err != nil {
 				return nil, err
 			}
-			value, err := l.walk(k, child)
+			value, err := l.walk(joinFieldPath(path, k), child)
 			if err != nil {
 				return nil, err
 			}
@@ -312,7 +341,7 @@ func (l *localizer) walk(field string, v any) (any, error) {
 	case []any:
 		out := make([]any, len(t))
 		for i, child := range t {
-			value, err := l.walk(field, child)
+			value, err := l.walk(path+"[]", child)
 			if err != nil {
 				return nil, err
 			}
@@ -321,7 +350,7 @@ func (l *localizer) walk(field string, v any) (any, error) {
 		return out, nil
 
 	case string:
-		return l.text(field, t, pathValueFields[field] || isCanonicalPath(t))
+		return l.text(path, t, isPathValuePath(path) || isCanonicalPath(t))
 
 	default:
 		return v, nil
