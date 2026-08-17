@@ -21,7 +21,7 @@ func TestCommandTableIsUniqueAndFullyImplemented(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"init", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "doctor", "device", "remote", "project", "pull", "version", "help", "completion"} {
+	for _, name := range []string{"init", "install", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "doctor", "device", "remote", "project", "pull", "version", "help", "completion"} {
 		if _, exists := seen[name]; !exists {
 			t.Errorf("expected command %q is missing", name)
 		}

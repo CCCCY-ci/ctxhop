@@ -44,11 +44,31 @@ Prefix:   agentsync/demo
 git clone https://github.com/CCCCY-ci/agentsync.git
 cd agentsync
 go build -trimpath -o agentsync ./cmd/agentsync
-./agentsync version
 ~~~
 
-把二进制文件复制到两台设备。Windows PowerShell 中，把
-`./agentsync` 替换成 `.\agentsync.exe`。
+将二进制文件注册成用户级命令：
+
+~~~bash
+./agentsync install
+~~~
+
+Windows PowerShell：
+
+~~~powershell
+go build -trimpath -o agentsync.exe ./cmd/agentsync
+.\agentsync.exe install
+~~~
+
+命令会把二进制文件安装到用户目录。Windows 会在不需要管理员权限的情况下，
+把该目录加入用户级 PATH。Unix 如果 `~/.local/bin` 不在 PATH 中，`install`
+会打印需要执行的 PATH 命令。重新打开终端后执行：
+
+~~~bash
+agentsync version
+~~~
+
+使用 `--dir DIR` 可以指定其他安装目录；使用 `--no-path` 只复制二进制文件，
+不修改 PATH。
 
 ### 2. 初始化设备 A
 
@@ -114,18 +134,6 @@ cd /path/to/project
 `--invite` 与 `--endpoint`、`--bucket`、`--region`、`--prefix` 等
 后端参数一起使用。
 
-如果在同一台电脑上模拟两台设备，每次 init 前设置不同的配置目录：
-
-~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-a"
-# 执行设备 A 的 init
-
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
-# 执行设备 B 的 init
-~~~
-
-如果是真正的两台电脑，通常直接使用各自的默认配置目录即可。
-
 ### 5. 在设备 B 查看并恢复
 
 先在设备 B 准备好相同项目并完成绑定：
@@ -173,6 +181,7 @@ cd /path/to/another/project
 | `agentsync version` | 显示版本、commit、构建时间和运行时信息。 |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | 生成 Shell 补全；`pwsh` 是 `powershell` 的别名。 |
 | `agentsync init [backend options]` | 创建或加入加密同步域并写入本地配置，可选安装 Claude Code Hook。 |
+| `agentsync install [--dir DIR] [--no-path]` | 把当前二进制安装到用户级命令目录；Windows 会更新用户级 PATH。 |
 | `agentsync status [--json] [--remote]` | 显示本地状态；`--remote` 会检查远端元数据。 |
 | `agentsync doctor [--json]` | 检查配置、后端访问、Agent 安装、项目身份和最近的本地错误。 |
 | `agentsync project bind [--path DIR] [--name NAME or --identity ID]` | 绑定本地项目；没有 Git 时使用 `--name`。 |

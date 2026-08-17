@@ -47,11 +47,32 @@ Build it from source if you do not already have a binary:
 git clone https://github.com/CCCCY-ci/agentsync.git
 cd agentsync
 go build -trimpath -o agentsync ./cmd/agentsync
-./agentsync version
 ~~~
 
-Copy the binary to both devices. On Windows PowerShell, use
-`.\agentsync.exe` in place of `./agentsync`.
+Register the binary as a user-level command:
+
+~~~bash
+./agentsync install
+~~~
+
+On Windows PowerShell:
+
+~~~powershell
+go build -trimpath -o agentsync.exe ./cmd/agentsync
+.\agentsync.exe install
+~~~
+
+The command installs the binary into a user directory. Windows adds that
+directory to the user PATH without requiring administrator access. On Unix,
+follow the PATH command printed by `install` if `~/.local/bin` is not already
+on PATH. Open a new terminal, then run:
+
+~~~bash
+agentsync version
+~~~
+
+Use `--dir DIR` to choose another install directory. Use `--no-path` to copy
+the binary without changing PATH.
 
 ### 2. Initialize device A
 
@@ -121,20 +142,6 @@ Enter the R2 credentials when prompted and use the same encryption password as
 device A. Do not combine `--invite` with backend options such as
 `--endpoint`, `--bucket`, `--region` or `--prefix`.
 
-When simulating two devices on one computer, set a different configuration
-directory before each initialization:
-
-~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-a"
-# run device A init
-
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
-# run device B init
-~~~
-
-On two separate computers, the default per-user configuration directories are
-normally enough.
-
 ### 5. List and restore on device B
 
 Prepare the same project on device B and bind it:
@@ -185,6 +192,7 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync version` | Show version, commit, build time and runtime information. |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | Generate shell completion. `pwsh` is an alias for `powershell`. |
 | `agentsync init [backend options]` | Create or join the encrypted sync domain and write local configuration. Can install the Claude Code hook. |
+| `agentsync install [--dir DIR] [--no-path]` | Install the current executable in a user-level command directory; Windows updates the user PATH. |
 | `agentsync status [--json] [--remote]` | Show local status; `--remote` checks remote metadata. |
 | `agentsync doctor [--json]` | Diagnose configuration, backend access, Agent installation, project identity and recent local errors. |
 | `agentsync project bind [--path DIR] [--name NAME or --identity ID]` | Bind a local project. Use `--name` for a no-Git project. |

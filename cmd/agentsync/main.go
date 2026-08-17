@@ -36,6 +36,7 @@ type command struct {
 // below, because a self-referential initialiser is an initialisation cycle.
 var commands = []command{
 	{name: "init", summary: "configure storage backend, encryption password and agent hooks"},
+	{name: "install", summary: "install agentsync as a user-level command"},
 	{name: "status", summary: "show sync state for this project or globally"},
 	{name: "list", summary: "list sessions available for this project"},
 	{name: "resume", summary: "restore a session onto this machine"},
