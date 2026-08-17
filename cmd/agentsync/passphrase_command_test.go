@@ -14,6 +14,42 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 )
 
+func TestReadMaskedSecretInputShowsMaskAndSupportsBackspace(t *testing.T) {
+	var output bytes.Buffer
+	value, err := readMaskedSecretInput(strings.NewReader("ab\bc\n"), &output)
+	if err != nil {
+		t.Fatalf("readMaskedSecretInput: %v", err)
+	}
+	if got, want := string(value), "ac"; got != want {
+		t.Fatalf("value = %q, want %q", got, want)
+	}
+	if got, want := output.String(), "**\b \b*"; got != want {
+		t.Fatalf("mask output = %q, want %q", got, want)
+	}
+	if strings.Contains(output.String(), "ac") {
+		t.Fatal("mask output contains the secret")
+	}
+}
+
+func TestReadCommandOptionalSecretAllowsEmpty(t *testing.T) {
+	var output bytes.Buffer
+	value, err := readCommandOptionalSecret(strings.NewReader("\n"), &output, "test", "Token (optional): ")
+	if err != nil {
+		t.Fatalf("readCommandOptionalSecret: %v", err)
+	}
+	if value != "" {
+		t.Fatalf("value = %q, want empty", value)
+	}
+	if !strings.Contains(output.String(), "Token (optional): ") {
+		t.Fatalf("prompt output = %q", output.String())
+	}
+}
+
+func TestReadCommandSecretStillRejectsEmpty(t *testing.T) {
+	if _, err := readCommandSecret(strings.NewReader("\n"), &bytes.Buffer{}, "test", "Secret: "); err == nil || !strings.Contains(err.Error(), "secret cannot be empty") {
+		t.Fatalf("readCommandSecret empty error = %v", err)
+	}
+}
 func TestWriteRecoveryResetReminder(t *testing.T) {
 	var prompt bytes.Buffer
 	if err := writeRecoveryResetReminder(&prompt); err != nil {

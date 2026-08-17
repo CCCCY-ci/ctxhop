@@ -400,7 +400,7 @@ func initCredentials(configDir string, p *initPrompter) (config.Credentials, err
 	if access == "" || secret == "" {
 		return config.Credentials{}, errors.New("init: both access key ID and secret access key are required")
 	}
-	token, err := p.secret("Session token (optional): ")
+	token, err := p.optionalSecret("Session token (optional): ")
 	if err != nil {
 		return config.Credentials{}, err
 	}
@@ -561,10 +561,24 @@ func (p *initPrompter) lineIfEmpty(value, prompt, fallback string) (string, erro
 }
 
 func (p *initPrompter) secret(prompt string) (string, error) {
+	return p.readSecret(prompt, false)
+}
+
+func (p *initPrompter) optionalSecret(prompt string) (string, error) {
+	return p.readSecret(prompt, true)
+}
+
+func (p *initPrompter) readSecret(prompt string, allowEmpty bool) (string, error) {
 	if p.secretInput != nil {
 		if _, ok := terminalInput(p.secretInput); ok {
+			if allowEmpty {
+				return readCommandOptionalSecret(p.secretInput, p.output, "init", prompt)
+			}
 			return readCommandSecret(p.secretInput, p.output, "init", prompt)
 		}
+	}
+	if allowEmpty {
+		return readCommandOptionalSecretReader(p.input, p.output, "init", prompt)
 	}
 	return readCommandSecretReader(p.input, p.output, "init", prompt)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"os"
@@ -154,6 +155,29 @@ func TestInitOpensAnExistingKeyfileWithoutReplacingIt(t *testing.T) {
 	}
 }
 
+func TestInitCredentialsAllowsEmptySessionToken(t *testing.T) {
+	t.Setenv("AGENTSYNC_ACCESS_KEY_ID", "")
+	t.Setenv("AGENTSYNC_SECRET_ACCESS_KEY", "")
+	t.Setenv("AGENTSYNC_SESSION_TOKEN", "")
+
+	input := strings.NewReader("access-id\nsecret-key\n\n")
+	var output bytes.Buffer
+	prompter := &initPrompter{
+		input:       bufio.NewReader(input),
+		secretInput: input,
+		output:      &output,
+	}
+	credentials, err := initCredentials(t.TempDir(), prompter)
+	if err != nil {
+		t.Fatalf("initCredentials: %v", err)
+	}
+	if credentials.AccessKeyID != "access-id" || credentials.SecretAccessKey != "secret-key" {
+		t.Fatalf("credentials = %+v", credentials)
+	}
+	if credentials.SessionToken != "" {
+		t.Fatalf("session token = %q, want empty", credentials.SessionToken)
+	}
+}
 func TestParseInitOptionsRefusesPassphraseFlags(t *testing.T) {
 	if _, err := parseInitOptions([]string{"--passphrase", "secret"}); err == nil {
 		t.Error("init accepted a passphrase command-line flag")
