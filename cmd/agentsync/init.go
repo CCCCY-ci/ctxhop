@@ -131,17 +131,21 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		return errors.New("init: encryption passwords do not match; run init again")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), initBackendTimeout)
-	defer cancel()
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), initBackendTimeout)
 	prober, ok := store.(remote.Prober)
 	if !ok {
+		cancelProbe()
 		return errors.New("init: the selected backend cannot verify read and write access")
 	}
-	if err := prober.Probe(ctx); err != nil {
-		return fmt.Errorf("init: backend probe failed: %s", safeBackendProbeError(err))
+	probeErr := prober.Probe(probeCtx)
+	cancelProbe()
+	if probeErr != nil {
+		return fmt.Errorf("init: backend probe failed: %s", safeBackendProbeError(probeErr))
 	}
 
-	public, identifierKey, created, err := prepareKeyMaterial(ctx, store, passphrase, prompter, namespace, options.expectedDomainFingerprint, options.invite != nil)
+	keyfileCtx, cancelKeyfile := context.WithTimeout(context.Background(), initBackendTimeout)
+	public, identifierKey, created, err := prepareKeyMaterial(keyfileCtx, store, passphrase, prompter, namespace, options.expectedDomainFingerprint, options.invite != nil)
+	cancelKeyfile()
 	if err != nil {
 		return err
 	}
@@ -158,7 +162,9 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	}
 	c.Device.ID = deviceID
 
-	keyfile, err := syncer.FetchKeyfile(ctx, store)
+	readKeyfileCtx, cancelReadKeyfile := context.WithTimeout(context.Background(), initBackendTimeout)
+	keyfile, err := syncer.FetchKeyfile(readKeyfileCtx, store)
+	cancelReadKeyfile()
 	if err != nil {
 		return fmt.Errorf("init: re-read remote keyfile: %w", err)
 	}
@@ -190,8 +196,11 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		keyfileChanged = true
 	}
 	if keyfileChanged {
-		if err := syncer.ReplaceKeyfile(ctx, store, keyfile); err != nil {
-			return fmt.Errorf("init: publish device authorization: %w", err)
+		publishDeviceCtx, cancelPublishDevice := context.WithTimeout(context.Background(), initBackendTimeout)
+		replaceErr := syncer.ReplaceKeyfile(publishDeviceCtx, store, keyfile)
+		cancelPublishDevice()
+		if replaceErr != nil {
+			return fmt.Errorf("init: publish device authorization: %w", replaceErr)
 		}
 	}
 	activePublic, err := keyfile.IdentityPublicKey()
@@ -477,9 +486,12 @@ func prepareKeyMaterial(ctx context.Context, store remote.Remote, passphrase str
 			zeroInitBytes(identifierKey)
 			return nil, nil, false, errors.New("init: Recovery Key was not confirmed as saved; no keyfile was published")
 		}
-		if err := syncer.PublishKeyfile(ctx, store, keyfile); err != nil {
+		publishCtx, cancelPublish := context.WithTimeout(context.Background(), initBackendTimeout)
+		publishErr := syncer.PublishKeyfile(publishCtx, store, keyfile)
+		cancelPublish()
+		if publishErr != nil {
 			zeroInitBytes(identifierKey)
-			return nil, nil, false, fmt.Errorf("init: publish remote keyfile: %w", err)
+			return nil, nil, false, fmt.Errorf("init: publish remote keyfile: %w", publishErr)
 		}
 	}
 	return public.Bytes(), identifierKey, created, nil
@@ -507,8 +519,9 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 	if c.Agents == nil {
 		c.Agents = map[string]config.AgentState{}
 	}
-	if !p.confirm("Register the Claude Code SessionEnd hook? [y/N]: ") {
-		return nil
+	if !p.confirm("Install the Claude Code SessionEnd hook for automatic agentsync push? [y/N]: ") {
+		_, err := fmt.Fprintln(p.output, "SessionEnd hook: skipped")
+		return err
 	}
 	if executable == "" {
 		executable, err = os.Executable()
@@ -523,7 +536,8 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 	if err := c.Save(configDir); err != nil {
 		return fmt.Errorf("init: hook installed but configuration update failed: %w", err)
 	}
-	return nil
+	_, err = fmt.Fprintln(p.output, "SessionEnd hook: installed")
+	return err
 }
 
 func refuseExistingConfig(dir string) error {
