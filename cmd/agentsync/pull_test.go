@@ -114,6 +114,42 @@ func TestCollectPullCheckReadsMetadataOnlyAndDoesNotSaveObservedTips(t *testing.
 	}
 }
 
+func TestHeadlessDeviceReadsRemoteMetadataWithoutClaudeCode(t *testing.T) {
+	fixture := newPullCheckFixture(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+
+	listReport, err := collectListWithPrompt(
+		context.Background(),
+		fixture.config,
+		fixture.configDir,
+		fixture.projectRoot,
+		strings.NewReader("passphrase\n"),
+		io.Discard,
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("list on headless device: %v", err)
+	}
+	if len(listReport.Sessions) != 1 || listReport.Sessions[0].Local {
+		t.Fatalf("headless list report = %+v", listReport)
+	}
+
+	statusReport, err := collectRemoteStatus(
+		context.Background(),
+		fixture.config,
+		fixture.configDir,
+		fixture.projectRoot,
+		strings.NewReader("passphrase\n"),
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("status on headless device: %v", err)
+	}
+	if !statusReport.Checked || statusReport.Sessions.Remote != 1 || statusReport.Sessions.RemoteOnly != 1 {
+		t.Fatalf("headless status report = %+v", statusReport)
+	}
+}
+
 func TestCollectPullCheckSuppressesObservedForeignTip(t *testing.T) {
 	fixture := newPullCheckFixture(t)
 	layout, err := syncer.NewObjectLayout(fixture.projectID, fixture.sessionID, fixture.config.Device.ID)
