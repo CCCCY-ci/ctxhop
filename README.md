@@ -184,7 +184,7 @@ workspace semantics.
 | Workspace fingerprint safety | Implemented locally | PoC-2, restore checks and local-only difference context |
 | MVP acceptance matrix | Reproducible locally | `go run ./poc/mvp` |
 | Real Windows/macOS/Linux Agent matrix | Pending | Requires installed Agents and separate devices |
-| Real S3/third-party Remote acceptance | Pending | Local `dir` Remote is covered; external credentials are required |
+| Real Cloudflare R2 single-device acceptance | Passed (2026-08-17) | Redacted run record: [`docs/acceptance/r2-single-device-2026-08-17.md`](docs/acceptance/r2-single-device-2026-08-17.md); third-party and failure-matrix acceptance remains pending |
 | Production release channels | In progress | CI, cross-build and release scripts are being established |
 
 ## Building and testing

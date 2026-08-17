@@ -44,7 +44,7 @@
 | 本地密钥与加密 | ✅ | internal/crypto 已提供密钥文件、口令解锁、Recovery Key 相关流程和加密/解密能力；internal/config/secrets.go 及其回归测试已纳入版本控制，随机源失败时不会发布半成品 device.key |
 | 口令 API | ✅ | keyfile 已有 ChangePassphrase、ResetPassphrase 和托管 key rotation API；agentsync passphrase change/reset、device rotate-key CLI 已接入，真实远端验收待补 |
 | 本地目录 Remote | ✅ | internal/remote/dir 已实现对象读写、列表和目录布局 |
-| S3 Remote | ✅ | internal/remote/s3、SigV4、path-style/virtual-host 配置和 opt-in S3/R2 集成测试已实现；真实账号矩阵待验收 |
+| S3 Remote | ✅ | internal/remote/s3、SigV4、path-style/virtual-host 配置、opt-in 集成测试和 2026-08-17 Cloudflare R2 单设备验收已完成；第三方服务与真实故障矩阵待验收 |
 | 远端对象布局 | ✅ | 项目、会话、设备、分片和元数据使用稳定的版本化布局 |
 | 隐私边界 | ✅ | 对象标识使用不透明 ID；明文会话内容和本地路径不直接写入 Remote 元数据 |
 | 设备身份和模式 | ✅ | 配置中保存设备 ID/名称，并支持 normal、push-only、disabled 三种设备模式 |
