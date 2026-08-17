@@ -248,6 +248,9 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 			return err
 		}
 	}
+	if _, err := fmt.Fprintln(output, "config directory:", configDir); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintln(output, "agentsync initialization complete")
 	return err
 }
