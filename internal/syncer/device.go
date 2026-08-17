@@ -278,8 +278,10 @@ func DeviceDataKeys(ctx context.Context, store remote.Remote, deviceID string) (
 		return nil, fmt.Errorf("syncer: list session branches for cleanup: %w", err)
 	}
 	for _, object := range sessionObjects {
-		id, ok := parseSessionBranchObjectKey(object.Key)
-		if ok && id == deviceID {
+		if id, ok := parseSessionBranchObjectKey(object.Key); ok && id == deviceID {
+			keys[object.Key] = struct{}{}
+		}
+		if _, id, ok := parseProjectAnnouncementKey(object.Key); ok && id == deviceID {
 			keys[object.Key] = struct{}{}
 		}
 	}

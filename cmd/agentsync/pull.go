@@ -21,6 +21,7 @@ const pullCheckTimeout = 15 * time.Second
 const (
 	pullCheckModeMetadataOnly = "metadata-only"
 	pullCheckResultUpToDate   = "up-to-date"
+	pullCheckResultNoRemote   = "no-remote-sessions"
 	pullCheckResultUpdates    = "updates-available"
 	pullCheckResultAttention  = "attention-required"
 )
@@ -174,7 +175,7 @@ func collectPullCheck(ctx context.Context, c *config.Config, configDir, projectD
 
 	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if errors.Is(err, syncer.ErrNoRemoteMetadata) {
-		return newPullCheckReport(pullCheckSessionCounts{}), nil
+		return newPullCheckNoRemoteReport(), nil
 	}
 	if err != nil {
 		return pullCheckReport{}, fmt.Errorf("pull: read encrypted session metadata: %w", err)
@@ -240,6 +241,15 @@ func loadPullCheckPlan(ctx context.Context, stateRoot, projectID, localDeviceID 
 		LocalCursor:   cursor,
 		Observed:      observed,
 	})
+}
+
+func newPullCheckNoRemoteReport() pullCheckReport {
+	return pullCheckReport{
+		Scope:    "project",
+		Mode:     pullCheckModeMetadataOnly,
+		Result:   pullCheckResultNoRemote,
+		Sessions: pullCheckSessionCounts{},
+	}
 }
 
 func newPullCheckReport(counts pullCheckSessionCounts) pullCheckReport {

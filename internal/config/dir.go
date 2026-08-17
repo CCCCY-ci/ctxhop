@@ -26,8 +26,8 @@ import (
 // way to say where the configuration lives (spec §2).
 const dirEnv = "AGENTSYNC_CONFIG_DIR"
 
-// appDir is the directory name under the platform's configuration root.
-const appDir = "agentsync"
+// appDir is the directory name under the user's home directory.
+const appDir = ".agentsync"
 
 // ErrNotInitialised reports that this machine has no configuration yet.
 //
@@ -35,20 +35,19 @@ const appDir = "agentsync"
 // run init - rather than a failure to report.
 var ErrNotInitialised = errors.New("config: this machine is not set up yet; run 'agentsync init'")
 
-// Dir returns the configuration directory, following platform convention.
+// Dir returns the configuration directory.
 //
-// os.UserConfigDir already encodes those conventions: %AppData% on Windows,
-// ~/Library/Application Support on macOS, and $XDG_CONFIG_HOME or ~/.config
-// elsewhere. Reimplementing them would only be a chance to disagree with the
-// rest of the system.
+// The default is intentionally visible and easy to back up: ~/.agentsync on
+// every platform. AGENTSYNC_CONFIG_DIR remains an explicit override for tests,
+// portable installations and service accounts.
 func Dir() (string, error) {
 	if dir := os.Getenv(dirEnv); dir != "" {
 		return filepath.Clean(dir), nil
 	}
 
-	root, err := os.UserConfigDir()
+	root, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("locate the configuration directory: %w; set %s to choose one", err, dirEnv)
+		return "", fmt.Errorf("locate the user home directory: %w; set %s to choose one", err, dirEnv)
 	}
 	return filepath.Join(root, appDir), nil
 }

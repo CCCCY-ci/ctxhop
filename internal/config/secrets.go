@@ -70,6 +70,9 @@ type Secrets struct {
 // credential sets, which fails in a way nobody can diagnose from the error the
 // backend returns.
 func LoadSecrets(dir string) (*Secrets, error) {
+	if err := migrateLegacyIfNeeded(dir); err != nil {
+		return nil, err
+	}
 	stored, storedErr := readSecrets(dir)
 
 	env, ok, err := credentialsFromEnvironment()

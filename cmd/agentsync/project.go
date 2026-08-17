@@ -17,13 +17,14 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/project"
 )
 
-const projectCommandTimeout = 2 * time.Second
+const projectCommandTimeout = 30 * time.Second
 
 const (
-	projectActionBind   = "bind"
-	projectActionUnbind = "unbind"
-	projectActionMode   = "mode"
-	projectActionList   = "list"
+	projectActionBind     = "bind"
+	projectActionUnbind   = "unbind"
+	projectActionMode     = "mode"
+	projectActionList     = "list"
+	projectActionDiscover = "discover"
 
 	projectModeNormal = "normal"
 )
@@ -48,6 +49,19 @@ type projectListEntry struct {
 	Roots    []string `json:"roots"`
 }
 
+type projectDiscoverReport struct {
+	Scope    string                 `json:"scope"`
+	Projects []projectDiscoverEntry `json:"projects"`
+}
+
+type projectDiscoverEntry struct {
+	ProjectID    string    `json:"projectId"`
+	IdentityKind string    `json:"identityKind"`
+	Identity     string    `json:"identity"`
+	AnnouncedAt  time.Time `json:"announcedAt"`
+	Bound        bool      `json:"bound"`
+}
+
 func init() {
 	for i := range commands {
 		if commands[i].name == "project" {
@@ -57,10 +71,14 @@ func init() {
 }
 
 func runProject(args []string) error {
-	return runProjectWithIO(args, os.Stdout)
+	return runProjectWithStreams(args, os.Stdin, os.Stdout, os.Stdout)
 }
 
 func runProjectWithIO(args []string, output io.Writer) error {
+	return runProjectWithStreams(args, strings.NewReader(""), output, output)
+}
+
+func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
 	options, err := parseProjectOptions(args)
 	if err != nil {
 		return err
@@ -82,6 +100,15 @@ func runProjectWithIO(args []string, output io.Writer) error {
 	defer cancel()
 
 	switch options.action {
+	case projectActionDiscover:
+		report, err := collectProjectDiscover(ctx, c, configDir, input, prompt)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeProjectDiscoverJSON(output, report)
+		}
+		return writeProjectDiscoverText(output, report)
 	case projectActionList:
 		report := collectProjectList(c)
 		if options.json {
@@ -138,7 +165,7 @@ func runProjectWithIO(args []string, output io.Writer) error {
 
 func parseProjectOptions(args []string) (projectOptions, error) {
 	if len(args) == 0 {
-		return projectOptions{}, errors.New("project: expected bind, unbind, mode, or list")
+		return projectOptions{}, errors.New("project: expected bind, unbind, mode, list, or discover")
 	}
 
 	switch args[0] {
@@ -234,8 +261,22 @@ func parseProjectOptions(args []string) (projectOptions, error) {
 		}
 		return options, nil
 
+	case projectActionDiscover:
+		var options projectOptions
+		options.action = projectActionDiscover
+		flags := flag.NewFlagSet("project discover", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return projectOptions{}, fmt.Errorf("project discover: %w", err)
+		}
+		if flags.NArg() != 0 {
+			return projectOptions{}, fmt.Errorf("project discover: unexpected argument %q", flags.Arg(0))
+		}
+		return options, nil
+
 	default:
-		return projectOptions{}, fmt.Errorf("project: unknown action %q; expected bind, unbind, mode, or list", args[0])
+		return projectOptions{}, fmt.Errorf("project: unknown action %q; expected bind, unbind, mode, list, or discover", args[0])
 	}
 }
 

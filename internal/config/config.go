@@ -95,6 +95,12 @@ type Config struct {
 // (BR-12, spec §4.1).
 func Load(dir string) (*Config, error) {
 	data, err := os.ReadFile(filepath.Join(dir, configFile))
+	if errors.Is(err, os.ErrNotExist) {
+		if migrateErr := migrateLegacyIfNeeded(dir); migrateErr != nil {
+			return nil, migrateErr
+		}
+		data, err = os.ReadFile(filepath.Join(dir, configFile))
+	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotInitialised

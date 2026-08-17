@@ -20,7 +20,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
 
-const pushTimeout = 30 * time.Second
+const pushTimeout = 5 * time.Minute
 
 type pushOptions struct {
 	hook    bool
@@ -28,9 +28,10 @@ type pushOptions struct {
 }
 
 type pushSummary struct {
-	Pushed  int
-	Failed  int
-	Skipped int
+	Pushed          int
+	Failed          int
+	Skipped         int
+	NoLocalSessions bool
 
 	// failureDetails contains only fixed stage names and finite failure
 	// classes. It never carries session content, local paths, credentials or
@@ -43,12 +44,19 @@ func (s *pushSummary) fail(stage string, err error) {
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
 	switch stage {
-	case "remote-push", "device-record":
+	case "remote-push", "device-record", "project-record":
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
 		}
-		detail = fmt.Sprintf("%s, class=%s; run 'agentsync doctor'", detail, class)
+		classText := string(class)
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			classText = "timeout"
+		case errors.Is(err, context.Canceled):
+			classText = "cancelled"
+		}
+		detail = fmt.Sprintf("%s, class=%s; run 'agentsync doctor'", detail, classText)
 	}
 	if s.failureDetails != "" {
 		s.failureDetails += "\n"
@@ -62,6 +70,18 @@ func writePushFailureDetails(output io.Writer, details string) error {
 	}
 	_, err := fmt.Fprintln(output, details)
 	return err
+}
+
+func writePushSummary(output io.Writer, summary pushSummary) error {
+	if _, err := fmt.Fprintf(output, "pushed: %d, failed: %d, skipped: %d\n", summary.Pushed, summary.Failed, summary.Skipped); err != nil {
+		return err
+	}
+	if summary.NoLocalSessions {
+		if _, err := fmt.Fprintln(output, "no local Claude Code sessions found for this project; start Claude Code in this directory before pushing"); err != nil {
+			return err
+		}
+	}
+	return writePushFailureDetails(output, summary.failureDetails)
 }
 
 func init() {
@@ -103,10 +123,7 @@ func runPushWithIO(args []string, output io.Writer) error {
 	if options.hook {
 		return nil
 	}
-	if _, err := fmt.Fprintf(output, "pushed: %d, failed: %d, skipped: %d\n", summary.Pushed, summary.Failed, summary.Skipped); err != nil {
-		return err
-	}
-	if err := writePushFailureDetails(output, summary.failureDetails); err != nil {
+	if err := writePushSummary(output, summary); err != nil {
 		return err
 	}
 	if summary.Failed != 0 {
@@ -218,14 +235,38 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 	}
 
+	if len(refs) == 0 {
+		return pushSummary{NoLocalSessions: true}, nil
+	}
+
 	space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: installation.DataDir}
 	summary := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, layout, installation, space, store, public, pusher, configDir, current.Root, refs)
-	if summary.Pushed > 0 {
+	if len(refs) > 0 && summary.Failed == 0 {
+		if err := publishProjectAnnouncement(ctx, c, current.Identity, projectID, store, public); err != nil {
+			summary.fail("project-record", err)
+		}
 		if err := publishPushDeviceRecord(ctx, c, store, public); err != nil {
 			summary.fail("device-record", err)
 		}
 	}
 	return summary, nil
+}
+
+func publishProjectAnnouncement(ctx context.Context, c *config.Config, identity project.Identity, projectID string, store remote.Remote, public *ecdh.PublicKey) error {
+	if c == nil {
+		return errors.New("project record: configuration is unavailable")
+	}
+	record, err := syncer.NewProjectAnnouncement(
+		projectID,
+		c.Device.ID,
+		string(identity.Kind),
+		identity.Value,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("project record: %w", err)
+	}
+	return syncer.PutProjectAnnouncement(ctx, store, public, record)
 }
 
 func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.Layout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef) pushSummary {

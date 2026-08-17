@@ -14,7 +14,7 @@ var completionSubcommands = map[string][]string{
 	"device":     {"status", "mode", "list", "rename", "remove", "rotate-key", "invite"},
 	"history":    {"cleanup", "prune"},
 	"passphrase": {"change", "reset"},
-	"project":    {"bind", "unbind", "mode", "list"},
+	"project":    {"bind", "unbind", "mode", "list", "discover"},
 	"remote":     {"delete-session", "delete-project", "delete-all"},
 }
 
@@ -45,6 +45,7 @@ var completionOptions = map[string][]string{
 	"project unbind":        {"--path", "--identity"},
 	"project mode":          {"--path", "--identity"},
 	"project list":          {"--json"},
+	"project discover":      {"--json"},
 	"remote delete-session": {"--yes", "--remote-id", "--path"},
 	"remote delete-project": {"--yes", "--path"},
 	"remote delete-all":     {"--yes"},
