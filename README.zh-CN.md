@@ -171,13 +171,15 @@ claude --resume
 `pull --check` 只读取远端元数据。`resume` 才会下载选中的加密会话并恢复到
 Claude Code，不会复制项目文件、Git 修改、skills、MCP 服务或凭据。
 
-`resume` 写入文件前，会先比较当前项目和上传会话时记录的项目状态。如果两边不一致，
-命令会停止，也不会创建 Claude session 文件。先确认当前目录是正确的项目；如果确定要
-继续恢复，再加上 `--allow-divergent` 重试。
+恢复 session 时：
 
-如果加上这个参数后仍然成功，输出中的 `workspace: divergent` 只表示当前设备的项目
-文件和源设备不完全一样，会话已经写入。`workspace context: injected` 表示 AgentSync
-在恢复的会话里加了一条本地提示，告诉 Claude 当前工作区有差异；这条提示不会再次上传。
+- AgentSync 会先检查相关的项目文件。这里检查的是项目文件，不是 session 内容；如果这些
+  文件和源设备不一致，恢复会停止，也不会写入 session 文件。
+- 如果确认当前项目没选错，但仍然要继续恢复，就加上 `--allow-divergent`。它只会继续恢复
+  session，不会修改或同步项目文件。
+- `workspace: divergent` 表示 session 已经恢复，但这台设备上的相关项目文件与源设备不一致。
+- `workspace context: injected` 表示恢复的会话里加入了一条本地差异提示，不会上传到远端。
+- `workspace verdict is divergent` 表示恢复被停止，session 文件没有写入。
 
 例如：
 
@@ -187,9 +189,6 @@ session: b9dcdfcc-0470-4692-a9d9-cb3d9c6e8c6d
 workspace: divergent (1 file differences)
 workspace context: injected
 ~~~
-
-如果命令最后报 `workspace verdict is divergent`，说明 Claude session 文件还没有写入。
-确认这是有意恢复后，使用 `--allow-divergent` 重新执行。
 
 ### 6. 添加其他项目
 

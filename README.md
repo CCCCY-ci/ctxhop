@@ -183,15 +183,19 @@ AgentSync.
 encrypted session and restores it to Claude Code. It does not copy project
 files, Git changes, skills, MCP servers or credentials.
 
-Before writing the session, `resume` compares the current project with the
-workspace recorded when that session was uploaded. If they do not match, it
-stops without creating a Claude session file. Check that you are in the right
-project, then retry with `--allow-divergent` if you still want to restore it.
+When restoring a session:
 
-If the command succeeds with `workspace: divergent`, the session was restored.
-It only means that the checked files are different on this device.
-`workspace context: injected` adds a local note to the restored conversation
-so Claude can see that difference. It is not uploaded back to the remote.
+- AgentSync checks the related project files first. This check is about project
+  files, not session contents. If those files differ from the source device,
+  the restore stops and no session file is written.
+- Add `--allow-divergent` to continue anyway. It only restores the session; it
+  does not change or sync project files.
+- `workspace: divergent` means the session was restored, but the related project
+  files on this device are different from the source device.
+- `workspace context: injected` means a local difference note was added to the
+  restored conversation. It is not uploaded to the remote.
+- `workspace verdict is divergent` means the restore was stopped and no session
+  file was written.
 
 For example:
 
@@ -201,9 +205,6 @@ session: b9dcdfcc-0470-4692-a9d9-cb3d9c6e8c6d
 workspace: divergent (1 file differences)
 workspace context: injected
 ~~~
-
-If the command ends with `workspace verdict is divergent`, no Claude session
-file was written. Retry with `--allow-divergent` when this restore is intentional.
 
 ### 6. Add another project
 
