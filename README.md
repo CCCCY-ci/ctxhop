@@ -142,10 +142,6 @@ Enter the R2 credentials when prompted and use the same encryption password as
 device A. Do not combine `--invite` with backend options such as
 `--endpoint`, `--bucket`, `--region` or `--prefix`.
 
-If device B is a second simulated device on the same computer, give it a
-separate `AGENTSYNC_CONFIG_DIR` (and, if needed, `CLAUDE_CONFIG_DIR`). On two
-different computers, the default directories are already separate.
-
 ### 5. List and restore on device B
 
 An authorized device can discover projects announced by other devices:
@@ -172,17 +168,32 @@ Restore the session ID printed by `list`:
 
 # Use this when the project path or workspace differs on device B.
 ./agentsync resume --allow-divergent <NATIVE_SESSION_ID>
+~~~
+
+After a successful restore, run:
+
+~~~bash
 claude --resume
 ~~~
+
+Claude Code will show its session list, including the session restored by
+AgentSync.
 
 `pull --check` reads remote metadata only. `resume` downloads the selected
 encrypted session and restores it to Claude Code. It does not copy project
 files, Git changes, skills, MCP servers or credentials.
 
-The default restore checks the target workspace. If the workspace is different,
-review the reported differences before using `--allow-divergent`. A successful
-restore may report `workspace: divergent`; that is a warning that the target
-workspace differs, not a failed restore. For example:
+Before writing the session, `resume` compares the current project with the
+workspace recorded when that session was uploaded. If they do not match, it
+stops without creating a Claude session file. Check that you are in the right
+project, then retry with `--allow-divergent` if you still want to restore it.
+
+If the command succeeds with `workspace: divergent`, the session was restored.
+It only means that the checked files are different on this device.
+`workspace context: injected` adds a local note to the restored conversation
+so Claude can see that difference. It is not uploaded back to the remote.
+
+For example:
 
 ~~~text
 resumed: 将sidecar服务迁移到浏览器插件架构
@@ -191,10 +202,8 @@ workspace: divergent (1 file differences)
 workspace context: injected
 ~~~
 
-`workspace context: injected` means a local-only workspace difference note was
-added to the restored session. If the command ends with `workspace verdict is
-divergent`, no Claude session file was written; rerun it with
-`--allow-divergent` when this restore is intentional.
+If the command ends with `workspace verdict is divergent`, no Claude session
+file was written. Retry with `--allow-divergent` when this restore is intentional.
 
 ### 6. Add another project
 
@@ -268,17 +277,16 @@ Without `AGENTSYNC_CONFIG_DIR`, AgentSync uses the visible per-user directory
 | Linux and other Unix systems | `~/.agentsync` |
 
 `init` prints the exact directory after a successful initialization. Override it
-when you need an isolated configuration, such as a second simulated device on
-the same computer:
+when you need a custom configuration directory:
 
 ~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
+export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-custom"
 ~~~
 
 PowerShell:
 
 ~~~powershell
-$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-device-b'
+$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-custom'
 ~~~
 
 The directory contains configuration, encrypted secrets, the device key and

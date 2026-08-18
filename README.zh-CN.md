@@ -134,10 +134,6 @@ cd /path/to/project
 `--invite` 与 `--endpoint`、`--bucket`、`--region`、`--prefix` 等
 后端参数一起使用。
 
-如果是在同一台电脑上模拟第二台设备，需要给设备 B 设置独立的
-`AGENTSYNC_CONFIG_DIR`；必要时也可以设置独立的 `CLAUDE_CONFIG_DIR`。如果是两台
-不同的电脑，每台电脑的默认目录本来就是相互独立的。
-
 ### 5. 在设备 B 查看并恢复
 
 已授权设备可以发现其他设备发布的新项目：
@@ -164,15 +160,26 @@ cd /path/to/the/same/project
 
 # 设备 B 的项目路径或工作区不一致时使用。
 ./agentsync resume --allow-divergent <NATIVE_SESSION_ID>
+~~~
+
+恢复成功后，执行下面的命令即可在 Claude Code 的会话列表中看到同步过来的 session：
+
+~~~bash
 claude --resume
 ~~~
 
 `pull --check` 只读取远端元数据。`resume` 才会下载选中的加密会话并恢复到
 Claude Code，不会复制项目文件、Git 修改、skills、MCP 服务或凭据。
 
-默认恢复会检查目标工作区。如果工作区不同，先查看差异，再决定是否使用
-`--allow-divergent`。恢复成功时也可能显示 `workspace: divergent`，这表示目标工作区
-和源设备不同，是警告，不是恢复失败。例如：
+`resume` 写入文件前，会先比较当前项目和上传会话时记录的项目状态。如果两边不一致，
+命令会停止，也不会创建 Claude session 文件。先确认当前目录是正确的项目；如果确定要
+继续恢复，再加上 `--allow-divergent` 重试。
+
+如果加上这个参数后仍然成功，输出中的 `workspace: divergent` 只表示当前设备的项目
+文件和源设备不完全一样，会话已经写入。`workspace context: injected` 表示 AgentSync
+在恢复的会话里加了一条本地提示，告诉 Claude 当前工作区有差异；这条提示不会再次上传。
+
+例如：
 
 ~~~text
 resumed: 将sidecar服务迁移到浏览器插件架构
@@ -181,8 +188,7 @@ workspace: divergent (1 file differences)
 workspace context: injected
 ~~~
 
-`workspace context: injected` 表示恢复的会话中加入了一条只保存在本地的工作区差异
-说明。如果命令最后报 `workspace verdict is divergent`，说明 Claude 会话文件还没有写入；
+如果命令最后报 `workspace verdict is divergent`，说明 Claude session 文件还没有写入。
 确认这是有意恢复后，使用 `--allow-divergent` 重新执行。
 
 ### 6. 添加其他项目
@@ -254,17 +260,16 @@ cd /path/to/another/project
 | macOS | `~/.agentsync` |
 | Linux 和其他 Unix 系统 | `~/.agentsync` |
 
-初始化成功后，`init` 会打印实际目录。需要隔离配置时（例如在同一台电脑上模拟第二台
-设备），可以覆盖这个默认目录：
+初始化成功后，`init` 会打印实际目录。需要使用自定义配置目录时，可以覆盖这个默认目录：
 
 ~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
+export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-custom"
 ~~~
 
 PowerShell：
 
 ~~~powershell
-$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-device-b'
+$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-custom'
 ~~~
 
 该目录包含配置、加密 secrets、设备密钥和本地状态。不要提交或公开这个目录。Claude
