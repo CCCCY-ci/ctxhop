@@ -142,9 +142,20 @@ Enter the R2 credentials when prompted and use the same encryption password as
 device A. Do not combine `--invite` with backend options such as
 `--endpoint`, `--bucket`, `--region` or `--prefix`.
 
+If device B is a second simulated device on the same computer, give it a
+separate `AGENTSYNC_CONFIG_DIR` (and, if needed, `CLAUDE_CONFIG_DIR`). On two
+different computers, the default directories are already separate.
+
 ### 5. List and restore on device B
 
-Prepare the same project on device B and bind it:
+An authorized device can discover projects announced by other devices:
+
+~~~bash
+./agentsync project discover
+~~~
+
+This only lists project identities. It does not clone a repository or bind a
+local directory. Prepare the project checkout on device B, then bind it:
 
 ~~~bash
 cd /path/to/the/same/project
@@ -156,7 +167,11 @@ cd /path/to/the/same/project
 Restore the session ID printed by `list`:
 
 ~~~bash
+# Use this when the target workspace matches the source workspace.
 ./agentsync resume <NATIVE_SESSION_ID>
+
+# Use this when the project path or workspace differs on device B.
+./agentsync resume --allow-divergent <NATIVE_SESSION_ID>
 claude --resume
 ~~~
 
@@ -165,7 +180,21 @@ encrypted session and restores it to Claude Code. It does not copy project
 files, Git changes, skills, MCP servers or credentials.
 
 The default restore checks the target workspace. If the workspace is different,
-review the reported differences before using `--allow-divergent`.
+review the reported differences before using `--allow-divergent`. A successful
+restore may report `workspace: divergent`; that is a warning that the target
+workspace differs, not a failed restore. For example:
+
+~~~text
+resumed: 将sidecar服务迁移到浏览器插件架构
+session: b9dcdfcc-0470-4692-a9d9-cb3d9c6e8c6d
+workspace: divergent (1 file differences)
+workspace context: injected
+~~~
+
+`workspace context: injected` means a local-only workspace difference note was
+added to the restored session. If the command ends with `workspace verdict is
+divergent`, no Claude session file was written; rerun it with
+`--allow-divergent` when this restore is intentional.
 
 ### 6. Add another project
 
@@ -191,7 +220,7 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync help` | Show command usage. |
 | `agentsync version` | Show version, commit, build time and runtime information. |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | Generate shell completion. `pwsh` is an alias for `powershell`. |
-| `agentsync init [backend options]` | Create or join the encrypted sync domain and write local configuration. Can install the Claude Code hook. |
+| `agentsync init [--invite FILE or backend options]` | Create or join the encrypted sync domain and write local configuration. Use `--invite` to join from another device; it can install the Claude Code hook. |
 | `agentsync install [--dir DIR] [--no-path]` | Install the current executable in a user-level command directory; Windows updates the user PATH. |
 | `agentsync status [--json] [--remote]` | Show local status; `--remote` checks remote metadata. |
 | `agentsync doctor [--json]` | Diagnose configuration, backend access, Agent installation, project identity and recent local errors. |
@@ -199,11 +228,12 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync project unbind [--path DIR or --identity ID]` | Remove a local project binding. |
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | Set a project's synchronization policy. |
 | `agentsync project list [--json]` | List bound projects and their policies. |
+| `agentsync project discover [--json]` | List projects announced by authorized devices. It does not bind or clone them. |
 | `agentsync push [SESSION_ID] [--session SESSION_ID] [--agentsync-hook]` | Upload new records for the current project. |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | Repeatedly scan and push the current project; `--once` performs one scan. |
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |
-| `agentsync resume [SESSION_ID] [restore options]` | Restore one session. Options include `--version`, `--allow-limited`, `--allow-divergent`, `--no-workspace-context` and `--replace-existing`. |
+| `agentsync resume [restore options] [SESSION_ID]` | Download and restore one session. Options include `--version`, `--allow-limited`, `--allow-divergent`, `--no-workspace-context` and `--replace-existing`; put options before the session ID. |
 | `agentsync history SESSION_ID [--json]` | Show recoverable versions and forks for a session. |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | Delete one session; an alias for `remote delete-session`. |
 | `agentsync history prune SESSION_ID --keep N or --before RFC3339` | Delete old session versions using one retention rule. |
@@ -228,25 +258,27 @@ where available for automation.
 
 ### Configuration directory
 
-Without `AGENTSYNC_CONFIG_DIR`, AgentSync uses:
+Without `AGENTSYNC_CONFIG_DIR`, AgentSync uses the visible per-user directory
+`~/.agentsync` on every platform:
 
 | Platform | Default directory |
 |---|---|
-| Windows | `%APPDATA%\\agentsync` |
-| macOS | `~/Library/Application Support/agentsync` |
-| Linux and other Unix systems | `$XDG_CONFIG_HOME/agentsync`, falling back to `~/.config/agentsync` |
+| Windows | `%USERPROFILE%\.agentsync` |
+| macOS | `~/.agentsync` |
+| Linux and other Unix systems | `~/.agentsync` |
 
-init prints the exact directory after a successful initialization. To use
-`.agentsync` under the current user's home directory:
+`init` prints the exact directory after a successful initialization. Override it
+when you need an isolated configuration, such as a second simulated device on
+the same computer:
 
 ~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync"
+export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
 ~~~
 
 PowerShell:
 
 ~~~powershell
-$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync'
+$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-device-b'
 ~~~
 
 The directory contains configuration, encrypted secrets, the device key and

@@ -134,9 +134,20 @@ cd /path/to/project
 `--invite` 与 `--endpoint`、`--bucket`、`--region`、`--prefix` 等
 后端参数一起使用。
 
+如果是在同一台电脑上模拟第二台设备，需要给设备 B 设置独立的
+`AGENTSYNC_CONFIG_DIR`；必要时也可以设置独立的 `CLAUDE_CONFIG_DIR`。如果是两台
+不同的电脑，每台电脑的默认目录本来就是相互独立的。
+
 ### 5. 在设备 B 查看并恢复
 
-先在设备 B 准备好相同项目并完成绑定：
+已授权设备可以发现其他设备发布的新项目：
+
+~~~bash
+./agentsync project discover
+~~~
+
+这个命令只列出项目身份，不会自动 clone 仓库，也不会绑定本地目录。先在设备 B
+准备好项目 checkout，再完成绑定：
 
 ~~~bash
 cd /path/to/the/same/project
@@ -148,7 +159,11 @@ cd /path/to/the/same/project
 使用 `list` 打印出的会话 ID 进行恢复：
 
 ~~~bash
+# 目标工作区与源设备一致时使用。
 ./agentsync resume <NATIVE_SESSION_ID>
+
+# 设备 B 的项目路径或工作区不一致时使用。
+./agentsync resume --allow-divergent <NATIVE_SESSION_ID>
 claude --resume
 ~~~
 
@@ -156,7 +171,19 @@ claude --resume
 Claude Code，不会复制项目文件、Git 修改、skills、MCP 服务或凭据。
 
 默认恢复会检查目标工作区。如果工作区不同，先查看差异，再决定是否使用
-`--allow-divergent`。
+`--allow-divergent`。恢复成功时也可能显示 `workspace: divergent`，这表示目标工作区
+和源设备不同，是警告，不是恢复失败。例如：
+
+~~~text
+resumed: 将sidecar服务迁移到浏览器插件架构
+session: b9dcdfcc-0470-4692-a9d9-cb3d9c6e8c6d
+workspace: divergent (1 file differences)
+workspace context: injected
+~~~
+
+`workspace context: injected` 表示恢复的会话中加入了一条只保存在本地的工作区差异
+说明。如果命令最后报 `workspace verdict is divergent`，说明 Claude 会话文件还没有写入；
+确认这是有意恢复后，使用 `--allow-divergent` 重新执行。
 
 ### 6. 添加其他项目
 
@@ -180,7 +207,7 @@ cd /path/to/another/project
 | `agentsync help` | 显示命令用法。 |
 | `agentsync version` | 显示版本、commit、构建时间和运行时信息。 |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | 生成 Shell 补全；`pwsh` 是 `powershell` 的别名。 |
-| `agentsync init [backend options]` | 创建或加入加密同步域并写入本地配置，可选安装 Claude Code Hook。 |
+| `agentsync init [--invite FILE or backend options]` | 创建或加入加密同步域并写入本地配置；使用 `--invite` 加入已有设备的同步域，可选安装 Claude Code Hook。 |
 | `agentsync install [--dir DIR] [--no-path]` | 把当前二进制安装到用户级命令目录；Windows 会更新用户级 PATH。 |
 | `agentsync status [--json] [--remote]` | 显示本地状态；`--remote` 会检查远端元数据。 |
 | `agentsync doctor [--json]` | 检查配置、后端访问、Agent 安装、项目身份和最近的本地错误。 |
@@ -188,11 +215,12 @@ cd /path/to/another/project
 | `agentsync project unbind [--path DIR or --identity ID]` | 删除本地项目绑定。 |
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | 设置项目同步策略。 |
 | `agentsync project list [--json]` | 列出已绑定项目及其策略。 |
+| `agentsync project discover [--json]` | 列出已授权设备发布的项目；不会自动绑定或 clone 项目。 |
 | `agentsync push [SESSION_ID] [--session SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录。 |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |
-| `agentsync resume [SESSION_ID] [restore options]` | 恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`。 |
+| `agentsync resume [restore options] [SESSION_ID]` | 下载并恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`，选项要放在会话 ID 前面。 |
 | `agentsync history SESSION_ID [--json]` | 查看会话可恢复版本和 fork。 |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | 删除一个会话，是 `remote delete-session` 的别名。 |
 | `agentsync history prune SESSION_ID --keep N or --before RFC3339` | 按一种保留规则删除旧版本。 |
@@ -217,33 +245,33 @@ cd /path/to/another/project
 
 ### 配置目录
 
-没有设置 `AGENTSYNC_CONFIG_DIR` 时，AgentSync 使用：
+没有设置 `AGENTSYNC_CONFIG_DIR` 时，AgentSync 在所有平台都使用当前用户 home 下
+清晰可见的 `~/.agentsync`：
 
 | 平台 | 默认目录 |
 |---|---|
-| Windows | `%APPDATA%\\agentsync` |
-| macOS | `~/Library/Application Support/agentsync` |
-| Linux 和其他 Unix 系统 | `$XDG_CONFIG_HOME/agentsync`，否则使用 `~/.config/agentsync` |
+| Windows | `%USERPROFILE%\.agentsync` |
+| macOS | `~/.agentsync` |
+| Linux 和其他 Unix 系统 | `~/.agentsync` |
 
-初始化成功后，init 会打印实际目录。要使用当前用户 home 下的
-`.agentsync`：
+初始化成功后，`init` 会打印实际目录。需要隔离配置时（例如在同一台电脑上模拟第二台
+设备），可以覆盖这个默认目录：
 
 ~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync"
+export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-device-b"
 ~~~
 
 PowerShell：
 
 ~~~powershell
-$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync'
+$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-device-b'
 ~~~
 
-该目录包含配置、加密 secrets、设备密钥和本地状态。不要提交或公开这个目录。
-Claude Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指定。
+该目录包含配置、加密 secrets、设备密钥和本地状态。不要提交或公开这个目录。Claude
+Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指定。
 
 在 CI 或短期测试中，可以设置 `AGENTSYNC_ACCESS_KEY_ID` 和
-`AGENTSYNC_SECRET_ACCESS_KEY`；`AGENTSYNC_SESSION_TOKEN` 可选。环境变量中的
-凭据不会写入磁盘。
+`AGENTSYNC_SECRET_ACCESS_KEY`；`AGENTSYNC_SESSION_TOKEN` 可选。环境变量中的凭据不会写入磁盘。
 
 ## 限制与安全
 
