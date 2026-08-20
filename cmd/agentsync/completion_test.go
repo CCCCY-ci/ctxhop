@@ -24,7 +24,7 @@ func TestCompletionCommandRendersAllSupportedShells(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := output.String()
-			if !strings.Contains(text, tc.marker) || !strings.Contains(text, "resume") || !strings.Contains(text, "--allow-divergent") {
+			if !strings.Contains(text, tc.marker) || !strings.Contains(text, "resume") || !strings.Contains(text, "--allow-divergent") || !strings.Contains(text, "hook") {
 				t.Fatalf("completion output is incomplete: %s", text)
 			}
 			if strings.Contains(text, `\n`) {

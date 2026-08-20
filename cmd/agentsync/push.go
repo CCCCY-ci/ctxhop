@@ -77,7 +77,7 @@ func writePushSummary(output io.Writer, summary pushSummary) error {
 		return err
 	}
 	if summary.NoLocalSessions {
-		if _, err := fmt.Fprintln(output, "no local Claude Code sessions found for this project; start Claude Code in this directory before pushing"); err != nil {
+		if _, err := fmt.Fprintln(output, "no local sessions found for this project; start Claude Code or Codex in this directory before pushing"); err != nil {
 			return err
 		}
 	}
@@ -212,36 +212,45 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		return pushSummary{}, fmt.Errorf("push: prepare pending queue: %w", err)
 	}
 
-	home, err := adapter.DefaultHome()
+	agents, err := adapter.DiscoverInstalled(ctx, current.Root)
 	if err != nil {
-		return pushSummary{}, fmt.Errorf("push: locate Claude Code: %w", err)
+		return pushSummary{}, fmt.Errorf("push: discover local agents: %w", err)
 	}
-	layout := adapter.Layout{Home: home}
-	installation, err := layout.Detect(ctx)
-	if errors.Is(err, adapter.ErrNotInstalled) {
-		return pushSummary{}, errors.New("push: Claude Code is not installed")
-	}
-	if err != nil {
-		return pushSummary{}, fmt.Errorf("push: inspect Claude Code: %w", err)
-	}
-	refs, err := layout.DiscoverSessions(current.Root)
-	if err != nil {
-		return pushSummary{}, fmt.Errorf("push: discover local sessions: %w", err)
-	}
-	if options.session != "" {
-		refs = filterPushSession(refs, options.session)
-		if len(refs) == 0 {
-			return pushSummary{}, errors.New("push: requested session was not found in the current project")
-		}
+	if len(agents) == 0 {
+		return pushSummary{}, errors.New("push: no supported coding agent is installed; install Claude Code or Codex CLI")
 	}
 
-	if len(refs) == 0 {
+	var summary pushSummary
+	found := false
+	for _, agent := range agents {
+		refs := agent.Sessions
+		if options.session != "" {
+			refs = filterPushSession(refs, options.session)
+		}
+		if len(refs) == 0 {
+			continue
+		}
+		found = true
+		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
+		partial := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs)
+		summary.Pushed += partial.Pushed
+		summary.Failed += partial.Failed
+		summary.Skipped += partial.Skipped
+		if partial.failureDetails != "" {
+			if summary.failureDetails != "" {
+				summary.failureDetails += "\n"
+			}
+			summary.failureDetails += partial.failureDetails
+		}
+	}
+	if options.session != "" && !found {
+		return pushSummary{}, errors.New("push: requested session was not found in the current project")
+	}
+	if !found {
 		return pushSummary{NoLocalSessions: true}, nil
 	}
 
-	space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: installation.DataDir}
-	summary := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, layout, installation, space, store, public, pusher, configDir, current.Root, refs)
-	if len(refs) > 0 && summary.Failed == 0 {
+	if summary.Failed == 0 {
 		if err := publishProjectAnnouncement(ctx, c, current.Identity, projectID, store, public); err != nil {
 			summary.fail("project-record", err)
 		}
@@ -269,7 +278,7 @@ func publishProjectAnnouncement(ctx context.Context, c *config.Config, identity 
 	return syncer.PutProjectAnnouncement(ctx, store, public, record)
 }
 
-func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.Layout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef) pushSummary {
+func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef) pushSummary {
 	var summary pushSummary
 	for _, ref := range refs {
 		if err := ctx.Err(); err != nil {
@@ -308,12 +317,16 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 			summary.fail("executor", err)
 			continue
 		}
-		data, err := adapter.ReadSessionFile(layout.SessionFile(projectRoot, ref.NativeID))
+		readRef := ref
+		if readRef.ProjectPath == "" {
+			readRef.ProjectPath = projectRoot
+		}
+		data, err := layout.ReadSession(readRef)
 		if err != nil {
 			summary.fail("session-read", err)
 			continue
 		}
-		fingerprint, err := capturePushFingerprint(ctx, projectRoot, data)
+		fingerprint, err := capturePushFingerprint(ctx, layout, projectRoot, data)
 		if err != nil {
 			summary.fail("workspace-fingerprint", err)
 			continue
@@ -332,8 +345,8 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 	return summary
 }
 
-func capturePushFingerprint(ctx context.Context, projectRoot string, data adapter.SessionData) (project.Fingerprint, error) {
-	accesses := adapter.TouchedFiles(data.Records, projectRoot)
+func capturePushFingerprint(ctx context.Context, layout adapter.SessionLayout, projectRoot string, data adapter.SessionData) (project.Fingerprint, error) {
+	accesses := layout.TouchedFiles(data.Records, projectRoot)
 	touched := make([]string, 0, len(accesses))
 	for _, access := range accesses {
 		touched = append(touched, access.Path)

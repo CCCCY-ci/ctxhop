@@ -507,6 +507,7 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 	if _, err := os.Stat(configDir); err != nil {
 		return fmt.Errorf("init: configuration directory is unavailable after saving: %w", err)
 	}
+
 	home, err := adapter.DefaultHome()
 	if err != nil {
 		return fmt.Errorf("init: locate Claude Code: %w", err)
@@ -514,16 +515,64 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 	layout := adapter.Layout{Home: home}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := layout.Detect(ctx); errors.Is(err, adapter.ErrNotInstalled) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("init: inspect Claude Code: %w", err)
+	_, installationErr := layout.Detect(ctx)
+
+	if installationErr != nil && !errors.Is(installationErr, adapter.ErrNotInstalled) {
+		return fmt.Errorf("init: inspect Claude Code: %w", installationErr)
 	}
+	if installationErr == nil {
+		if err := installClaudeHook(c, configDir, p, executable, layout); err != nil {
+			return err
+		}
+	}
+	return maybeInstallCodexHook(c, configDir, p, executable)
+}
+
+func installClaudeHook(c *config.Config, configDir string, p *initPrompter, executable string, layout adapter.Layout) error {
 	if c.Agents == nil {
 		c.Agents = map[string]config.AgentState{}
 	}
 	if !p.confirm("Install the Claude Code SessionEnd hook for automatic agentsync push? [y/N]: ") {
-		_, err := fmt.Fprintln(p.output, "SessionEnd hook: skipped")
+		_, err := fmt.Fprintln(p.output, "Claude Code SessionEnd hook: skipped")
+		return err
+	}
+	if executable == "" {
+		var err error
+		executable, err = os.Executable()
+		if err != nil {
+			return errors.New("init: cannot locate the agentsync executable for the hook")
+		}
+	}
+	if err := layout.InstallHook(executable); err != nil {
+		return fmt.Errorf("init: configuration is complete but Claude Code hook installation failed: %w", err)
+	}
+	c.Agents["claude-code"] = config.AgentState{HookInstalled: true}
+	if err := c.Save(configDir); err != nil {
+		return fmt.Errorf("init: Claude Code hook installed but configuration update failed: %w", err)
+	}
+	_, err := fmt.Fprintln(p.output, "Claude Code SessionEnd hook: installed")
+	return err
+}
+
+func maybeInstallCodexHook(c *config.Config, configDir string, p *initPrompter, executable string) error {
+	home, err := adapter.DefaultCodexHome()
+	if err != nil {
+		return nil
+	}
+	layout := adapter.CodexLayout{Home: home}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := layout.Detect(ctx); errors.Is(err, adapter.ErrNotInstalled) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("init: inspect Codex: %w", err)
+	}
+
+	if c.Agents == nil {
+		c.Agents = map[string]config.AgentState{}
+	}
+	if !p.confirm("Install the Codex SessionEnd hook for automatic agentsync push? [y/N]: ") {
+		_, err := fmt.Fprintln(p.output, "Codex SessionEnd hook: skipped")
 		return err
 	}
 	if executable == "" {
@@ -533,16 +582,15 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 		}
 	}
 	if err := layout.InstallHook(executable); err != nil {
-		return fmt.Errorf("init: configuration is complete but hook installation failed: %w", err)
+		return fmt.Errorf("init: configuration is complete but Codex hook installation failed: %w", err)
 	}
-	c.Agents["claude-code"] = config.AgentState{HookInstalled: true}
+	c.Agents["codex"] = config.AgentState{HookInstalled: true}
 	if err := c.Save(configDir); err != nil {
-		return fmt.Errorf("init: hook installed but configuration update failed: %w", err)
+		return fmt.Errorf("init: Codex hook installed but configuration update failed: %w", err)
 	}
-	_, err = fmt.Fprintln(p.output, "SessionEnd hook: installed")
+	_, err = fmt.Fprintln(p.output, "Codex SessionEnd hook: installed; restart Codex and trust it in /hooks")
 	return err
 }
-
 func refuseExistingConfig(dir string) error {
 	_, err := config.Load(dir)
 	switch {

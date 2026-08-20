@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	sessionSummaryVersion = 1
-	maxFingerprintPaths   = 10000
+	sessionSummaryVersion      = 1
+	sessionSummaryAgentVersion = 2
+	maxFingerprintPaths        = 10000
 )
 
 var (
@@ -33,6 +34,9 @@ var (
 // fingerprint contains only relative paths and digests for the restore safety
 // check.
 type SessionSummary struct {
+	// Agent is the stable adapter name. It was added in summary version 2.
+	// Version 1 payloads decode with an empty value for compatibility.
+	Agent       string
 	NativeID    string
 	Title       string
 	CreatedAt   time.Time
@@ -51,6 +55,7 @@ func EncodeSessionSummary(ref adapter.SessionRef) ([]byte, error) {
 // payload through its maps or slices after encoding begins.
 func EncodeSessionSummaryWithFingerprint(ref adapter.SessionRef, fingerprint *project.Fingerprint) ([]byte, error) {
 	summary := SessionSummary{
+		Agent:       ref.Agent,
 		NativeID:    ref.NativeID,
 		Title:       ref.Title,
 		CreatedAt:   ref.CreatedAt,
@@ -60,8 +65,13 @@ func EncodeSessionSummaryWithFingerprint(ref adapter.SessionRef, fingerprint *pr
 	if err := summary.validate(); err != nil {
 		return nil, err
 	}
+	version := sessionSummaryVersion
+	if summary.Agent != "" {
+		version = sessionSummaryAgentVersion
+	}
 	wire := sessionSummaryWire{
-		Version:     sessionSummaryVersion,
+		Version:     version,
+		Agent:       summary.Agent,
 		NativeID:    summary.NativeID,
 		Title:       summary.Title,
 		CreatedAt:   formatSummaryTime(summary.CreatedAt),
@@ -111,13 +121,14 @@ func DecodeSessionSummary(payload []byte) (SessionSummary, error) {
 		return SessionSummary{}, fmt.Errorf("%w: updated time: %v", ErrInvalidSessionSummary, err)
 	}
 	summary := SessionSummary{
+		Agent:       wire.Agent,
 		NativeID:    wire.NativeID,
 		Title:       wire.Title,
 		CreatedAt:   created,
 		UpdatedAt:   updated,
 		Fingerprint: cloneFingerprint(wire.Fingerprint),
 	}
-	if wire.Version != sessionSummaryVersion {
+	if wire.Version != sessionSummaryVersion && wire.Version != sessionSummaryAgentVersion {
 		return SessionSummary{}, fmt.Errorf("%w: unsupported version %d", ErrInvalidSessionSummary, wire.Version)
 	}
 	if err := summary.validate(); err != nil {
@@ -128,6 +139,7 @@ func DecodeSessionSummary(payload []byte) (SessionSummary, error) {
 
 type sessionSummaryWire struct {
 	Version     int                  `json:"version"`
+	Agent       string               `json:"agent,omitempty"`
 	NativeID    string               `json:"nativeId"`
 	Title       string               `json:"title"`
 	CreatedAt   string               `json:"createdAt"`
@@ -136,6 +148,17 @@ type sessionSummaryWire struct {
 }
 
 func (s SessionSummary) validate() error {
+	if s.Agent != "" {
+		if len(s.Agent) > 64 || !utf8.ValidString(s.Agent) {
+			return fmt.Errorf("%w: agent is invalid", ErrInvalidSessionSummary)
+		}
+		for _, r := range s.Agent {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+				continue
+			}
+			return fmt.Errorf("%w: agent contains an unsafe character", ErrInvalidSessionSummary)
+		}
+	}
 	if strings.TrimSpace(s.NativeID) == "" {
 		return fmt.Errorf("%w: native session ID is empty", ErrInvalidSessionSummary)
 	}

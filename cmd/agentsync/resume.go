@@ -197,18 +197,12 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, err
 	}
-	home, err := adapter.DefaultHome()
+	agent, err := selectResumeAgent(ctx, current.Root, candidate.Summary)
 	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: locate Claude Code: %w", err)
+		return resumeReport{}, err
 	}
-	layout := adapter.Layout{Home: home}
-	installation, err := layout.Detect(ctx)
-	if errors.Is(err, adapter.ErrNotInstalled) {
-		return resumeReport{}, errors.New("resume: Claude Code is not installed")
-	}
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: inspect Claude Code: %w", err)
-	}
+	layout := agent.Layout
+	installation := agent.Installation
 	space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: installation.DataDir}
 	restoreOptions := syncflow.RestoreOptions{AllowLimited: options.allowLimited}
 	if options.version >= 0 {
@@ -227,6 +221,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		AllowLimited:           options.allowLimited,
 		AllowDivergent:         options.allowDivergent,
 		InjectWorkspaceContext: !options.noWorkspaceContext,
+		Agent:                  layout.Name(),
 		ReplaceExisting:        options.replaceExisting,
 	})
 	if err != nil {
@@ -249,6 +244,54 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		ContextInjected: result.ContextInjected,
 		Sources:         sources,
 	}, nil
+}
+
+func selectResumeAgent(ctx context.Context, projectRoot string, summary syncflow.SessionSummary) (adapter.AgentSessions, error) {
+	if summary.Agent != "" {
+		agent, err := adapter.FindInstalled(ctx, summary.Agent)
+		if errors.Is(err, adapter.ErrNotInstalled) {
+			return adapter.AgentSessions{}, fmt.Errorf("resume: %s is not installed", resumeAgentLabel(summary.Agent))
+		}
+		if err != nil {
+			return adapter.AgentSessions{}, fmt.Errorf("resume: inspect %s: %w", resumeAgentLabel(summary.Agent), err)
+		}
+		return agent, nil
+	}
+
+	agents, err := adapter.DiscoverInstalled(ctx, projectRoot)
+	if err != nil {
+		return adapter.AgentSessions{}, fmt.Errorf("resume: discover local agents: %w", err)
+	}
+	for _, agent := range agents {
+		for _, ref := range agent.Sessions {
+			if ref.NativeID == summary.NativeID {
+				return agent, nil
+			}
+		}
+	}
+	for _, agent := range agents {
+		if agent.Layout.Name() == "claude-code" {
+			return agent, nil
+		}
+	}
+	if len(agents) == 1 {
+		return agents[0], nil
+	}
+	if len(agents) == 0 {
+		return adapter.AgentSessions{}, errors.New("resume: no supported coding agent is installed; install Claude Code or Codex CLI")
+	}
+	return adapter.AgentSessions{}, errors.New("resume: remote session does not identify a supported local agent")
+}
+
+func resumeAgentLabel(name string) string {
+	switch name {
+	case "codex":
+		return "Codex"
+	case "claude-code":
+		return "Claude Code"
+	default:
+		return "the required coding agent"
+	}
 }
 
 func chooseResumeCandidate(groups []syncer.ProjectMetadataRef, projectID string, identifierKey []byte, requested string, prompter *resumePrompter) (resumeCandidate, error) {

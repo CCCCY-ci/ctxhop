@@ -23,6 +23,7 @@ type doctorReport struct {
 	Configuration statusConfiguration `json:"configuration"`
 	Backend       doctorCheck         `json:"backend"`
 	Agent         doctorAgent         `json:"agent"`
+	Agents        []doctorAgent       `json:"agents,omitempty"`
 	Project       statusProject       `json:"project"`
 	RecentErrors  doctorRecentErrors  `json:"recentErrors"`
 }
@@ -108,6 +109,7 @@ func collectDoctor(c *config.Config, configDir, projectDir string) (doctorReport
 		Configuration: status.Configuration,
 		Backend:       probeBackend(ctx, c, configDir),
 		Agent:         detectAgent(ctx),
+		Agents:        detectAgents(ctx),
 		Project:       status.Project,
 		RecentErrors:  recentErrors,
 	}, nil
@@ -175,6 +177,48 @@ func buildConfiguredRemote(c *config.Config, configDir string) (remote.Remote, e
 	default:
 		return nil, errors.New("storage backend type is unknown")
 	}
+}
+
+func detectAgents(ctx context.Context) []doctorAgent {
+	layouts, err := adapter.DefaultLayouts()
+	if err != nil {
+		return nil
+	}
+	var results []doctorAgent
+	for _, layout := range layouts {
+		installation, err := layout.Detect(ctx)
+		if errors.Is(err, adapter.ErrNotInstalled) {
+			continue
+		}
+		result := doctorAgent{Name: layout.Name(), Hook: "unsupported"}
+		if err != nil {
+			result.Reason = "the agent installation could not be inspected"
+			results = append(results, result)
+			continue
+		}
+		result.Installed = true
+		result.Version = safeAgentVersion(installation.Version)
+		result.Compatibility = compatibilityName(installation.Compatibility)
+		result.Reason = installation.CompatibilityReason
+		if hookLayout, ok := layout.(adapter.HookInstaller); ok {
+			installed, hookErr := hookLayout.HookInstalled()
+			switch {
+			case hookErr != nil:
+				result.Hook = "error"
+			case installed:
+				result.Hook = "installed"
+			default:
+				result.Hook = "not-installed"
+				if layout.Name() == "codex" {
+					result.Reason = "Codex SessionEnd hook is not installed; run agentsync hook install or use agentsync watch"
+				}
+			}
+		} else if layout.Name() == "codex" {
+			result.Reason = "Codex SessionEnd hook status is unavailable; use agentsync watch"
+		}
+		results = append(results, result)
+	}
+	return results
 }
 
 func detectAgent(ctx context.Context) doctorAgent {
@@ -284,18 +328,24 @@ func writeDoctorText(w io.Writer, report doctorReport) error {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, "agent %s: %s", report.Agent.Name, agentState(report.Agent)); err != nil {
-		return err
+	agents := report.Agents
+	if len(agents) == 0 {
+		agents = []doctorAgent{report.Agent}
 	}
-	if report.Agent.Reason != "" {
-		if _, err := fmt.Fprintf(w, " (%s)", report.Agent.Reason); err != nil {
+	for _, agent := range agents {
+		if _, err := fmt.Fprintf(w, "agent %s: %s", agent.Name, agentState(agent)); err != nil {
+			return err
+		}
+		if agent.Reason != "" {
+			if _, err := fmt.Fprintf(w, " (%s)", agent.Reason); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "project: %s\n", projectIdentity(report.Project)); err != nil {
+	if _, err := fmt.Fprintf(w, "project: %s\\n", projectIdentity(report.Project)); err != nil {
 		return err
 	}
 	if report.Project.Detected {

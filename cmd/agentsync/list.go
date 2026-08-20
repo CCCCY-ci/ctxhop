@@ -33,6 +33,7 @@ type listReport struct {
 
 type listSession struct {
 	RemoteID    string    `json:"remoteId"`
+	Agent       string    `json:"agent,omitempty"`
 	NativeID    string    `json:"nativeId,omitempty"`
 	Title       string    `json:"title"`
 	CreatedAt   time.Time `json:"createdAt,omitempty"`
@@ -172,13 +173,13 @@ func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, pro
 }
 
 func discoverListSessions(projectRoot string) ([]adapter.SessionRef, error) {
-	home, err := adapter.DefaultHome()
+	agents, err := adapter.DiscoverInstalled(context.Background(), projectRoot)
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("list: discover local agents: %w", err)
 	}
-	refs, err := (adapter.Layout{Home: home}).DiscoverSessions(projectRoot)
-	if err != nil {
-		return nil, fmt.Errorf("list: discover local sessions: %w", err)
+	var refs []adapter.SessionRef
+	for _, agent := range agents {
+		refs = append(refs, agent.Sessions...)
 	}
 	return refs, nil
 }
@@ -194,6 +195,7 @@ func mergeListSessions(localDeviceID string, identifierKey []byte, projectID str
 		localByID[sessionID] = ref
 		items[sessionID] = &listSession{
 			RemoteID:  sessionID,
+			Agent:     ref.Agent,
 			NativeID:  ref.NativeID,
 			Title:     safeListText(ref.Title),
 			CreatedAt: ref.CreatedAt,
@@ -215,6 +217,9 @@ func mergeListSessions(localDeviceID string, identifierKey []byte, projectID str
 			summary, err := syncflow.DecodeSessionSummary(device.Metadata.Payload)
 			if err != nil {
 				continue
+			}
+			if item.Agent == "" {
+				item.Agent = summary.Agent
 			}
 			if item.NativeID == "" || (item.NativeID != summary.NativeID && !item.Local) {
 				item.NativeID = summary.NativeID
@@ -302,6 +307,11 @@ func writeListText(w io.Writer, report listReport) error {
 	for _, session := range report.Sessions {
 		if _, err := fmt.Fprintf(w, "- %s", session.Title); err != nil {
 			return err
+		}
+		if session.Agent != "" {
+			if _, err := fmt.Fprintf(w, " agent=%s", safeListText(session.Agent)); err != nil {
+				return err
+			}
 		}
 		if session.NativeID != "" {
 			if _, err := fmt.Fprintf(w, " [%s]", safeListText(session.NativeID)); err != nil {

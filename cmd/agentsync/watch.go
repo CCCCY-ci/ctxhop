@@ -243,19 +243,16 @@ func discoverWatchSnapshot(ctx context.Context, c *config.Config, projectDir str
 		}
 		return watchSnapshot{}, fmt.Errorf("watch: %s", reason)
 	}
-	home, err := adapter.DefaultHome()
+	agents, err := adapter.DiscoverInstalled(ctx, current.Root)
 	if err != nil {
-		return watchSnapshot{}, fmt.Errorf("watch: locate Claude Code: %w", err)
+		return watchSnapshot{}, fmt.Errorf("watch: discover local agents: %w", err)
 	}
-	layout := adapter.Layout{Home: home}
-	if _, err := layout.Detect(ctx); errors.Is(err, adapter.ErrNotInstalled) {
-		return watchSnapshot{}, errors.New("watch: Claude Code is not installed")
-	} else if err != nil {
-		return watchSnapshot{}, fmt.Errorf("watch: inspect Claude Code: %w", err)
+	if len(agents) == 0 {
+		return watchSnapshot{}, errors.New("watch: no supported coding agent is installed; install Claude Code or Codex CLI")
 	}
-	refs, err := layout.DiscoverSessions(current.Root)
-	if err != nil {
-		return watchSnapshot{}, fmt.Errorf("watch: discover local sessions: %w", err)
+	var refs []adapter.SessionRef
+	for _, agent := range agents {
+		refs = append(refs, agent.Sessions...)
 	}
 	return watchSnapshot{signature: watchSessionSignature(refs)}, nil
 }
@@ -288,6 +285,10 @@ func safeWatchError(err error) string {
 		return "push cycle timed out"
 	case strings.Contains(err.Error(), "Claude Code is not installed"):
 		return "Claude Code is not installed"
+	case strings.Contains(err.Error(), "Codex is not installed"):
+		return "Codex is not installed"
+	case strings.Contains(err.Error(), "no supported coding agent"):
+		return "no supported coding agent is installed"
 	case strings.Contains(err.Error(), "stable project identity"):
 		return "the current directory has no stable project identity"
 	default:

@@ -134,6 +134,7 @@ func TestRunWatchOnceReportsSafeMissingAgentError(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("AGENTSYNC_CONFIG_DIR", configDir)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 
 	c := config.New()
 	root, pathErr := filepath.Abs(".")
@@ -155,7 +156,7 @@ func TestRunWatchOnceReportsSafeMissingAgentError(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing Claude installation unexpectedly succeeded")
 	}
-	if !strings.Contains(err.Error(), "Claude Code is not installed") {
+	if !strings.Contains(err.Error(), "no supported coding agent is installed") {
 		t.Fatalf("runWatchWithIO error = %v", err)
 	}
 	if strings.Contains(output.String(), "missing-claude") {
@@ -176,7 +177,7 @@ func TestRunWatchOnceReportsSafeMissingAgentError(t *testing.T) {
 	if started["event"] != "started" || failed["event"] != "error" {
 		t.Fatalf("events = %+v, %+v", started, failed)
 	}
-	if failed["error"] != "Claude Code is not installed" {
+	if failed["error"] != "no supported coding agent is installed" {
 		t.Fatalf("error event = %+v", failed)
 	}
 }

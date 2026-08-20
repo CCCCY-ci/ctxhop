@@ -217,3 +217,29 @@ type ioDiscard struct{}
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 var _ = crypto.Keyfile{}
+
+func TestMaybeInstallCodexHookRegistersSessionEndHook(t *testing.T) {
+	configDir := t.TempDir()
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+
+	c := config.New()
+	c.Remote = config.Remote{Type: "dir", Path: t.TempDir()}
+	var output bytes.Buffer
+	p := &initPrompter{
+		input:  bufio.NewReader(strings.NewReader("y\n")),
+		output: &output,
+	}
+	if err := maybeInstallCodexHook(c, configDir, p, `C:\agentsync\agentsync.exe`); err != nil {
+		t.Fatalf("maybeInstallCodexHook: %v", err)
+	}
+	if !c.Agents["codex"].HookInstalled {
+		t.Fatalf("agents = %+v", c.Agents)
+	}
+	if _, err := os.Stat(filepath.Join(codexHome, "hooks.json")); err != nil {
+		t.Fatalf("hooks.json: %v", err)
+	}
+	if !strings.Contains(output.String(), "restart Codex") || !strings.Contains(output.String(), "/hooks") {
+		t.Fatalf("output = %q", output.String())
+	}
+}

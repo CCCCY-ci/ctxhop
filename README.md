@@ -2,18 +2,18 @@
 
 [简体中文](README.zh-CN.md) | English
 
-AgentSync is a command-line tool for synchronizing Claude Code session history
+AgentSync is a command-line tool for synchronizing Claude Code and Codex CLI session history
 between computers. It encrypts session data locally, stores the encrypted data
 in a local directory or S3-compatible object storage, and restores a selected
 session on another device.
 
 AgentSync syncs session records, not development environments. It does not copy
-project files, uncommitted changes, Claude Code settings, skills, MCP servers,
+project files, uncommitted changes, Claude Code or Codex settings, skills, MCP servers,
 credentials or environment variables. The target device must already have
-Claude Code and the relevant project checkout.
+the relevant agent and project checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
-project binding, device pairing, key rotation and restore safety checks.
+project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks and restore safety checks.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ device B lists and restores it.
 
 ### Before you start
 
-- Claude Code is installed on both devices.
+- Claude Code or Codex CLI is installed on both devices.
 - Both devices have the relevant project checkout.
 - You have an R2 bucket and an R2 S3 API token.
 - The token can list objects and can put, read and delete objects. init uses a
@@ -95,9 +95,20 @@ The first device prints a Recovery Key. Save it offline and confirm by typing
 `saved` when asked. Losing both the encryption password and Recovery Key means
 the encrypted data cannot be recovered.
 
-If Claude Code is detected, init asks whether to install the SessionEnd hook.
+If Claude Code or Codex CLI is detected, init asks whether to install its SessionEnd hook.
 Enter `y` for automatic push after a session ends, or press Enter to skip it.
 Use `--no-hook` for non-interactive setup or when the hook is not wanted.
+
+For Codex, restart Codex after installation, run /hooks, and trust the
+AgentSync hook. If you already ran init, install the hook without
+reinitializing the sync domain:
+
+~~~bash
+./agentsync hook install --agent codex
+~~~
+
+Use --agent claude-code for Claude Code or omit --agent to configure every
+detected supported agent.
 
 ### 3. Bind the project and push
 
@@ -230,7 +241,8 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync help` | Show command usage. |
 | `agentsync version` | Show version, commit, build time and runtime information. |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | Generate shell completion. `pwsh` is an alias for `powershell`. |
-| `agentsync init [--invite FILE or backend options]` | Create or join the encrypted sync domain and write local configuration. Use `--invite` to join from another device; it can install the Claude Code hook. |
+| `agentsync init [--invite FILE or backend options]` | Create or join the encrypted sync domain and write local configuration. Use `--invite` to join from another device; it can install the Claude Code or Codex SessionEnd hook. |
+| `agentsync hook install [--agent all|claude-code|codex]` | Install a supported agent SessionEnd hook for automatic push. Existing hooks are preserved; restart Codex and trust it in /hooks after installation. |
 | `agentsync install [--dir DIR] [--no-path]` | Install the current executable in a user-level command directory; Windows updates the user PATH. |
 | `agentsync status [--json] [--remote]` | Show local status; `--remote` checks remote metadata. |
 | `agentsync doctor [--json]` | Diagnose configuration, backend access, Agent installation, project identity and recent local errors. |

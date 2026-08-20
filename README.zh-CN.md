@@ -2,16 +2,16 @@
 
 [English](README.md) | 简体中文
 
-AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Code 会话历史。
+AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Code 和 Codex CLI 会话历史。
 它会在本地加密会话数据，把加密后的数据保存到本地目录或 S3 兼容对象存储，
 并允许在另一台设备上选择会话进行恢复。
 
 AgentSync 只同步会话记录，不同步开发环境。它不会复制项目文件、未提交的
-修改、Claude Code 配置、skills、MCP 服务、凭据或环境变量。目标设备需要提前
-安装 Claude Code，并准备好对应项目的 checkout。
+修改、Claude Code 或 Codex 配置、skills、MCP 服务、凭据或环境变量。目标设备需要提前
+安装相应的 Agent，并准备好对应项目的 checkout。
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换
-以及恢复安全检查。
+以及 Claude Code、Codex 适配器、SessionEnd Hook 和恢复安全检查。
 
 ## 快速开始
 
@@ -19,7 +19,7 @@ AgentSync 只同步会话记录，不同步开发环境。它不会复制项目�
 
 ### 开始前准备
 
-- 两台设备都已安装 Claude Code；
+- 两台设备都已安装 Claude Code 或 Codex CLI；
 - 两台设备都有对应项目的 checkout；
 - 有一个 R2 bucket 和一个 R2 S3 API Token；
 - Token 可以列出对象，并且可以写入、读取和删除对象。init 会使用临时对象
@@ -89,9 +89,18 @@ init 会提示输入 R2 access key、secret key、可选的 session token，以�
 第一台设备会打印 Recovery Key。请离线保存，并在提示时输入
 `saved` 确认。加密密码和 Recovery Key 都丢失后，加密数据无法恢复。
 
-如果检测到 Claude Code，init 会询问是否安装 SessionEnd Hook。输入
+如果检测到 Claude Code 或 Codex CLI，init 会询问是否安装对应的 SessionEnd Hook。输入
 `y` 可以在会话结束后自动 push，直接回车则跳过。不需要交互时可以使用
 `--no-hook`。
+
+对于 Codex，安装后请重启 Codex，执行 /hooks，并信任 AgentSync Hook。
+如果已经执行过 init，不需要重新初始化同步域，可以直接安装：
+
+~~~bash
+./agentsync hook install --agent codex
+~~~
+
+Claude Code 使用 --agent claude-code；不传 --agent 会配置检测到的所有支持的 Agent。
 
 ### 3. 绑定项目并上传
 
@@ -212,7 +221,8 @@ cd /path/to/another/project
 | `agentsync help` | 显示命令用法。 |
 | `agentsync version` | 显示版本、commit、构建时间和运行时信息。 |
 | `agentsync completion bash, zsh, fish, powershell, pwsh` | 生成 Shell 补全；`pwsh` 是 `powershell` 的别名。 |
-| `agentsync init [--invite FILE or backend options]` | 创建或加入加密同步域并写入本地配置；使用 `--invite` 加入已有设备的同步域，可选安装 Claude Code Hook。 |
+| `agentsync init [--invite FILE or backend options]` | 创建或加入加密同步域并写入本地配置；使用 `--invite` 加入已有设备的同步域，可选安装 Claude Code 或 Codex SessionEnd Hook。 |
+| `agentsync hook install [--agent all|claude-code|codex]` | 安装支持的 Agent SessionEnd Hook，用于会话结束后自动 push。会保留已有 Hook；Codex 安装后需要重启并在 /hooks 中信任。 |
 | `agentsync install [--dir DIR] [--no-path]` | 把当前二进制安装到用户级命令目录；Windows 会更新用户级 PATH。 |
 | `agentsync status [--json] [--remote]` | 显示本地状态；`--remote` 会检查远端元数据。 |
 | `agentsync doctor [--json]` | 检查配置、后端访问、Agent 安装、项目身份和最近的本地错误。 |

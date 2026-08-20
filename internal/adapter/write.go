@@ -60,7 +60,7 @@ func (l Layout) WriteSession(projectRoot, sessionID string, records [][]byte) er
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("check existing session: %w", err)
 	}
-	return l.writeSession(path, records)
+	return writeSessionAt(path, records)
 }
 
 // ReplaceSession installs a session over any existing one. The caller is
@@ -70,14 +70,14 @@ func (l Layout) ReplaceSession(projectRoot, sessionID string, records [][]byte) 
 	if err := checkSessionID(sessionID); err != nil {
 		return err
 	}
-	return l.writeSession(l.SessionFile(projectRoot, sessionID), records)
+	return writeSessionAt(l.SessionFile(projectRoot, sessionID), records)
 }
 
 // writeSession writes records to path atomically.
 //
 // Everything is validated before anything is created, so a rejected write
 // leaves the filesystem exactly as it was.
-func (l Layout) writeSession(path string, records [][]byte) error {
+func writeSessionAt(path string, records [][]byte) error {
 	if len(records) == 0 {
 		return errors.New("adapter: refusing to write a session with no records")
 	}

@@ -71,6 +71,10 @@ type Installation struct {
 // Discovery is deliberately cheap: listing sessions must not require reading or
 // decrypting session bodies.
 type SessionRef struct {
+	// Agent is the stable adapter name that owns this session, for example
+	// "claude-code" or "codex". It is empty in legacy local/test values.
+	Agent string
+
 	// NativeID is the agent's own identifier for this session.
 	NativeID string
 
@@ -90,6 +94,10 @@ type SessionRef struct {
 
 	// Size is the on-disk size of the session in bytes.
 	Size int64
+
+	// localPath is populated only by local discovery. It is intentionally
+	// private so machine-specific paths cannot cross the metadata boundary.
+	localPath string
 }
 
 // Adapter is the contract every supported agent implementation satisfies.
@@ -149,6 +157,33 @@ type Adapter interface {
 	TouchedFiles(ctx context.Context, session []byte) ([]string, error)
 }
 
+// SessionLayout is the command-facing contract for an installed coding agent.
+//
+// The syncflow package only needs a small set of operations: discover local
+// sessions, read one complete snapshot, and install a localised snapshot.
+// Keeping this separate from Adapter preserves the richer compatibility
+// contract above while allowing the CLI to support more than one agent without
+// coupling it to a particular on-disk layout.
+type SessionLayout interface {
+	Name() string
+	Detect(context.Context) (Installation, error)
+	DiscoverSessions(projectRoot string) ([]SessionRef, error)
+	ReadSession(SessionRef) (SessionData, error)
+	WriteSession(projectRoot, sessionID string, records [][]byte) error
+	ReplaceSession(projectRoot, sessionID string, records [][]byte) error
+	TouchedFiles(records [][]byte, projectRoot string) []FileAccess
+}
+
+// AgentSessions pairs an installed agent with the sessions it owns for one
+// project. Sessions from different agents remain separate at this boundary;
+// the remote summary carries the agent name so resume can select the same
+// layout on another device.
+type AgentSessions struct {
+	Layout       SessionLayout
+	Installation Installation
+	Sessions     []SessionRef
+}
+
 // ProjectPaths pairs a project's root directory with the identity the agent
 // uses to refer to it, so Rewrite can map one machine's view onto another's.
 type ProjectPaths struct {
@@ -165,16 +200,16 @@ type ProjectPaths struct {
 //
 // Where available, a hook is preferred over filesystem watching: it fires at a
 // well-defined moment, needs no resident process, and the user can remove it to
-// uninstall AgentSync completely (§8.5, §4 P5).
+// uninstall AgentSync completely (spec §8.5, §4 P5).
 type HookInstaller interface {
 	// InstallHook registers a hook that runs `agentsync push` when a session
 	// ends. It must be idempotent and must not disturb hooks installed by
 	// anyone else.
-	InstallHook(ctx context.Context, executable string) error
+	InstallHook(executable string) error
 
 	// RemoveHook removes only the hook this tool installed.
-	RemoveHook(ctx context.Context) error
+	RemoveHook() error
 
 	// HookInstalled reports whether our hook is currently registered.
-	HookInstalled(ctx context.Context) (bool, error)
+	HookInstalled() (bool, error)
 }

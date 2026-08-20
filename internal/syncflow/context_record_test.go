@@ -82,3 +82,22 @@ func TestApplyRestoreInjectsWorkspaceContextAfterExplicitDivergenceConsent(t *te
 		t.Fatalf("written records = %q", writer.records)
 	}
 }
+func TestCodexWorkspaceContextRecordUsesEventMessageShape(t *testing.T) {
+	record, err := codexWorkspaceContextRecordFor(project.Report{
+		Verdict: project.Explainable,
+		Files:   []project.FileReport{{Path: "main.go", Note: "modified"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded codexWorkspaceContextRecord
+	if err := json.Unmarshal(record, &decoded); err != nil {
+		t.Fatalf("decode Codex marker: %v", err)
+	}
+	if decoded.Type != "event_msg" || decoded.Payload.Type != "user_message" || decoded.Payload.AgentSync.Kind != workspaceContextKind {
+		t.Fatalf("decoded marker = %+v", decoded)
+	}
+	if !bytes.Contains([]byte(decoded.Payload.Message), []byte("main.go: modified")) || !isWorkspaceContextRecord(record) {
+		t.Fatalf("decoded marker content = %q", decoded.Payload.Message)
+	}
+}

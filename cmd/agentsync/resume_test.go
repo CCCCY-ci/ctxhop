@@ -18,6 +18,25 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
 
+func TestSelectResumeAgentUsesRemoteCodexMetadata(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+
+	agent, err := selectResumeAgent(context.Background(), t.TempDir(), syncflow.SessionSummary{
+		Agent:    "codex",
+		NativeID: "codex-session",
+	})
+	if err != nil {
+		t.Fatalf("selectResumeAgent: %v", err)
+	}
+	if agent.Layout == nil || agent.Layout.Name() != "codex" {
+		t.Fatalf("selected agent = %+v", agent.Layout)
+	}
+}
 func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 	projectRoot := t.TempDir()
 	runResumeGit(t, projectRoot, "init", "-q")

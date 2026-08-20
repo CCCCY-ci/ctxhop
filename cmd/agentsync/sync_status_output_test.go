@@ -16,7 +16,7 @@ func TestWritePushSummaryReportsNoLocalSessions(t *testing.T) {
 	if !strings.Contains(text, "pushed: 0, failed: 0, skipped: 0") {
 		t.Fatalf("summary = %q", text)
 	}
-	if !strings.Contains(text, "no local Claude Code sessions found for this project") {
+	if !strings.Contains(text, "no local sessions found for this project") {
 		t.Fatalf("summary = %q", text)
 	}
 }

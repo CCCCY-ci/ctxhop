@@ -68,6 +68,9 @@ type RestoreApplyOptions struct {
 	// enables a non-consistent workspace explanation. The marker is filtered from
 	// future remote pushes.
 	InjectWorkspaceContext bool
+	// Agent selects the local record shape for the explanation. Empty keeps the
+	// historical Claude Code record for existing callers.
+	Agent string
 }
 
 // RestoreApplyResult reports the workspace decision and whether an existing
@@ -132,7 +135,7 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 
 	localized := plan.LocalizedRecords
 	if options.InjectWorkspaceContext && report.Verdict != project.Consistent {
-		contextRecord, err := workspaceContextRecordFor(report)
+		contextRecord, err := workspaceContextRecordForAgent(options.Agent, report)
 		if err != nil {
 			return result, fmt.Errorf("%w: %v", ErrWorkspaceContextInjection, err)
 		}

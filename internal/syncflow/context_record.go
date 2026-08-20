@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/CCCCY-ci/agentsync/internal/project"
@@ -36,6 +37,17 @@ type workspaceContextMarker struct {
 }
 
 func workspaceContextRecordFor(report project.Report) ([]byte, error) {
+	return workspaceContextRecordForAgent("", report)
+}
+
+func workspaceContextRecordForAgent(agent string, report project.Report) ([]byte, error) {
+	if agent == "codex" {
+		return codexWorkspaceContextRecordFor(report)
+	}
+	return workspaceContextRecordForClaude(report)
+}
+
+func workspaceContextRecordForClaude(report project.Report) ([]byte, error) {
 	if report.Verdict == project.Consistent {
 		return nil, nil
 	}
@@ -96,19 +108,59 @@ func workspaceContextRecordFor(report project.Report) ([]byte, error) {
 	return data, nil
 }
 
+func codexWorkspaceContextRecordFor(report project.Report) ([]byte, error) {
+	claude, err := workspaceContextRecordForClaude(report)
+	if err != nil || claude == nil {
+		return claude, err
+	}
+	var source struct {
+		Message workspaceContextMessage `json:"message"`
+	}
+	if err := json.Unmarshal(claude, &source); err != nil {
+		return nil, fmt.Errorf("decode workspace context: %w", err)
+	}
+	record := codexWorkspaceContextRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Type:      "event_msg",
+		Payload: codexWorkspaceContextPayload{
+			Type:      "user_message",
+			Message:   source.Message.Content,
+			AgentSync: workspaceContextMarker{Kind: workspaceContextKind, Version: workspaceContextVersion},
+		},
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("encode Codex workspace context: %w", err)
+	}
+	return data, nil
+}
+
+type codexWorkspaceContextRecord struct {
+	Timestamp string                       `json:"timestamp"`
+	Type      string                       `json:"type"`
+	Payload   codexWorkspaceContextPayload `json:"payload"`
+}
+
+type codexWorkspaceContextPayload struct {
+	Type      string                 `json:"type"`
+	Message   string                 `json:"message"`
+	AgentSync workspaceContextMarker `json:"agentsync"`
+}
+
 func isWorkspaceContextRecord(raw []byte) bool {
 	var record struct {
-		Type      string                 `json:"type"`
-		IsMeta    bool                   `json:"isMeta"`
-		AgentSync workspaceContextMarker `json:"agentsync"`
+		Type      string                       `json:"type"`
+		IsMeta    bool                         `json:"isMeta"`
+		AgentSync workspaceContextMarker       `json:"agentsync"`
+		Payload   codexWorkspaceContextPayload `json:"payload"`
 	}
 	if err := json.Unmarshal(raw, &record); err != nil {
 		return false
 	}
-	return record.Type == "user" &&
-		record.IsMeta &&
-		record.AgentSync.Kind == workspaceContextKind &&
-		record.AgentSync.Version == workspaceContextVersion
+	if record.Type == "user" && record.IsMeta && record.AgentSync.Kind == workspaceContextKind && record.AgentSync.Version == workspaceContextVersion {
+		return true
+	}
+	return record.Type == "event_msg" && record.Payload.Type == "user_message" && record.Payload.AgentSync.Kind == workspaceContextKind && record.Payload.AgentSync.Version == workspaceContextVersion
 }
 
 func contextText(value string, max int) string {

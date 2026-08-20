@@ -45,6 +45,7 @@ var commands = []command{
 	{name: "stats", summary: "show local cross-device restore statistics"},
 	{name: "push", summary: "push local session changes to the remote"},
 	{name: "watch", summary: "watch local sessions and push changes"},
+	{name: "hook", summary: "install Agent session lifecycle hooks"},
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
 	{name: "device", summary: "inspect or change local device settings"},
 	{name: "remote", summary: "delete scoped or all remote data"},

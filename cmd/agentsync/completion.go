@@ -13,18 +13,21 @@ var completionSubcommands = map[string][]string{
 	"completion": {"bash", "zsh", "fish", "powershell", "pwsh"},
 	"device":     {"status", "mode", "list", "rename", "remove", "rotate-key", "invite"},
 	"history":    {"cleanup", "prune"},
+	"hook":       {"install"},
 	"passphrase": {"change", "reset"},
 	"project":    {"bind", "unbind", "mode", "list", "discover"},
 	"remote":     {"delete-session", "delete-project", "delete-all"},
 }
 
 var completionValues = map[string][]string{
-	"device":  {"normal", "push-only", "disabled"},
-	"project": {"normal", "push-only", "excluded"},
+	"device":       {"normal", "push-only", "disabled"},
+	"project":      {"normal", "push-only", "excluded"},
+	"hook install": {"all", "claude-code", "codex"},
 }
 
 var completionOptions = map[string][]string{
 	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--path-style", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint", "--invite"},
+	"hook install":          {"--agent"},
 	"install":               {"--dir", "--no-path"},
 	"status":                {"--json", "--remote"},
 	"list":                  {"--json"},

@@ -37,17 +37,18 @@ type PathSpace struct {
 // PoC-1 found `file_path` holding paths under the agent's own directory, not
 // just under the project.
 var pathValueFields = map[string]bool{
-	"cwd":           true,
-	"file_path":     true,
-	"filePath":      true,
-	"fileName":      true,
-	"fileNames":     true,
-	"filename":      true,
-	"filenames":     true,
-	"planFilePath":  true,
-	"path":          true,
-	"trackingPath":  true,
-	"realParentDir": true,
+	"cwd":             true,
+	"workspace_roots": true,
+	"file_path":       true,
+	"filePath":        true,
+	"fileName":        true,
+	"fileNames":       true,
+	"filename":        true,
+	"filenames":       true,
+	"planFilePath":    true,
+	"path":            true,
+	"trackingPath":    true,
+	"realParentDir":   true,
 }
 
 // pathValuePaths contains exact nested paths whose leaf name is too generic
@@ -56,6 +57,17 @@ var pathValueFields = map[string]bool{
 // conversation text and is deliberately not included here.
 var pathValuePaths = map[string]bool{
 	"message.content.content": true,
+}
+
+// embeddedJSONPaths are Codex tool argument fields. Their values are JSON
+// strings rather than objects, so normal structural traversal cannot see the
+// nested file_path/path fields. Invalid JSON is left untouched because it may
+// be an ordinary command or user-provided text.
+var embeddedJSONPaths = map[string]bool{
+	"payload.arguments":      true,
+	"payload.input":          true,
+	"payload.item.arguments": true,
+	"payload.item.input":     true,
 }
 
 // pathKeyedContainers are objects whose *keys* are absolute paths. Rewriting
@@ -155,6 +167,11 @@ func (c *Canonicalizer) key(parentPath, k string) string {
 // rewritten. This structural fallback is what keeps ordinary Claude Code
 // minor releases from requiring a new field-specific adapter release.
 func (c *Canonicalizer) text(path, s string) string {
+	if embeddedJSONPaths[path] {
+		if rewritten, ok := c.rewriteEmbeddedJSON(path, s); ok {
+			return rewritten
+		}
+	}
 	if isPathValuePath(path) {
 		if out, ok := c.tokenize(s); ok {
 			return out
@@ -171,6 +188,19 @@ func (c *Canonicalizer) text(path, s string) string {
 		}
 	}
 	return s
+}
+
+func (c *Canonicalizer) rewriteEmbeddedJSON(path, value string) (string, bool) {
+	decoded, err := decode([]byte(value))
+	if err != nil {
+		return value, false
+	}
+	rewritten := c.walk(path+".<json>", decoded)
+	encoded, err := encode(rewritten)
+	if err != nil {
+		return value, false
+	}
+	return string(encoded), true
 }
 
 func isPathValuePath(path string) bool {
@@ -366,6 +396,13 @@ func (l *localizer) walk(path string, v any) (any, error) {
 // our marker - and refusing there would make any session that discusses
 // AgentSync itself impossible to restore.
 func (l *localizer) text(field, s string, tokenized bool) (string, error) {
+	if embeddedJSONPaths[field] {
+		if rewritten, ok, err := l.rewriteEmbeddedJSON(field, s); err != nil {
+			return "", err
+		} else if ok {
+			return rewritten, nil
+		}
+	}
 	if !tokenized {
 		return s, nil
 	}
@@ -400,6 +437,22 @@ func (l *localizer) text(field, s string, tokenized bool) (string, error) {
 		return tok.root + strings.ReplaceAll(rest, "/", separatorFor(tok.root)), nil
 	}
 	return s, nil
+}
+
+func (l *localizer) rewriteEmbeddedJSON(path, value string) (string, bool, error) {
+	decoded, err := decode([]byte(value))
+	if err != nil {
+		return value, false, nil
+	}
+	rewritten, err := l.walk(path+".<json>", decoded)
+	if err != nil {
+		return "", false, err
+	}
+	encoded, err := encode(rewritten)
+	if err != nil {
+		return "", false, err
+	}
+	return string(encoded), true, nil
 }
 
 // samePathPrefix compares two path fragments of equal length under the

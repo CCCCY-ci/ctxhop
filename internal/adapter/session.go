@@ -129,6 +129,21 @@ type Layout struct {
 	version func(context.Context) string
 }
 
+// Name identifies the Claude Code adapter in configuration and metadata.
+func (l Layout) Name() string {
+	return "claude-code"
+}
+
+// ReadSession reads the local file identified by ref.
+func (l Layout) ReadSession(ref SessionRef) (SessionData, error) {
+	return ReadSessionFile(l.SessionFile(ref.ProjectPath, ref.NativeID))
+}
+
+// TouchedFiles extracts Claude Code tool accesses from one session.
+func (l Layout) TouchedFiles(records [][]byte, projectRoot string) []FileAccess {
+	return TouchedFiles(records, projectRoot)
+}
+
 // ProjectsDir is where per-project session directories live.
 func (l Layout) ProjectsDir() string {
 	return filepath.Join(l.Home, "projects")
@@ -429,6 +444,7 @@ func (l Layout) describe(dir, name, projectRoot string) (SessionRef, bool) {
 	}
 
 	return SessionRef{
+		Agent:       l.Name(),
 		NativeID:    strings.TrimSuffix(name, ".jsonl"),
 		ProjectPath: projectRoot,
 		Title:       s.Title(projectRoot, info.ModTime()),
