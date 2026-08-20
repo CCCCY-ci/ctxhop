@@ -43,6 +43,7 @@ type listSession struct {
 	Sources      []string                `json:"sources"`
 	RecordCount  uint64                  `json:"recordCount,omitempty"`
 	Dependencies []environment.Reference `json:"dependencies,omitempty"`
+	Components   []environment.Component `json:"components,omitempty"`
 }
 
 func init() {
@@ -233,8 +234,9 @@ func mergeListSessions(localDeviceID string, identifierKey []byte, projectID str
 				item.CreatedAt = summary.CreatedAt
 			}
 			isNewerSummary := summary.UpdatedAt.After(item.UpdatedAt)
-			if isNewerSummary || len(item.Dependencies) == 0 {
+			if isNewerSummary || (len(item.Dependencies) == 0 && len(item.Components) == 0) {
 				item.Dependencies = append([]environment.Reference(nil), device.Environment...)
+				item.Components = append([]environment.Component(nil), device.EnvironmentComponents...)
 			}
 			if isNewerSummary {
 				item.UpdatedAt = summary.UpdatedAt

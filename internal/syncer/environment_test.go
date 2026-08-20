@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"reflect"
 	"testing"
@@ -43,6 +44,39 @@ func TestEnvironmentMetadataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEnvironmentMetadataComponentRoundTripKeepsLegacyReferencesSeparate(t *testing.T) {
+	component, err := environment.NewComponentContent(
+		"skill",
+		"coding-guidelines",
+		"global",
+		"",
+		"portable",
+		"text/markdown",
+		[]byte("# Coding guidelines\n"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := []environment.Reference{{Kind: "skill", Name: "coding-guidelines", Portability: "portable"}}
+	metadata, err := NewEnvironmentMetadataWithComponents(references, []environment.ComponentContent{component})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := metadata.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseEnvironmentMetadata(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Components) != 1 || string(parsed.Components[0].Content) != "# Coding guidelines\n" {
+		t.Fatalf("components = %#v", parsed.Components)
+	}
+	if !bytes.Contains(payload, []byte("{\"version\":2")) {
+		t.Fatalf("payload = %s, want component envelope version 2", payload)
+	}
+}
 func TestFetchMetadataReadsOptionalEnvironmentObject(t *testing.T) {
 	store, err := remote.NewDir(t.TempDir())
 	if err != nil {

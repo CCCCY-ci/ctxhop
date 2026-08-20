@@ -106,12 +106,14 @@ func FetchProjectMetadataWithIdentitiesAndDevices(ctx context.Context, store rem
 				return nil, fmt.Errorf("syncer: open project metadata: %w", err)
 			}
 			environmentReferences := []environment.Reference(nil)
-			if references, environmentErr := readEnvironmentReferences(ctx, store, devices[deviceID], identities); environmentErr == nil {
-				environmentReferences = references
+			environmentComponents := []environment.Component(nil)
+			if environmentMetadata, environmentErr := readEnvironmentMetadata(ctx, store, devices[deviceID], identities); environmentErr == nil {
+				environmentReferences = environmentMetadata.References
+				environmentComponents = environment.ComponentSummaries(environmentMetadata.Components)
 			} else if contextErr := ctx.Err(); contextErr != nil {
 				return nil, fmt.Errorf("syncer: read project environment metadata: %w", contextErr)
 			}
-			metadata = append(metadata, MetadataRef{DeviceID: deviceID, Metadata: opened, Environment: environmentReferences})
+			metadata = append(metadata, MetadataRef{DeviceID: deviceID, Metadata: opened, Environment: environmentReferences, EnvironmentComponents: environmentComponents})
 		}
 		if len(metadata) != 0 {
 			out = append(out, ProjectMetadataRef{SessionID: sessionID, Devices: metadata})

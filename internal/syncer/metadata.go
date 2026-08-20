@@ -211,9 +211,10 @@ func PutMetadata(ctx context.Context, store remote.Remote, recipient *ecdh.Publi
 
 // MetadataRef is one validated metadata object associated with a device.
 type MetadataRef struct {
-	DeviceID    string
-	Metadata    Metadata
-	Environment []environment.Reference
+	DeviceID              string
+	Metadata              Metadata
+	Environment           []environment.Reference
+	EnvironmentComponents []environment.Component
 }
 
 // FetchMetadata lists, reads, decrypts, and validates every device metadata
@@ -285,12 +286,14 @@ func FetchMetadataWithIdentitiesAndDevices(ctx context.Context, store remote.Rem
 			return nil, fmt.Errorf("syncer: open remote metadata: %w", err)
 		}
 		environmentReferences := []environment.Reference(nil)
-		if references, environmentErr := readEnvironmentReferences(ctx, store, key, identities); environmentErr == nil {
-			environmentReferences = references
+		environmentComponents := []environment.Component(nil)
+		if environmentMetadata, environmentErr := readEnvironmentMetadata(ctx, store, key, identities); environmentErr == nil {
+			environmentReferences = environmentMetadata.References
+			environmentComponents = environment.ComponentSummaries(environmentMetadata.Components)
 		} else if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("syncer: read remote environment metadata: %w", contextErr)
 		}
-		out = append(out, MetadataRef{DeviceID: device, Metadata: metadata, Environment: environmentReferences})
+		out = append(out, MetadataRef{DeviceID: device, Metadata: metadata, Environment: environmentReferences, EnvironmentComponents: environmentComponents})
 	}
 	if len(out) == 0 {
 		return nil, ErrNoRemoteMetadata

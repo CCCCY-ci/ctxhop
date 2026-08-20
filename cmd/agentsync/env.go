@@ -29,6 +29,7 @@ type environmentPreviewReport struct {
 	Agent        string                  `json:"agent,omitempty"`
 	NativeID     string                  `json:"nativeId,omitempty"`
 	Dependencies []environment.Reference `json:"dependencies,omitempty"`
+	Components   []environment.Component `json:"components,omitempty"`
 	Status       string                  `json:"status"`
 	Notes        []string                `json:"notes"`
 }
@@ -88,10 +89,11 @@ func runEnvironmentWithStreams(args []string, input io.Reader, output, prompt io
 		Agent:        session.Agent,
 		NativeID:     session.NativeID,
 		Dependencies: append([]environment.Reference(nil), session.Dependencies...),
+		Components:   append([]environment.Component(nil), session.Components...),
 		Status:       "observed-only",
 		Notes: []string{
-			"only structured dependencies recorded in the encrypted env manifest are shown",
-			"environment component content is not synchronized yet; no local files or commands were changed",
+			"only structured dependencies and filtered component summaries recorded in the encrypted env manifest are shown",
+			"component bodies are not applied; no local files or commands were changed",
 		},
 	}
 	if len(report.Dependencies) == 0 {
@@ -180,6 +182,20 @@ func writeEnvironmentPreviewText(w io.Writer, report environmentPreviewReport) e
 			safeListText(dependency.Name),
 			safeListText(dependency.Portability),
 			version,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "components: %d\n", len(report.Components)); err != nil {
+		return err
+	}
+	for _, component := range report.Components {
+		if _, err := fmt.Fprintf(w, "- component kind=%s name=%s scope=%s size=%d fingerprint=%s\n",
+			safeListText(component.Kind),
+			safeListText(component.Name),
+			safeListText(component.Scope),
+			component.Size,
+			safeListText(component.Fingerprint),
 		); err != nil {
 			return err
 		}

@@ -346,7 +346,8 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 			agentName = layout.Name()
 		}
 		dependencies := environment.Discover(data.Records, agentName, installation.Version)
-		if err := syncer.PutEnvironmentReferences(ctx, store, public, objectLayout, dependencies); err != nil {
+		components := environment.CaptureSkillComponents(agentName, installation.DataDir, projectRoot, projectID, dependencies)
+		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, dependencies, components); err != nil {
 			summary.fail("environment-record", err)
 			continue
 		}

@@ -87,17 +87,22 @@ func TestMergeListSessionsCarriesEnvironmentReferences(t *testing.T) {
 	references := []environment.Reference{
 		{Kind: "tool-requirement", Name: "codex", Version: "0.148.0", Portability: "platform-specific"},
 	}
+	component, err := environment.NewComponentContent("skill", "coding-guidelines", "global", "", "portable", "text/markdown", []byte("# guidelines\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	report := mergeListSessions("local-device", make([]byte, 32), "projectone", nil, []syncer.ProjectMetadataRef{
 		{
 			SessionID: "remote-env",
 			Devices: []syncer.MetadataRef{{
-				DeviceID:    "foreign-device",
-				Metadata:    mustListMetadata(t, payload),
-				Environment: references,
+				DeviceID:              "foreign-device",
+				Metadata:              mustListMetadata(t, payload),
+				Environment:           references,
+				EnvironmentComponents: []environment.Component{component.Component},
 			}},
 		},
 	})
-	if len(report.Sessions) != 1 || len(report.Sessions[0].Dependencies) != 1 {
+	if len(report.Sessions) != 1 || len(report.Sessions[0].Dependencies) != 1 || len(report.Sessions[0].Components) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
 	if report.Sessions[0].Dependencies[0] != references[0] {
