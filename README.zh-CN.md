@@ -8,8 +8,9 @@ AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Co
 
 AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工具依赖时，
 保存一份很小的加密依赖清单。对于 session 结构化引用到的 Codex skill，如果本地存在
-经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传。它不会复制项目文件、
-未提交的修改、完整 skills 目录、配置正文、MCP 配置、凭据或环境变量的实际值。
+经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传；对于实际调用到的
+Codex MCP server，只保留命令 basename、安全参数和启动超时这类非敏感意图。它不会复制
+项目文件、未提交的修改、完整 skills 目录、配置正文、原始 MCP TOML、凭据或环境变量的实际值。
 目标设备仍需要提前安装相应的 Agent，并准备好对应项目的 checkout。
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
@@ -307,9 +308,9 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
 - 每台设备都有独立的 device ID 和远端分支。
 - `push` 写入当前设备的分支，不会把该分支再拉回本机。
 - `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
-- 不同步项目文件、未提交的 Git 修改、分支、完整配置正文、MCP 服务、插件、凭据和环境内容。
-  session 只有在结构化观察到 Codex skill 时，才可能带上一份过滤后的非敏感 `SKILL.md`；
-  `env preview` 只显示摘要，不会自动恢复或运行组件文件。
+- 不同步项目文件、未提交的 Git 修改、分支、完整配置正文、原始 MCP 配置、插件、凭据和环境内容。
+  session 只有在结构化观察到 Codex skill 或 MCP 调用时，才可能带上过滤后的 Skill 正文或
+  MCP 非敏感意图；`env preview` 只显示摘要，不会自动恢复或运行组件文件。
 - 目标设备必须提前准备好 Claude Code 和项目。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 touched 文件回退检查。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复

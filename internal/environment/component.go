@@ -84,7 +84,7 @@ func NewComponentContent(kind, name, scope, projectID, portability, format strin
 }
 
 func (c Component) Validate() error {
-	if c.Kind != "skill" || !validName(c.Name) {
+	if !supportedComponentKind(c.Kind) || !validName(c.Name) {
 		return ErrInvalidComponent
 	}
 	if c.Scope != "global" && c.Scope != "project" {
@@ -99,7 +99,16 @@ func (c Component) Validate() error {
 	if c.Portability != "portable" && c.Portability != "platform-specific" && c.Portability != "unsupported" {
 		return ErrInvalidComponent
 	}
-	if c.Format != "text/markdown" {
+	switch c.Kind {
+	case "skill":
+		if c.Format != "text/markdown" {
+			return ErrInvalidComponent
+		}
+	case "mcp":
+		if c.Format != "application/json" {
+			return ErrInvalidComponent
+		}
+	default:
 		return ErrInvalidComponent
 	}
 	if c.Size <= 0 || c.Size > MaxComponentContentBytes {
@@ -336,6 +345,9 @@ func pathWithin(root, target string) bool {
 	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+func supportedComponentKind(kind string) bool {
+	return kind == "skill" || kind == "mcp"
+}
 func sameComponent(left, right Component) bool {
 	return left.Kind == right.Kind && left.Name == right.Name && left.Scope == right.Scope && left.ProjectID == right.ProjectID && left.Fingerprint == right.Fingerprint
 }

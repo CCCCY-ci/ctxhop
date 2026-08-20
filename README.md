@@ -10,9 +10,11 @@ session on another device.
 AgentSync syncs session records and a small encrypted manifest of structured
 agent/tool dependencies observed in those sessions. For a Codex skill actually
 referenced by a session, it may also include a filtered, non-sensitive `SKILL.md`
-body. It does not copy project files, uncommitted changes, full skill directories,
-settings, MCP configuration, credentials or environment variable values. The target
-device must already have the relevant agent and project checkout.
+body. For an observed Codex MCP server, it may include an allowlisted non-secret intent
+record with a command basename, safe arguments and startup timeout. It does not copy
+project files, uncommitted changes, full skill directories, settings, raw MCP configuration,
+credentials or environment variable values. The target device must already have the relevant
+agent and project checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
@@ -332,10 +334,11 @@ Environment credentials are not written to disk.
 - `push` writes the current device's branch; it does not pull that branch back.
 - `pull --check` reads metadata. `resume` is the explicit body download and
   restore operation.
-- Project files, uncommitted Git changes, branches, full settings, MCP servers, plugins,
-  credentials and environment contents are not synchronized. A session may carry a
-  filtered, non-sensitive Codex `SKILL.md` only when that skill was structurally observed;
-  `env preview` shows its summary, but no component file is restored or run automatically.
+- Project files, uncommitted Git changes, branches, full settings, raw MCP configuration,
+  plugins, credentials and environment contents are not synchronized. A session may carry
+  filtered, non-sensitive Codex `SKILL.md` content and an allowlisted MCP intent only
+  when they were structurally observed; `env preview` shows summaries, but no component
+  file is restored or run automatically.
 - The target device must already have Claude Code and the project prepared.
 - Git projects provide stronger workspace checks. No-Git projects use a
   touched-file fallback.

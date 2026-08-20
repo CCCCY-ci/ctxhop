@@ -62,14 +62,12 @@ func (m EnvironmentMetadata) Validate() error {
 	if len(m.References) > environment.MaxReferences {
 		return fmt.Errorf("%w: too many references", ErrInvalidEnvironmentMetadata)
 	}
-	observedSkills := make(map[string]struct{})
+	observedReferences := make(map[string]struct{})
 	for _, reference := range m.References {
 		if err := reference.Validate(); err != nil {
 			return fmt.Errorf("%w: dependency: %v", ErrInvalidEnvironmentMetadata, err)
 		}
-		if reference.Kind == "skill" {
-			observedSkills[reference.Name] = struct{}{}
-		}
+		observedReferences[reference.Kind+"\x00"+reference.Name] = struct{}{}
 	}
 	if len(m.Components) > environment.MaxComponents {
 		return fmt.Errorf("%w: too many components", ErrInvalidEnvironmentMetadata)
@@ -80,10 +78,9 @@ func (m EnvironmentMetadata) Validate() error {
 		if err := component.Validate(); err != nil {
 			return fmt.Errorf("%w: component: %v", ErrInvalidEnvironmentMetadata, err)
 		}
-		if component.Component.Kind == "skill" {
-			if _, observed := observedSkills[component.Component.Name]; !observed {
-				return fmt.Errorf("%w: component is not referenced by this session", ErrInvalidEnvironmentMetadata)
-			}
+		componentReference := component.Component.Kind + "\x00" + component.Component.Name
+		if _, observed := observedReferences[componentReference]; !observed {
+			return fmt.Errorf("%w: component is not referenced by this session", ErrInvalidEnvironmentMetadata)
 		}
 		key := component.Component.Kind + "\x00" + component.Component.Name + "\x00" + component.Component.Scope + "\x00" + component.Component.ProjectID
 		if previous, exists := seen[key]; exists {
