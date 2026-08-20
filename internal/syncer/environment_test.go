@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"reflect"
 	"testing"
 
@@ -132,5 +133,50 @@ func TestObjectLayoutEnvironmentKeyIsSeparateFromSessionMetadata(t *testing.T) {
 	}
 	if metadataKey == environmentKey || environmentKey[len(environmentKey)-4:] != "/env" {
 		t.Fatalf("metadata key = %q, environment key = %q", metadataKey, environmentKey)
+	}
+}
+
+func TestReadEnvironmentManifestReadsComponentBodiesFromDeviceBranch(t *testing.T) {
+	store, err := remote.NewDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataKey := crypto.NewDataKey()
+	defer dataKey.Close()
+	public, err := dataKey.IdentityPublic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := dataKey.IdentityPrivate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewObjectLayout("projectone", "sessionone", "deviceone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	component, err := environment.NewComponentContent(
+		"skill",
+		"coding-guidelines",
+		"global",
+		"",
+		"portable",
+		"text/markdown",
+		[]byte("# Coding guidelines\n"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := []environment.Reference{{Kind: "skill", Name: "coding-guidelines", Portability: "portable"}}
+	ctx := context.Background()
+	if err := PutEnvironmentManifest(ctx, store, public, layout, references, []environment.ComponentContent{component}); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := ReadEnvironmentManifest(ctx, store, layout, []*ecdh.PrivateKey{identity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opened.Components) != 1 || string(opened.Components[0].Content) != "# Coding guidelines\n" {
+		t.Fatalf("components = %#v", opened.Components)
 	}
 }

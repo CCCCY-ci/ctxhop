@@ -21,17 +21,19 @@ type envOptions struct {
 	action  string
 	session string
 	json    bool
+	yes     bool
 }
 
 type environmentPreviewReport struct {
-	Scope        string                  `json:"scope"`
-	Session      string                  `json:"session"`
-	Agent        string                  `json:"agent,omitempty"`
-	NativeID     string                  `json:"nativeId,omitempty"`
-	Dependencies []environment.Reference `json:"dependencies,omitempty"`
-	Components   []environment.Component `json:"components,omitempty"`
-	Status       string                  `json:"status"`
-	Notes        []string                `json:"notes"`
+	Scope        string                       `json:"scope"`
+	Session      string                       `json:"session"`
+	Agent        string                       `json:"agent,omitempty"`
+	NativeID     string                       `json:"nativeId,omitempty"`
+	Dependencies []environment.Reference      `json:"dependencies,omitempty"`
+	Components   []environment.Component      `json:"components,omitempty"`
+	Changes      []environmentComponentChange `json:"changes,omitempty"`
+	Status       string                       `json:"status"`
+	Notes        []string                     `json:"notes"`
 }
 
 func init() {
@@ -60,10 +62,6 @@ func runEnvironmentWithStreams(args []string, input io.Reader, output, prompt io
 	if prompt == nil {
 		return errors.New("env: prompt output is required")
 	}
-	if options.action != "preview" {
-		return fmt.Errorf("env: %s is not implemented; only 'env preview' is currently available", options.action)
-	}
-
 	configDir, err := config.Dir()
 	if err != nil {
 		return err
@@ -75,49 +73,57 @@ func runEnvironmentWithStreams(args []string, input io.Reader, output, prompt io
 	ctx, cancel := context.WithTimeout(context.Background(), envPreviewTimeout)
 	defer cancel()
 
-	list, err := collectListWithPrompt(ctx, c, configDir, ".", input, output, prompt)
+	state, err := collectEnvironmentContext(ctx, c, configDir, ".", input, prompt)
 	if err != nil {
 		return err
 	}
-	session := findEnvironmentSession(list.Sessions, options.session)
+	defer state.Access.close()
+	session := findEnvironmentSession(state.List.Sessions, options.session)
 	if session == nil {
-		return fmt.Errorf("env preview: session %q was not found in the current project", options.session)
+		return fmt.Errorf("env %s: session %q was not found in the current project", options.action, options.session)
 	}
-	report := environmentPreviewReport{
-		Scope:        list.Scope,
-		Session:      session.RemoteID,
-		Agent:        session.Agent,
-		NativeID:     session.NativeID,
-		Dependencies: append([]environment.Reference(nil), session.Dependencies...),
-		Components:   append([]environment.Component(nil), session.Components...),
-		Status:       "observed-only",
-		Notes: []string{
-			"only structured dependencies and filtered component summaries recorded in the encrypted env manifest are shown",
-			"component bodies are not applied; no local files or commands were changed",
-		},
+	report := buildEnvironmentPreviewReport(ctx, state, session)
+	var applyErr error
+	if options.action == "apply" {
+		if !options.yes {
+			report.Status = "confirmation-required"
+			report.Notes = append(report.Notes, "no files changed; rerun with 'env apply --yes' to write filtered Codex Skill files")
+		} else {
+			applyErr = applyEnvironmentComponents(ctx, state, session, &report)
+		}
 	}
-	if len(report.Dependencies) == 0 {
-		report.Notes = append(report.Notes, "no structured skill or MCP dependency was observed in this session")
-	}
+	var writeErr error
 	if options.json {
-		return writeEnvironmentPreviewJSON(output, report)
+		writeErr = writeEnvironmentPreviewJSON(output, report)
+	} else {
+		writeErr = writeEnvironmentPreviewText(output, report)
 	}
-	return writeEnvironmentPreviewText(output, report)
+	if writeErr != nil {
+		return writeErr
+	}
+	return applyErr
 }
 
 func parseEnvironmentOptions(args []string) (envOptions, error) {
 	if len(args) == 0 {
-		return envOptions{}, errors.New("env: expected 'preview <SESSION_ID>'")
+		return envOptions{}, errors.New("env: expected 'preview|apply <SESSION_ID>'")
 	}
 	action := strings.ToLower(strings.TrimSpace(args[0]))
 	if action == "" {
-		return envOptions{}, errors.New("env: expected 'preview <SESSION_ID>'")
+		return envOptions{}, errors.New("env: expected 'preview|apply <SESSION_ID>'")
+	}
+	if action != "preview" && action != "apply" {
+		return envOptions{}, fmt.Errorf("env: unknown action %q; expected preview or apply", action)
 	}
 	flags := flag.NewFlagSet("env "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+	yes := flags.Bool("yes", false, "confirm writing filtered Codex Skill files")
 	if err := flags.Parse(args[1:]); err != nil {
 		return envOptions{}, fmt.Errorf("env %s: %w", action, err)
+	}
+	if action == "preview" && *yes {
+		return envOptions{}, errors.New("env preview: --yes is only valid with apply")
 	}
 	if flags.NArg() != 1 {
 		return envOptions{}, fmt.Errorf("env %s: expected one session ID", action)
@@ -126,7 +132,7 @@ func parseEnvironmentOptions(args []string) (envOptions, error) {
 	if session == "" || strings.ContainsRune(session, 0) {
 		return envOptions{}, errors.New("env: session ID is invalid")
 	}
-	return envOptions{action: action, session: session, json: *jsonOutput}, nil
+	return envOptions{action: action, session: session, json: *jsonOutput, yes: *yes}, nil
 }
 
 func findEnvironmentSession(sessions []listSession, requested string) *listSession {
@@ -197,6 +203,29 @@ func writeEnvironmentPreviewText(w io.Writer, report environmentPreviewReport) e
 			component.Size,
 			safeListText(component.Fingerprint),
 		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "changes: %d\n", len(report.Changes)); err != nil {
+		return err
+	}
+	for _, change := range report.Changes {
+		line := fmt.Sprintf("- change kind=%s name=%s scope=%s state=%s",
+			safeListText(change.Component.Kind),
+			safeListText(change.Component.Name),
+			safeListText(change.Component.Scope),
+			safeListText(change.State),
+		)
+		if change.Path != "" {
+			line += " path=" + safeListText(change.Path)
+		}
+		if change.Backup != "" {
+			line += " backup=" + safeListText(change.Backup)
+		}
+		if change.Reason != "" {
+			line += " reason=" + safeListText(change.Reason)
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}

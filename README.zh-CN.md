@@ -17,7 +17,7 @@ AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍�
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
 Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查，以及只读环境预览和
-按需提取的 Codex Skill、MCP 意图和 session 设置组件。
+经过明确确认后按需应用的 Codex Skill 组件；MCP 意图和 session 设置组件仍只做预览。
 
 ## 快速开始
 
@@ -177,6 +177,20 @@ cd /path/to/the/same/project
 Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作用域、大小和 fingerprint，
 不显示也不应用组件正文。
 
+`env preview` 用于只读查看本地组件差异。`env apply` 不加 `--yes` 时也只显示差异，不会写入文件：
+
+~~~bash
+./agentsync env apply <NATIVE_SESSION_ID>
+~~~
+
+确认输出后，明确加上 `--yes` 才会应用过滤后的 Codex Skill 文件；替换已有文件前会先创建备份：
+
+~~~bash
+./agentsync env apply --yes <NATIVE_SESSION_ID>
+~~~
+
+MCP 和 session 设置组件目前只做预览，不会修改原始配置、安装工具或执行命令。
+
 使用 `list` 打印出的会话 ID 进行恢复：
 
 ~~~bash
@@ -193,9 +207,10 @@ Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作�
 claude --resume
 ~~~
 
-`pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的结构化依赖
-和安全组件摘要。`resume` 才会下载选中的加密会话并恢复到 Claude Code；环境组件文件不会
-自动恢复、安装或执行。
+`pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的结构化依赖和本地
+组件差异。`resume` 才会下载选中的加密会话并恢复到 Claude Code。`env apply` 不加 `--yes`
+只显示差异；加上 `--yes` 后才会备份并写入过滤后的 Codex Skill 文件，不会安装工具、修改
+原始 MCP 配置或执行命令。
 
 恢复 session 时：
 
@@ -252,7 +267,8 @@ cd /path/to/another/project
 | `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |
-| `agentsync env preview SESSION_ID [--json]` | 查看 session 记录到的结构化依赖和安全组件摘要；只读，不恢复组件文件。 |
+| `agentsync env preview SESSION_ID [--json]` | 查看 session 记录到的结构化依赖和本地组件差异；只读。 |
+| `agentsync env apply SESSION_ID [--yes] [--json]` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Codex Skill 文件，MCP/settings 仍只做预览。 |
 | `agentsync resume [restore options] [SESSION_ID]` | 下载并恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`，选项要放在会话 ID 前面。 |
 | `agentsync history SESSION_ID [--json]` | 查看会话可恢复版本和 fork。 |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | 删除一个会话，是 `remote delete-session` 的别名。 |
@@ -313,8 +329,8 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
 - `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
 - 不同步项目文件、未提交的 Git 修改、分支、完整配置正文、原始 MCP 配置、插件、凭据和环境内容。
   session 只有在结构化观察到 Codex skill、MCP 调用或白名单设置时，才可能带上过滤后的
-  Skill 正文、MCP 非敏感意图或 session 设置摘要；`env preview` 只显示摘要，不会自动恢复
-  或运行组件文件。
+  Skill 正文、MCP 非敏感意图或 session 设置摘要。`env preview` 只读；`env apply --yes`
+  只会在备份后写入过滤后的 Skill 正文，不会安装工具、修改原始 MCP 配置或执行命令。
 - 目标设备必须提前准备好 Claude Code 和项目。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 touched 文件回退检查。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复

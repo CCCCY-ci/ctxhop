@@ -19,8 +19,8 @@ device must already have the relevant agent and project checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks and read-only environment previews with filtered Codex Skill, MCP intent
-and session-setting components.
+restore safety checks, read-only environment previews and explicit application of filtered
+Codex Skill files; MCP intent and session-setting components remain preview-only.
 
 ## Quick start
 
@@ -188,6 +188,23 @@ This is a read-only preview. It does not install, apply or execute anything. If 
 Codex Skill, MCP intent or session-setting component was captured, the preview shows only
 its kind, scope, size and fingerprint; it never prints or applies the component body.
 
+`env preview` is the read-only way to inspect local component differences. `env apply` also
+supports a no-write confirmation step; without `--yes` it only prints the changes:
+
+~~~bash
+./agentsync env apply <NATIVE_SESSION_ID>
+~~~
+
+After checking the output, add `--yes` to explicitly apply filtered Codex Skill files. AgentSync
+creates a backup before replacing an existing file:
+
+~~~bash
+./agentsync env apply --yes <NATIVE_SESSION_ID>
+~~~
+
+MCP and session-setting components remain preview-only. AgentSync does not install tools,
+change raw MCP configuration or execute commands.
+
 Restore the session ID printed by `list`:
 
 ~~~bash
@@ -208,9 +225,10 @@ Claude Code will show its session list, including the session restored by
 AgentSync.
 
 `pull --check` reads remote metadata only. `env preview` shows structured dependency
-references and safe component summaries when the session recorded them. `resume` downloads
-the selected encrypted session and restores it to Claude Code. Environment component files
-are not automatically restored, installed or executed.
+references and local component differences when the session recorded them. `resume` downloads
+the selected encrypted session and restores it to Claude Code. `env apply` without `--yes`
+only reports changes; `env apply --yes` writes filtered Codex Skill files with a backup.
+It never installs tools, changes raw MCP configuration or executes commands.
 
 When restoring a session:
 
@@ -273,7 +291,8 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync watch [--interval DURATION] [--once] [--json]` | Repeatedly scan and push the current project; `--once` performs one scan. |
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |
-| `agentsync env preview SESSION_ID [--json]` | Show structured dependency references and safe component summaries recorded for a session. This is read-only; component files are not restored. |
+| `agentsync env preview SESSION_ID [--json]` | Show structured dependency references and local component differences. This is read-only. |
+| `agentsync env apply SESSION_ID [--yes] [--json]` | Show component changes; only with `--yes` write filtered Codex Skill files, with a backup before replacement. MCP/settings remain preview-only. |
 | `agentsync resume [restore options] [SESSION_ID]` | Download and restore one session. Options include `--version`, `--allow-limited`, `--allow-divergent`, `--no-workspace-context` and `--replace-existing`; put options before the session ID. |
 | `agentsync history SESSION_ID [--json]` | Show recoverable versions and forks for a session. |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | Delete one session; an alias for `remote delete-session`. |
@@ -339,8 +358,9 @@ Environment credentials are not written to disk.
 - Project files, uncommitted Git changes, branches, full settings, raw MCP configuration,
   plugins, credentials and environment contents are not synchronized. A session may carry
   filtered, non-sensitive Codex `SKILL.md` content, an allowlisted MCP intent and a small
-  session-setting summary only when they were structurally observed; `env preview` shows
-  summaries, but no component file is restored or run automatically.
+  session-setting summary only when they were structurally observed. `env preview` is read-only;
+  `env apply --yes` may write only the filtered Skill body after creating a backup. It never
+  installs, changes raw MCP configuration or runs commands.
 - The target device must already have Claude Code and the project prepared.
 - Git projects provide stronger workspace checks. No-Git projects use a
   touched-file fallback.

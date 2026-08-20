@@ -187,6 +187,17 @@ func OpenEnvironment(identity *ecdh.PrivateKey, objectKey string, sealed []byte)
 	return metadata, nil
 }
 
+// ReadEnvironmentManifest reads and decrypts the optional environment object
+// for one device-owned session branch. Component bodies remain encrypted at
+// rest and are only returned to an explicit caller that is preparing apply.
+func ReadEnvironmentManifest(ctx context.Context, store remote.Remote, layout ObjectLayout, identities []*ecdh.PrivateKey) (EnvironmentMetadata, error) {
+	key, err := layout.MetadataKey()
+	if err != nil {
+		return EnvironmentMetadata{}, err
+	}
+	return readEnvironmentMetadata(ctx, store, key, identities)
+}
+
 func PutEnvironmentReferences(ctx context.Context, store remote.Remote, recipient *ecdh.PublicKey, layout ObjectLayout, references []environment.Reference) error {
 	return PutEnvironmentManifest(ctx, store, recipient, layout, references, nil)
 }

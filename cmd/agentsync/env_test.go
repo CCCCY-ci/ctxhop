@@ -16,8 +16,15 @@ func TestParseEnvironmentOptions(t *testing.T) {
 	if options.action != "preview" || options.session != "native-session" || !options.json {
 		t.Fatalf("options = %#v", options)
 	}
-	if _, err := parseEnvironmentOptions([]string{"apply", "native-session"}); err != nil {
-		t.Fatalf("apply should parse before the handler reports it as unavailable: %v", err)
+	apply, err := parseEnvironmentOptions([]string{"apply", "--json", "--yes", "native-session"})
+	if err != nil {
+		t.Fatalf("apply options: %v", err)
+	}
+	if apply.action != "apply" || apply.session != "native-session" || !apply.json || !apply.yes {
+		t.Fatalf("apply = %#v", apply)
+	}
+	if _, err := parseEnvironmentOptions([]string{"preview", "--yes", "native-session"}); err == nil {
+		t.Fatal("preview accepted --yes")
 	}
 	if _, err := parseEnvironmentOptions([]string{"preview"}); err == nil {
 		t.Fatal("missing session ID was accepted")
@@ -48,14 +55,19 @@ func TestWriteEnvironmentPreviewTextIsMetadataOnly(t *testing.T) {
 		Agent:        "codex",
 		NativeID:     "native-one",
 		Dependencies: []environment.Reference{{Kind: "tool-requirement", Name: "codex", Version: "0.148.0", Portability: "platform-specific"}},
-		Status:       "observed-only",
-		Notes:        []string{"no files changed"},
+		Changes: []environmentComponentChange{{
+			Component: environment.Component{Kind: "skill", Name: "coding-guidelines", Scope: "global"},
+			Path:      "C:/Users/test/.codex/skills/coding-guidelines/SKILL.md",
+			State:     environment.ComponentStateChanged,
+		}},
+		Status: "observed-only",
+		Notes:  []string{"no files changed"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := output.String()
-	for _, marker := range []string{"status: observed-only", "dependencies: 1", "codex", "no files changed"} {
+	for _, marker := range []string{"status: observed-only", "dependencies: 1", "changes: 1", "state=changed", "no files changed"} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("output %q does not contain %q", text, marker)
 		}
