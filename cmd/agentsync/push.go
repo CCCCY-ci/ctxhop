@@ -14,6 +14,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
@@ -44,7 +45,7 @@ func (s *pushSummary) fail(stage string, err error) {
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
 	switch stage {
-	case "remote-push", "device-record", "project-record":
+	case "remote-push", "environment-record", "device-record", "project-record":
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
@@ -338,6 +339,15 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 		}
 		if _, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload); err != nil {
 			summary.fail("remote-push", err)
+			continue
+		}
+		agentName := ref.Agent
+		if agentName == "" {
+			agentName = layout.Name()
+		}
+		dependencies := environment.Discover(data.Records, agentName, installation.Version)
+		if err := syncer.PutEnvironmentReferences(ctx, store, public, objectLayout, dependencies); err != nil {
+			summary.fail("environment-record", err)
 			continue
 		}
 		summary.Pushed++

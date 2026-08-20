@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 )
 
@@ -210,8 +211,9 @@ func PutMetadata(ctx context.Context, store remote.Remote, recipient *ecdh.Publi
 
 // MetadataRef is one validated metadata object associated with a device.
 type MetadataRef struct {
-	DeviceID string
-	Metadata Metadata
+	DeviceID    string
+	Metadata    Metadata
+	Environment []environment.Reference
 }
 
 // FetchMetadata lists, reads, decrypts, and validates every device metadata
@@ -282,7 +284,13 @@ func FetchMetadataWithIdentitiesAndDevices(ctx context.Context, store remote.Rem
 		if err != nil {
 			return nil, fmt.Errorf("syncer: open remote metadata: %w", err)
 		}
-		out = append(out, MetadataRef{DeviceID: device, Metadata: metadata})
+		environmentReferences := []environment.Reference(nil)
+		if references, environmentErr := readEnvironmentReferences(ctx, store, key, identities); environmentErr == nil {
+			environmentReferences = references
+		} else if contextErr := ctx.Err(); contextErr != nil {
+			return nil, fmt.Errorf("syncer: read remote environment metadata: %w", contextErr)
+		}
+		out = append(out, MetadataRef{DeviceID: device, Metadata: metadata, Environment: environmentReferences})
 	}
 	if len(out) == 0 {
 		return nil, ErrNoRemoteMetadata

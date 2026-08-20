@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	objectPrefix   = "v1/projects"
-	shardNameWidth = 6
-	maxShardNumber = 999999
-	metaObjectName = "meta"
+	objectPrefix          = "v1/projects"
+	shardNameWidth        = 6
+	maxShardNumber        = 999999
+	metaObjectName        = "meta"
+	environmentObjectName = "env"
 )
 
 // ObjectLayout identifies the remote namespace for one session and one device.
@@ -64,6 +65,15 @@ func (l ObjectLayout) MetadataKey() (string, error) {
 		return "", err
 	}
 	return checkedKey(prefix + "/" + metaObjectName)
+}
+
+// EnvironmentKey returns the optional dependency manifest for this device branch.
+func (l ObjectLayout) EnvironmentKey() (string, error) {
+	prefix, err := l.DevicePrefix()
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + environmentObjectName)
 }
 
 // ShardKey returns the immutable key for one device-local shard sequence.

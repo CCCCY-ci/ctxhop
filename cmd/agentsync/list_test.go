@@ -7,6 +7,7 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
@@ -76,4 +77,30 @@ func mustListMetadata(t *testing.T, payload []byte) syncer.Metadata {
 		t.Fatal(err)
 	}
 	return metadata
+}
+func TestMergeListSessionsCarriesEnvironmentReferences(t *testing.T) {
+	updated := time.Date(2026, 8, 20, 3, 0, 0, 0, time.UTC)
+	payload, err := encodeListSummary("native-env", "environment session", updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := []environment.Reference{
+		{Kind: "tool-requirement", Name: "codex", Version: "0.148.0", Portability: "platform-specific"},
+	}
+	report := mergeListSessions("local-device", make([]byte, 32), "projectone", nil, []syncer.ProjectMetadataRef{
+		{
+			SessionID: "remote-env",
+			Devices: []syncer.MetadataRef{{
+				DeviceID:    "foreign-device",
+				Metadata:    mustListMetadata(t, payload),
+				Environment: references,
+			}},
+		},
+	})
+	if len(report.Sessions) != 1 || len(report.Sessions[0].Dependencies) != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if report.Sessions[0].Dependencies[0] != references[0] {
+		t.Fatalf("dependencies = %#v, want %#v", report.Sessions[0].Dependencies, references)
+	}
 }

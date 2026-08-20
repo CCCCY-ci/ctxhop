@@ -7,10 +7,11 @@ between computers. It encrypts session data locally, stores the encrypted data
 in a local directory or S3-compatible object storage, and restores a selected
 session on another device.
 
-AgentSync syncs session records, not development environments. It does not copy
-project files, uncommitted changes, Claude Code or Codex settings, skills, MCP servers,
-credentials or environment variables. The target device must already have
-the relevant agent and project checkout.
+AgentSync syncs session records and a small encrypted manifest of structured
+agent/tool dependencies observed in those sessions. It does not copy project files,
+uncommitted changes, settings, skills, MCP configuration, credentials or environment
+variable values. The target device must already have the relevant agent and project
+checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks and restore safety checks.
@@ -171,6 +172,14 @@ cd /path/to/the/same/project
 ./agentsync list
 ~~~
 
+Before restoring, you can inspect the dependency references recorded for the session:
+
+~~~bash
+./agentsync env preview <NATIVE_SESSION_ID>
+~~~
+
+This is a metadata-only preview. It does not install, apply or execute anything.
+
 Restore the session ID printed by `list`:
 
 ~~~bash
@@ -190,9 +199,10 @@ claude --resume
 Claude Code will show its session list, including the session restored by
 AgentSync.
 
-`pull --check` reads remote metadata only. `resume` downloads the selected
-encrypted session and restores it to Claude Code. It does not copy project
-files, Git changes, skills, MCP servers or credentials.
+`pull --check` reads remote metadata only. `env preview` shows non-sensitive
+dependency references when the session recorded them. `resume` downloads the
+selected encrypted session and restores it to Claude Code. Environment component
+files are not restored or executed.
 
 When restoring a session:
 
@@ -255,6 +265,7 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync watch [--interval DURATION] [--once] [--json]` | Repeatedly scan and push the current project; `--once` performs one scan. |
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |
+| `agentsync env preview SESSION_ID [--json]` | Show structured dependency references recorded for a session. This is read-only; component files are not restored. |
 | `agentsync resume [restore options] [SESSION_ID]` | Download and restore one session. Options include `--version`, `--allow-limited`, `--allow-divergent`, `--no-workspace-context` and `--replace-existing`; put options before the session ID. |
 | `agentsync history SESSION_ID [--json]` | Show recoverable versions and forks for a session. |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | Delete one session; an alias for `remote delete-session`. |
@@ -317,8 +328,10 @@ Environment credentials are not written to disk.
 - `push` writes the current device's branch; it does not pull that branch back.
 - `pull --check` reads metadata. `resume` is the explicit body download and
   restore operation.
-- Project files, uncommitted Git changes, branches, skills, MCP servers,
-  plugins, credentials and arbitrary environment state are not synchronized.
+- Project files, uncommitted Git changes, branches, settings, skills, MCP servers,
+  plugins, credentials and environment contents are not synchronized. Only a small
+  encrypted metadata manifest of structured observed dependencies is currently
+  available through `env preview`; it does not restore files or run commands.
 - The target device must already have Claude Code and the project prepared.
 - Git projects provide stronger workspace checks. No-Git projects use a
   touched-file fallback.

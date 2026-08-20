@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,8 +85,8 @@ func TestPushDiscoveredSessionPublishesShardsAndSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(objects) != 2 {
-		t.Fatalf("remote objects = %+v, want one shard and one metadata object", objects)
+	if len(objects) != 3 {
+		t.Fatalf("remote objects = %+v, want one shard, one environment object and one metadata object", objects)
 	}
 	identity, err := dataKey.IdentityPrivate()
 	if err != nil {
@@ -98,6 +99,9 @@ func TestPushDiscoveredSessionPublishesShardsAndSummary(t *testing.T) {
 	decoded, err := syncflow.DecodeSessionSummary(metadata[0].Metadata.Payload)
 	if err != nil || decoded.NativeID != ref.NativeID || decoded.Title != ref.Title || decoded.Fingerprint == nil {
 		t.Fatalf("summary = %+v, error = %v", decoded, err)
+	}
+	if strings.Contains(string(metadata[0].Metadata.Payload), "\"dependencies\"") {
+		t.Fatal("environment references must stay outside the legacy session summary")
 	}
 	cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
 	if err != nil {

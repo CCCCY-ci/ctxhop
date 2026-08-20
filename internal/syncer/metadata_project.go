@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 )
 
@@ -104,7 +105,13 @@ func FetchProjectMetadataWithIdentitiesAndDevices(ctx context.Context, store rem
 			if err != nil {
 				return nil, fmt.Errorf("syncer: open project metadata: %w", err)
 			}
-			metadata = append(metadata, MetadataRef{DeviceID: deviceID, Metadata: opened})
+			environmentReferences := []environment.Reference(nil)
+			if references, environmentErr := readEnvironmentReferences(ctx, store, devices[deviceID], identities); environmentErr == nil {
+				environmentReferences = references
+			} else if contextErr := ctx.Err(); contextErr != nil {
+				return nil, fmt.Errorf("syncer: read project environment metadata: %w", contextErr)
+			}
+			metadata = append(metadata, MetadataRef{DeviceID: deviceID, Metadata: opened, Environment: environmentReferences})
 		}
 		if len(metadata) != 0 {
 			out = append(out, ProjectMetadataRef{SessionID: sessionID, Devices: metadata})

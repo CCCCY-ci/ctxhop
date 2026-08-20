@@ -6,9 +6,10 @@ AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Co
 它会在本地加密会话数据，把加密后的数据保存到本地目录或 S3 兼容对象存储，
 并允许在另一台设备上选择会话进行恢复。
 
-AgentSync 只同步会话记录，不同步开发环境。它不会复制项目文件、未提交的
-修改、Claude Code 或 Codex 配置、skills、MCP 服务、凭据或环境变量。目标设备需要提前
-安装相应的 Agent，并准备好对应项目的 checkout。
+AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工具依赖时，
+保存一份很小的加密依赖清单。它不会复制项目文件、未提交的修改、配置正文、
+skills 文件、MCP 配置、凭据或环境变量的实际值。目标设备仍需要提前安装相应
+的 Agent，并准备好对应项目的 checkout。
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换
 以及 Claude Code、Codex 适配器、SessionEnd Hook 和恢复安全检查。
@@ -161,6 +162,14 @@ cd /path/to/the/same/project
 ./agentsync list
 ~~~
 
+恢复前可以先查看这个 session 记录到的依赖引用：
+
+~~~bash
+./agentsync env preview <NATIVE_SESSION_ID>
+~~~
+
+这个命令只读取加密 metadata，不会安装、应用或执行任何内容。
+
 使用 `list` 打印出的会话 ID 进行恢复：
 
 ~~~bash
@@ -177,8 +186,9 @@ cd /path/to/the/same/project
 claude --resume
 ~~~
 
-`pull --check` 只读取远端元数据。`resume` 才会下载选中的加密会话并恢复到
-Claude Code，不会复制项目文件、Git 修改、skills、MCP 服务或凭据。
+`pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的非敏感依赖引用。
+`resume` 才会下载选中的加密会话并恢复到 Claude Code；当前不会恢复环境组件文件，
+也不会执行任何命令。
 
 恢复 session 时：
 
@@ -235,6 +245,7 @@ cd /path/to/another/project
 | `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |
+| `agentsync env preview SESSION_ID [--json]` | 查看 session 记录到的结构化依赖引用；只读，不恢复组件文件。 |
 | `agentsync resume [restore options] [SESSION_ID]` | 下载并恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`，选项要放在会话 ID 前面。 |
 | `agentsync history SESSION_ID [--json]` | 查看会话可恢复版本和 fork。 |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | 删除一个会话，是 `remote delete-session` 的别名。 |
@@ -293,8 +304,8 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
 - 每台设备都有独立的 device ID 和远端分支。
 - `push` 写入当前设备的分支，不会把该分支再拉回本机。
 - `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
-- 不同步项目文件、未提交的 Git 修改、分支、skills、MCP 服务、插件、凭据和任意
-  环境状态。
+- 不同步项目文件、未提交的 Git 修改、分支、配置正文、skills、MCP 服务、插件、凭据和
+  环境内容。当前只有 `env preview` 可查看加密的结构化依赖清单，不会恢复文件或执行命令。
 - 目标设备必须提前准备好 Claude Code 和项目。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 touched 文件回退检查。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复

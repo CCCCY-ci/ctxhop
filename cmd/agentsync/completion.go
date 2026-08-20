@@ -11,6 +11,7 @@ import (
 
 var completionSubcommands = map[string][]string{
 	"completion": {"bash", "zsh", "fish", "powershell", "pwsh"},
+	"env":        {"preview"},
 	"device":     {"status", "mode", "list", "rename", "remove", "rotate-key", "invite"},
 	"history":    {"cleanup", "prune"},
 	"hook":       {"install"},
@@ -38,6 +39,7 @@ var completionOptions = map[string][]string{
 	"push":                  {"--agentsync-hook", "--session"},
 	"watch":                 {"--interval", "--once", "--json"},
 	"doctor":                {"--json"},
+	"env preview":           {"--json"},
 	"pull":                  {"--check", "--json"},
 	"device status":         {"--json"},
 	"device list":           {"--json"},

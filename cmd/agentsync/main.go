@@ -50,6 +50,7 @@ var commands = []command{
 	{name: "device", summary: "inspect or change local device settings"},
 	{name: "remote", summary: "delete scoped or all remote data"},
 	{name: "project", summary: "bind projects and manage synchronization policy"},
+	{name: "env", summary: "preview session environment dependencies"},
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},

@@ -16,6 +16,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
@@ -32,15 +33,16 @@ type listReport struct {
 }
 
 type listSession struct {
-	RemoteID    string    `json:"remoteId"`
-	Agent       string    `json:"agent,omitempty"`
-	NativeID    string    `json:"nativeId,omitempty"`
-	Title       string    `json:"title"`
-	CreatedAt   time.Time `json:"createdAt,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
-	Local       bool      `json:"local"`
-	Sources     []string  `json:"sources"`
-	RecordCount uint64    `json:"recordCount,omitempty"`
+	RemoteID     string                  `json:"remoteId"`
+	Agent        string                  `json:"agent,omitempty"`
+	NativeID     string                  `json:"nativeId,omitempty"`
+	Title        string                  `json:"title"`
+	CreatedAt    time.Time               `json:"createdAt,omitempty"`
+	UpdatedAt    time.Time               `json:"updatedAt,omitempty"`
+	Local        bool                    `json:"local"`
+	Sources      []string                `json:"sources"`
+	RecordCount  uint64                  `json:"recordCount,omitempty"`
+	Dependencies []environment.Reference `json:"dependencies,omitempty"`
 }
 
 func init() {
@@ -230,7 +232,11 @@ func mergeListSessions(localDeviceID string, identifierKey []byte, projectID str
 			if item.CreatedAt.IsZero() || summary.CreatedAt.Before(item.CreatedAt) {
 				item.CreatedAt = summary.CreatedAt
 			}
-			if summary.UpdatedAt.After(item.UpdatedAt) {
+			isNewerSummary := summary.UpdatedAt.After(item.UpdatedAt)
+			if isNewerSummary || len(item.Dependencies) == 0 {
+				item.Dependencies = append([]environment.Reference(nil), device.Environment...)
+			}
+			if isNewerSummary {
 				item.UpdatedAt = summary.UpdatedAt
 			}
 		}
