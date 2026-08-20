@@ -348,6 +348,7 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 		dependencies := environment.Discover(data.Records, agentName, installation.Version)
 		components := environment.CaptureSkillComponents(agentName, installation.DataDir, projectRoot, projectID, dependencies)
 		components = append(components, environment.CaptureMCPComponents(agentName, installation.DataDir, projectRoot, projectID, dependencies)...)
+		components = append(components, environment.CaptureSessionSettings(agentName, data.Records, projectID)...)
 		components = environment.NormalizeComponentContents(components)
 		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, dependencies, components); err != nil {
 			summary.fail("environment-record", err)

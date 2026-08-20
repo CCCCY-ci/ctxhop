@@ -30,6 +30,7 @@ var (
 	allowedKinds        = map[string]bool{
 		"mcp":              true,
 		"skill":            true,
+		"settings":         true,
 		"tool-requirement": true,
 	}
 	allowedPortability = map[string]bool{
@@ -47,6 +48,9 @@ func (r Reference) Validate() error {
 	}
 	if !validName(r.Name) {
 		return fmt.Errorf("%w: invalid name", ErrInvalidReference)
+	}
+	if r.Kind == "settings" && r.Name != codexSessionSettingsName {
+		return fmt.Errorf("%w: unsupported settings reference", ErrInvalidReference)
 	}
 	if r.Version != "" && (!utf8.ValidString(r.Version) || len([]rune(r.Version)) > maxVersionLen || strings.ContainsAny(r.Version, "\r\n")) {
 		return fmt.Errorf("%w: invalid version", ErrInvalidReference)
@@ -101,6 +105,13 @@ func Discover(records [][]byte, agent, version string) []Reference {
 			Kind:        "tool-requirement",
 			Name:        agent,
 			Version:     version,
+			Portability: "platform-specific",
+		})
+	}
+	if agent == "codex" && hasObservedCodexSessionSettings(records) {
+		refs = append(refs, Reference{
+			Kind:        "settings",
+			Name:        codexSessionSettingsName,
 			Portability: "platform-specific",
 		})
 	}

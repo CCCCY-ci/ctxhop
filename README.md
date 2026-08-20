@@ -12,13 +12,15 @@ agent/tool dependencies observed in those sessions. For a Codex skill actually
 referenced by a session, it may also include a filtered, non-sensitive `SKILL.md`
 body. For an observed Codex MCP server, it may include an allowlisted non-secret intent
 record with a command basename, safe arguments and startup timeout. It does not copy
-project files, uncommitted changes, full skill directories, settings, raw MCP configuration,
-credentials or environment variable values. The target device must already have the relevant
-agent and project checkout.
+project files, uncommitted changes, full skill directories, full settings, raw MCP configuration,
+credentials or environment variable values. For a Codex session, it may include an allowlisted
+summary of the model, provider and effort recorded in structured session metadata. The target
+device must already have the relevant agent and project checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks and read-only environment previews with filtered Codex Skill components.
+restore safety checks and read-only environment previews with filtered Codex Skill, MCP intent
+and session-setting components.
 
 ## Quick start
 
@@ -183,8 +185,8 @@ Before restoring, you can inspect the dependency references recorded for the ses
 ~~~
 
 This is a read-only preview. It does not install, apply or execute anything. If a safe
-Codex Skill component was captured, the preview shows only its scope, size and fingerprint;
-it never prints or applies the component body.
+Codex Skill, MCP intent or session-setting component was captured, the preview shows only
+its kind, scope, size and fingerprint; it never prints or applies the component body.
 
 Restore the session ID printed by `list`:
 
@@ -336,9 +338,9 @@ Environment credentials are not written to disk.
   restore operation.
 - Project files, uncommitted Git changes, branches, full settings, raw MCP configuration,
   plugins, credentials and environment contents are not synchronized. A session may carry
-  filtered, non-sensitive Codex `SKILL.md` content and an allowlisted MCP intent only
-  when they were structurally observed; `env preview` shows summaries, but no component
-  file is restored or run automatically.
+  filtered, non-sensitive Codex `SKILL.md` content, an allowlisted MCP intent and a small
+  session-setting summary only when they were structurally observed; `env preview` shows
+  summaries, but no component file is restored or run automatically.
 - The target device must already have Claude Code and the project prepared.
 - Git projects provide stronger workspace checks. No-Git projects use a
   touched-file fallback.

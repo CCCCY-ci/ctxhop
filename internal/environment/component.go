@@ -108,6 +108,10 @@ func (c Component) Validate() error {
 		if c.Format != "application/json" {
 			return ErrInvalidComponent
 		}
+	case "settings":
+		if c.Name != codexSessionSettingsName || c.Format != "application/json" {
+			return ErrInvalidComponent
+		}
 	default:
 		return ErrInvalidComponent
 	}
@@ -346,7 +350,7 @@ func pathWithin(root, target string) bool {
 }
 
 func supportedComponentKind(kind string) bool {
-	return kind == "skill" || kind == "mcp"
+	return kind == "skill" || kind == "mcp" || kind == "settings"
 }
 func sameComponent(left, right Component) bool {
 	return left.Kind == right.Kind && left.Name == right.Name && left.Scope == right.Scope && left.ProjectID == right.ProjectID && left.Fingerprint == right.Fingerprint
