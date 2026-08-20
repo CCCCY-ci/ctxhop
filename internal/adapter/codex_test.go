@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCodexLayoutDiscoversReadsAndWritesSessions(t *testing.T) {
@@ -144,6 +145,79 @@ func TestCodexCanonicalizesWorkspaceRootsAndEmbeddedToolArguments(t *testing.T) 
 	}
 }
 
+func TestCodexCanonicalizesPathKeyedChanges(t *testing.T) {
+	projectRoot := filepath.Join(t.TempDir(), "source project")
+	path := filepath.Join(projectRoot, "internal", "example.go")
+	record := codexTestRecord(t, "2026-08-20T10:20:30Z", "event_msg", map[string]any{
+		"item": map[string]any{
+			"changes": map[string]any{
+				path: map[string]any{"content": "snapshot"},
+			},
+		},
+	})
+
+	canonicalizer := NewCanonicalizer(PathSpace{ProjectRoot: projectRoot, AgentHome: filepath.Join(t.TempDir(), "codex")})
+	canonical, err := canonicalizer.Record(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(canonical), TokenProject+"/internal/example.go") {
+		t.Fatalf("canonical record did not rewrite changes key: %s", canonical)
+	}
+	if findings := canonicalizer.UnknownPathFields(); len(findings) != 0 {
+		t.Fatalf("unexpected unknown path fields: %v", findings)
+	}
+
+	targetRoot := filepath.Join(t.TempDir(), "target project")
+	localized, err := Localize(canonical, PathSpace{ProjectRoot: targetRoot, AgentHome: filepath.Join(t.TempDir(), "codex")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedPath := strings.ReplaceAll(filepath.Join(targetRoot, "internal", "example.go"), `\`, `\\`)
+	if !strings.Contains(string(localized), expectedPath) {
+		t.Fatalf("localized record did not restore changes key: %s", localized)
+	}
+}
+
+func TestCodexDiscoveryUsesFileModificationTimeForUpdatedSession(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	id := "55555555-5555-4555-8555-555555555555"
+	path := filepath.Join(home, "sessions", "2026", "08", "20", "rollout-2026-08-20T10-20-30-"+id+".jsonl")
+	records := [][]byte{
+		codexTestRecord(t, "2026-08-20T10:20:30Z", "session_meta", map[string]any{
+			"id":          id,
+			"session_id":  "thread-5555",
+			"cwd":         projectRoot,
+			"cli_version": "0.148.0",
+		}),
+		codexTestRecord(t, "2026-08-20T10:20:31Z", "event_msg", map[string]any{
+			"type":    "user_message",
+			"message": "early title",
+		}),
+		codexTestRecord(t, "2026-08-20T10:21:45Z", "event_msg", map[string]any{
+			"type": "task_complete",
+		}),
+	}
+	if err := writeSessionAt(path, records); err != nil {
+		t.Fatal(err)
+	}
+	latest := time.Date(2026, 8, 20, 10, 22, 0, 0, time.UTC)
+	if err := os.Chtimes(path, latest, latest); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := (CodexLayout{Home: home}).DiscoverSessions(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("refs = %+v, want one session", refs)
+	}
+	if !refs[0].UpdatedAt.Equal(latest) {
+		t.Fatalf("updated = %s, want file modification time %s", refs[0].UpdatedAt, latest)
+	}
+}
 func TestCodexDetectReadsRecordedVersionWithoutVersionGating(t *testing.T) {
 	home := t.TempDir()
 	id := "44444444-4444-4444-8444-444444444444"

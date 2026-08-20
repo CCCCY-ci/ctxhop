@@ -172,7 +172,7 @@ func (l CodexLayout) DiscoverSessions(projectRoot string) ([]SessionRef, error) 
 		if created.IsZero() {
 			created = info.ModTime()
 		}
-		if updated.IsZero() {
+		if updated.IsZero() || info.ModTime().After(updated) {
 			updated = info.ModTime()
 		}
 		refs = append(refs, SessionRef{

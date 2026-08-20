@@ -77,6 +77,13 @@ var pathKeyedContainers = map[string]bool{
 	"trackedFileBackups": true,
 }
 
+// pathKeyedPaths contains agent-specific containers whose keys are paths but
+// whose leaf name is too generic to enable globally. Codex stores file change
+// snapshots under payload.item.changes/<absolute-path>.
+var pathKeyedPaths = map[string]bool{
+	"payload.item.changes": true,
+}
+
 // Canonicalizer converts a machine's session records into canonical form.
 //
 // It is stateful only to accumulate diagnostics across the records of one
@@ -118,6 +125,10 @@ func (c *Canonicalizer) UnknownPathFields() []string {
 	return out
 }
 
+func isPathKeyedContainer(path string) bool {
+	return pathKeyedContainers[fieldLeaf(path)] || pathKeyedPaths[path]
+}
+
 // walk returns a copy of v with known path prefixes replaced by tokens. path
 // is the dotted map path that led to v, or "" at the top level.
 func (c *Canonicalizer) walk(path string, v any) any {
@@ -148,7 +159,7 @@ func (c *Canonicalizer) walk(path string, v any) any {
 
 // key tokenizes a map key when the enclosing field is a path-keyed container.
 func (c *Canonicalizer) key(parentPath, k string) string {
-	if pathKeyedContainers[fieldLeaf(parentPath)] {
+	if isPathKeyedContainer(parentPath) {
 		if out, ok := c.tokenize(k); ok {
 			return out
 		}
@@ -356,7 +367,7 @@ func (l *localizer) walk(path string, v any) (any, error) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			key, err := l.text(path, k, pathKeyedContainers[fieldLeaf(path)])
+			key, err := l.text(path, k, isPathKeyedContainer(path))
 			if err != nil {
 				return nil, err
 			}
