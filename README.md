@@ -224,7 +224,9 @@ its kind, scope, size and fingerprint; it never prints or applies the component 
 For MCP intent and allowlisted project settings, the preview also reports whether
 the local configuration is missing, changed or unchanged. Unsafe or unreadable
 values remain unavailable/manual; these configurations are never written by
-`env apply`.
+`env apply`. The preview also reports local tool availability and
+SessionEnd Hook status. A version difference is informational; adapter compatibility
+is determined from the fields the session actually contains.
 
 `env preview` is the read-only way to inspect local component differences. `env apply` also
 supports a no-write confirmation step; without `--yes` it only prints the changes:

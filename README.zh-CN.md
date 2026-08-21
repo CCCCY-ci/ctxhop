@@ -206,6 +206,8 @@ Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作�
 不显示也不应用组件正文。
 对于 MCP 意图和白名单项目设置，预览还会显示本地配置是 missing、changed 还是 unchanged。
 不安全或无法读取的值会保持为 unavailable/manual；`env apply` 不会写入这些配置。
+预览还会显示本机工具是否存在以及 SessionEnd Hook 状态。版本差异只作提示，适配器仍按
+session 实际包含的字段判断兼容性。
 
 `env preview` 用于只读查看本地组件差异。`env apply` 不加 `--yes` 时也只显示差异，不会写入文件：
 

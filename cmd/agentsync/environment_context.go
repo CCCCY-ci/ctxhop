@@ -34,6 +34,13 @@ type environmentComponentChange struct {
 	Reason    string                `json:"reason,omitempty"`
 }
 
+type environmentRequirementChange struct {
+	Dependency   environment.Reference `json:"dependency"`
+	State        string                `json:"state"`
+	LocalVersion string                `json:"localVersion,omitempty"`
+	Reason       string                `json:"reason,omitempty"`
+}
+
 func collectEnvironmentContext(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer) (environmentContext, error) {
 	if c == nil {
 		return environmentContext{}, errors.New("env: configuration is unavailable")
@@ -113,6 +120,7 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		NativeID:     session.NativeID,
 		Dependencies: append([]environment.Reference(nil), session.Dependencies...),
 		Components:   append([]environment.Component(nil), session.Components...),
+		Requirements: inspectEnvironmentRequirements(ctx, session.Dependencies),
 		Status:       "observed-only",
 		Notes: []string{
 			"only structured dependencies and filtered component summaries recorded in the encrypted env manifest are shown",
@@ -124,8 +132,12 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		installed, err := adapter.FindInstalled(ctx, session.Agent)
 		if err == nil {
 			agentHome = installed.Installation.DataDir
-		} else if !errors.Is(err, adapter.ErrNotInstalled) {
+			report.HookState = inspectEnvironmentHook(installed)
+		} else if errors.Is(err, adapter.ErrNotInstalled) {
+			report.HookState = "not-installed"
+		} else {
 			report.Notes = append(report.Notes, "the local agent installation could not be inspected")
+			report.HookState = "unavailable"
 		}
 	}
 	for _, component := range report.Components {
@@ -145,6 +157,47 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		report.Notes = append(report.Notes, "local component state is compared by fingerprint; only Codex Skill files have an apply target")
 	}
 	return report
+}
+
+func inspectEnvironmentRequirements(ctx context.Context, dependencies []environment.Reference) []environmentRequirementChange {
+	var changes []environmentRequirementChange
+	for _, dependency := range dependencies {
+		if dependency.Kind != "tool-requirement" {
+			continue
+		}
+		change := environmentRequirementChange{Dependency: dependency, State: "missing"}
+		installed, err := adapter.FindInstalled(ctx, dependency.Name)
+		switch {
+		case err == nil:
+			change.State = "available"
+			change.LocalVersion = safeAgentVersion(installed.Installation.Version)
+			if dependency.Version != "" && installed.Installation.Version != "" && dependency.Version != installed.Installation.Version {
+				change.Reason = "observed and local versions differ; compatibility is determined from session fields, not version number"
+			}
+		case errors.Is(err, adapter.ErrNotInstalled):
+			change.Reason = "the required Agent is not installed on this device"
+		default:
+			change.State = "unavailable"
+			change.Reason = "the local Agent installation could not be inspected"
+		}
+		changes = append(changes, change)
+	}
+	return changes
+}
+
+func inspectEnvironmentHook(installed adapter.AgentSessions) string {
+	hookLayout, ok := installed.Layout.(adapter.HookInstaller)
+	if !ok {
+		return "unsupported"
+	}
+	hooked, err := hookLayout.HookInstalled()
+	if err != nil {
+		return "unavailable"
+	}
+	if hooked {
+		return "installed"
+	}
+	return "not-installed"
 }
 
 func readEnvironmentComponentContents(ctx context.Context, state environmentContext, session *listSession) ([]environment.ComponentContent, error) {

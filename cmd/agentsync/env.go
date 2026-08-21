@@ -25,15 +25,17 @@ type envOptions struct {
 }
 
 type environmentPreviewReport struct {
-	Scope        string                       `json:"scope"`
-	Session      string                       `json:"session"`
-	Agent        string                       `json:"agent,omitempty"`
-	NativeID     string                       `json:"nativeId,omitempty"`
-	Dependencies []environment.Reference      `json:"dependencies,omitempty"`
-	Components   []environment.Component      `json:"components,omitempty"`
-	Changes      []environmentComponentChange `json:"changes,omitempty"`
-	Status       string                       `json:"status"`
-	Notes        []string                     `json:"notes"`
+	Scope        string                         `json:"scope"`
+	Session      string                         `json:"session"`
+	Agent        string                         `json:"agent,omitempty"`
+	NativeID     string                         `json:"nativeId,omitempty"`
+	Dependencies []environment.Reference        `json:"dependencies,omitempty"`
+	Requirements []environmentRequirementChange `json:"requirements,omitempty"`
+	HookState    string                         `json:"hookState,omitempty"`
+	Components   []environment.Component        `json:"components,omitempty"`
+	Changes      []environmentComponentChange   `json:"changes,omitempty"`
+	Status       string                         `json:"status"`
+	Notes        []string                       `json:"notes"`
 }
 
 func init() {
@@ -172,6 +174,11 @@ func writeEnvironmentPreviewText(w io.Writer, report environmentPreviewReport) e
 			return err
 		}
 	}
+	if report.HookState != "" {
+		if _, err := fmt.Fprintf(w, "local hook: %s\n", safeListText(report.HookState)); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "status: %s\n", report.Status); err != nil {
 		return err
 	}
@@ -189,6 +196,28 @@ func writeEnvironmentPreviewText(w io.Writer, report environmentPreviewReport) e
 			safeListText(dependency.Portability),
 			version,
 		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "tool requirements: %d\n", len(report.Requirements)); err != nil {
+		return err
+	}
+	for _, requirement := range report.Requirements {
+		line := fmt.Sprintf("- requirement kind=%s name=%s state=%s",
+			safeListText(requirement.Dependency.Kind),
+			safeListText(requirement.Dependency.Name),
+			safeListText(requirement.State),
+		)
+		if requirement.Dependency.Version != "" {
+			line += " observed-version=" + safeListText(requirement.Dependency.Version)
+		}
+		if requirement.LocalVersion != "" {
+			line += " local-version=" + safeListText(requirement.LocalVersion)
+		}
+		if requirement.Reason != "" {
+			line += " reason=" + safeListText(requirement.Reason)
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}
