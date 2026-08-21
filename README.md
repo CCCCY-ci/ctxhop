@@ -227,8 +227,8 @@ Before restoring, you can inspect the dependency references recorded for the ses
 This is a read-only preview. It does not install, apply or execute anything. If a safe
 Codex Skill, MCP intent or session-setting component was captured, the preview shows only
 its kind, scope, size and fingerprint; it never prints or applies the component body.
-For MCP intent and allowlisted project settings, the preview also reports whether
-the local configuration is missing, changed or unchanged. Unsafe or unreadable
+For MCP intent and allowlisted Codex settings, the preview compares the relevant
+global or project configuration and reports whether it is missing, changed or unchanged. Unsafe or unreadable
 values remain unavailable/manual; these configurations are never written by
 `env apply`. The preview also reports local tool availability and
 SessionEnd Hook status. A version difference is informational; adapter compatibility

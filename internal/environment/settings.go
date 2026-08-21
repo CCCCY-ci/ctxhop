@@ -2,6 +2,7 @@ package environment
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,11 +26,11 @@ var codexConfigSettingKeys = map[string]string{
 	"model_reasoning_effort": "effort",
 }
 
-func inspectCodexSettingsComponent(component Component, projectRoot string) LocalComponentState {
-	if component.Scope != "project" || strings.TrimSpace(projectRoot) == "" {
-		return LocalComponentState{State: ComponentStateUnavailable, Reason: "project Codex settings path is unavailable"}
+func inspectCodexSettingsComponent(component Component, agentHome, projectRoot string) LocalComponentState {
+	path, err := codexSettingsPath(component, agentHome, projectRoot)
+	if err != nil {
+		return LocalComponentState{State: ComponentStateUnavailable, Reason: err.Error()}
 	}
-	path := filepath.Join(projectRoot, ".codex", "config.toml")
 	result := LocalComponentState{Path: path}
 	info, err := os.Stat(path)
 	switch {
@@ -65,7 +66,7 @@ func inspectCodexSettingsComponent(component Component, projectRoot string) Loca
 		result.Reason = "local Codex settings could not be normalized"
 		return result
 	}
-	local, err := NewComponentContent("settings", codexSessionSettingsName, "project", component.ProjectID, component.Portability, "application/json", payload)
+	local, err := NewComponentContent("settings", codexSessionSettingsName, component.Scope, component.ProjectID, component.Portability, "application/json", payload)
 	if err != nil {
 		result.State = ComponentStateUnavailable
 		result.Reason = "local Codex settings could not be normalized safely"
@@ -77,6 +78,23 @@ func inspectCodexSettingsComponent(component Component, projectRoot string) Loca
 		result.State = ComponentStateChanged
 	}
 	return result
+}
+
+func codexSettingsPath(component Component, agentHome, projectRoot string) (string, error) {
+	switch component.Scope {
+	case "global":
+		if strings.TrimSpace(agentHome) == "" {
+			return "", fmt.Errorf("global Codex settings path is unavailable: %w", os.ErrNotExist)
+		}
+		return filepath.Join(agentHome, "config.toml"), nil
+	case "project":
+		if strings.TrimSpace(projectRoot) == "" {
+			return "", fmt.Errorf("project Codex settings path is unavailable: %w", os.ErrNotExist)
+		}
+		return filepath.Join(projectRoot, ".codex", "config.toml"), nil
+	default:
+		return "", fmt.Errorf("unsupported Codex settings scope %q", component.Scope)
+	}
 }
 
 func readCodexConfigSettings(path string) (map[string]string, bool, bool) {
@@ -123,6 +141,31 @@ func readCodexConfigSettings(path string) (map[string]string, bool, bool) {
 	return values, len(values) != 0, true
 }
 
+func readCodexConfigFileSettings(root string) (map[string]string, bool, bool) {
+	if strings.TrimSpace(root) == "" {
+		return nil, false, true
+	}
+	return readCodexSettingsFile(filepath.Join(root, "config.toml"))
+}
+
+func readCodexProjectSettings(root string) (map[string]string, bool, bool) {
+	if strings.TrimSpace(root) == "" {
+		return nil, false, true
+	}
+	return readCodexSettingsFile(filepath.Join(root, ".codex", "config.toml"))
+}
+
+func readCodexSettingsFile(path string) (map[string]string, bool, bool) {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, false, true
+	}
+	if err != nil {
+		return nil, false, false
+	}
+	return readCodexConfigSettings(path)
+}
+
 func safeCodexSettingValue(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || len([]byte(value)) > 256 || !utf8.ValidString(value) {
@@ -140,9 +183,17 @@ func safeCodexSettingValue(value string) bool {
 }
 
 // CaptureSessionSettings records only the small set of Codex settings that is
-// already present in structured session metadata. It is a project-scoped
-// snapshot for the session, not a copy of config.toml and not an apply plan.
+// already present in structured session metadata. Without local config paths it
+// keeps the component project-scoped, not a copy of config.toml or an apply plan.
 func CaptureSessionSettings(agent string, records [][]byte, projectID string) []ComponentContent {
+	return CaptureSessionSettingsWithSources(agent, "", "", records, projectID)
+}
+
+// CaptureSessionSettingsWithSources records the observed allowlisted settings
+// and chooses the narrowest useful scope. If the observed values are already
+// provided by the global config and the project config does not override one
+// of them, the component remains global. Otherwise it stays project-scoped.
+func CaptureSessionSettingsWithSources(agent, agentHome, projectRoot string, records [][]byte, projectID string) []ComponentContent {
 	if agent != "codex" || strings.TrimSpace(projectID) == "" {
 		return nil
 	}
@@ -154,11 +205,39 @@ func CaptureSessionSettings(agent string, records [][]byte, projectID string) []
 	if err != nil {
 		return nil
 	}
-	component, err := NewComponentContent("settings", codexSessionSettingsName, "project", projectID, "platform-specific", "application/json", payload)
+	scope, componentProjectID := codexSessionSettingsScope(values, agentHome, projectRoot, projectID)
+	component, err := NewComponentContent("settings", codexSessionSettingsName, scope, componentProjectID, "platform-specific", "application/json", payload)
 	if err != nil {
 		return nil
 	}
 	return []ComponentContent{component}
+}
+
+func codexSessionSettingsScope(values map[string]string, agentHome, projectRoot, projectID string) (string, string) {
+	global, globalFound, globalSafe := readCodexConfigFileSettings(agentHome)
+	if !globalSafe || !globalFound || len(values) == 0 {
+		return "project", projectID
+	}
+	if len(global) != len(values) {
+		return "project", projectID
+	}
+	for key, value := range values {
+		if global[key] != value {
+			return "project", projectID
+		}
+	}
+	project, projectFound, projectSafe := readCodexProjectSettings(projectRoot)
+	if !projectSafe {
+		return "project", projectID
+	}
+	if projectFound {
+		for key, value := range project {
+			if observed, ok := values[key]; ok && observed != value {
+				return "project", projectID
+			}
+		}
+	}
+	return "global", ""
 }
 
 func hasObservedCodexSessionSettings(records [][]byte) bool {

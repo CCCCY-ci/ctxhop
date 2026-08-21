@@ -51,7 +51,7 @@ func InspectComponent(component Component, agent, agentHome, projectRoot string)
 	case "mcp":
 		return inspectMCPComponent(component, agentHome, projectRoot)
 	case "settings":
-		return inspectCodexSettingsComponent(component, projectRoot)
+		return inspectCodexSettingsComponent(component, agentHome, projectRoot)
 	case "skill":
 		// Skills continue through the file-target path below.
 	default:
