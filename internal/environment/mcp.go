@@ -21,6 +21,64 @@ type mcpServerConfig struct {
 	Invalid           bool
 }
 
+func inspectMCPComponent(component Component, agentHome, projectRoot string) LocalComponentState {
+	path, err := mcpComponentPath(component, agentHome, projectRoot)
+	if err != nil {
+		return LocalComponentState{State: ComponentStateUnavailable, Reason: err.Error()}
+	}
+	result := LocalComponentState{Path: path}
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		result.State = ComponentStateMissing
+		return result
+	case err != nil:
+		result.State = ComponentStateUnavailable
+		result.Reason = err.Error()
+		return result
+	case !info.Mode().IsRegular():
+		result.State = ComponentStateFailed
+		result.Reason = "local MCP config is not a regular file"
+		return result
+	}
+	servers := readMCPConfig(path)
+	server, found := servers[component.Name]
+	if !found {
+		result.State = ComponentStateMissing
+		return result
+	}
+	reference := Reference{Kind: "mcp", Name: component.Name, Portability: component.Portability}
+	local, safe := newMCPComponent(reference, component.Scope, component.ProjectID, server)
+	if !safe {
+		result.State = ComponentStateUnavailable
+		result.Reason = "local MCP intent is unavailable or contains unsupported or sensitive values"
+		return result
+	}
+	if strings.EqualFold(local.Component.Fingerprint, component.Fingerprint) {
+		result.State = ComponentStateUnchanged
+	} else {
+		result.State = ComponentStateChanged
+	}
+	return result
+}
+
+func mcpComponentPath(component Component, agentHome, projectRoot string) (string, error) {
+	switch component.Scope {
+	case "global":
+		if strings.TrimSpace(agentHome) == "" {
+			return "", os.ErrNotExist
+		}
+		return filepath.Join(agentHome, "config.toml"), nil
+	case "project":
+		if strings.TrimSpace(projectRoot) == "" {
+			return "", os.ErrNotExist
+		}
+		return filepath.Join(projectRoot, ".codex", "config.toml"), nil
+	default:
+		return "", ErrInvalidComponent
+	}
+}
+
 // CaptureMCPComponents extracts only the observed Codex MCP servers from the
 // small allowlisted subset of config.toml. Environment sections and all their
 // values are ignored. The resulting component is an intent record, not a copy

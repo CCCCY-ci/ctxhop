@@ -36,15 +36,28 @@ type LocalComponentState struct {
 
 // InspectComponent compares a filtered component descriptor with the local
 // target. Only Codex Skill files have an automatic file target in this phase;
-// MCP and settings components remain manual, preview-only intent.
+// MCP and settings components are inspected read-only and remain manual for apply.
 func InspectComponent(component Component, agent, agentHome, projectRoot string) LocalComponentState {
 	if err := component.Validate(); err != nil {
 		return LocalComponentState{State: ComponentStateUnavailable, Reason: "remote component metadata is invalid"}
 	}
-	if component.Kind != "skill" || agent != "codex" {
+	if agent != "codex" {
 		return LocalComponentState{
 			State:  ComponentStateManual,
-			Reason: "only filtered Codex Skill files have a safe automatic file target",
+			Reason: "only Codex environment components can be inspected locally",
+		}
+	}
+	switch component.Kind {
+	case "mcp":
+		return inspectMCPComponent(component, agentHome, projectRoot)
+	case "settings":
+		return inspectCodexSettingsComponent(component, projectRoot)
+	case "skill":
+		// Skills continue through the file-target path below.
+	default:
+		return LocalComponentState{
+			State:  ComponentStateManual,
+			Reason: "component kind has no local inspection target",
 		}
 	}
 	path, err := ComponentPath(component, agent, agentHome, projectRoot)
@@ -104,10 +117,10 @@ func ApplyComponent(content ComponentContent, agent, agentHome, projectRoot, bac
 	if err := content.Validate(); err != nil {
 		return LocalComponentState{State: ComponentStateFailed, Reason: "remote component content is invalid"}, err
 	}
-	state := InspectComponent(content.Component, agent, agentHome, projectRoot)
 	if content.Component.Kind != "skill" || agent != "codex" {
-		return state, nil
+		return LocalComponentState{State: ComponentStateManual, Reason: "only filtered Codex Skill files have a safe automatic file target"}, nil
 	}
+	state := InspectComponent(content.Component, agent, agentHome, projectRoot)
 	if state.State == ComponentStateUnchanged {
 		return state, nil
 	}

@@ -2,16 +2,141 @@ package environment
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
 
 const codexSessionSettingsName = "codex-session-settings"
 
+const maxCodexSettingsConfigBytes = 1 << 20
+
 var codexSessionSettingKeys = []string{
 	"effort",
 	"model",
 	"model_provider",
+}
+
+var codexConfigSettingKeys = map[string]string{
+	"effort":                 "effort",
+	"model":                  "model",
+	"model_provider":         "model_provider",
+	"model_reasoning_effort": "effort",
+}
+
+func inspectCodexSettingsComponent(component Component, projectRoot string) LocalComponentState {
+	if component.Scope != "project" || strings.TrimSpace(projectRoot) == "" {
+		return LocalComponentState{State: ComponentStateUnavailable, Reason: "project Codex settings path is unavailable"}
+	}
+	path := filepath.Join(projectRoot, ".codex", "config.toml")
+	result := LocalComponentState{Path: path}
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		result.State = ComponentStateMissing
+		return result
+	case err != nil:
+		result.State = ComponentStateUnavailable
+		result.Reason = err.Error()
+		return result
+	case !info.Mode().IsRegular():
+		result.State = ComponentStateFailed
+		result.Reason = "local Codex settings file is not a regular file"
+		return result
+	case info.Size() <= 0 || info.Size() > maxCodexSettingsConfigBytes:
+		result.State = ComponentStateUnavailable
+		result.Reason = "local Codex settings file exceeds the inspection limit"
+		return result
+	}
+	values, found, safe := readCodexConfigSettings(path)
+	if !safe {
+		result.State = ComponentStateUnavailable
+		result.Reason = "local Codex settings contain unsupported or sensitive values"
+		return result
+	}
+	if !found {
+		result.State = ComponentStateMissing
+		return result
+	}
+	payload, err := json.Marshal(values)
+	if err != nil {
+		result.State = ComponentStateUnavailable
+		result.Reason = "local Codex settings could not be normalized"
+		return result
+	}
+	local, err := NewComponentContent("settings", codexSessionSettingsName, "project", component.ProjectID, component.Portability, "application/json", payload)
+	if err != nil {
+		result.State = ComponentStateUnavailable
+		result.Reason = "local Codex settings could not be normalized safely"
+		return result
+	}
+	if strings.EqualFold(local.Component.Fingerprint, component.Fingerprint) {
+		result.State = ComponentStateUnchanged
+	} else {
+		result.State = ComponentStateChanged
+	}
+	return result
+}
+
+func readCodexConfigSettings(path string) (map[string]string, bool, bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxCodexSettingsConfigBytes {
+		return nil, false, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, false
+	}
+	values := make(map[string]string)
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(string(data), "\r\n", "\n"), "\r", "\n"), "\n")
+	inSection := false
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(stripTOMLComment(rawLine))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inSection = true
+			continue
+		}
+		if inSection {
+			continue
+		}
+		key, rawValue, ok := splitTOMLAssignment(line)
+		if !ok {
+			continue
+		}
+		normalizedKey, recognized := codexConfigSettingKeys[key]
+		if !recognized {
+			continue
+		}
+		value, valid := parseTOMLString(rawValue)
+		if !valid || !safeCodexSettingValue(value) {
+			return nil, false, false
+		}
+		if previous, exists := values[normalizedKey]; exists && previous != value {
+			return nil, false, false
+		}
+		values[normalizedKey] = value
+	}
+	return values, len(values) != 0, true
+}
+
+func safeCodexSettingValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len([]byte(value)) > 256 || !utf8.ValidString(value) {
+		return false
+	}
+	if sensitiveMCPText(value) || containsSensitiveMaterial([]byte(value+"\n")) {
+		return false
+	}
+	for _, character := range value {
+		if character == '\r' || character == '\n' || character == '\t' || character == 0 || character < 0x20 {
+			return false
+		}
+	}
+	return true
 }
 
 // CaptureSessionSettings records only the small set of Codex settings that is
