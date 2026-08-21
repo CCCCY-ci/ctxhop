@@ -27,7 +27,20 @@ import (
 // sentinel so callers can distinguish a missing object from a transport
 // failure. Treating a transport failure as "missing" would let the sync layer
 // conclude that another device has no data, which is never safe.
-var ErrNotFound = errors.New("remote: object not found")
+var (
+	// ErrNotFound is the only absence sentinel. Transport and backend failures
+	// must never be mapped to it because callers use absence to resolve sync
+	// state.
+	ErrNotFound = errors.New("remote: object not found")
+
+	// The remaining sentinels classify backend failures without exposing
+	// provider response bodies, credentials, or endpoint details.
+	ErrNetwork     = errors.New("remote: network failure")
+	ErrTransient   = errors.New("remote: transient backend failure")
+	ErrCredentials = errors.New("remote: credentials rejected")
+	ErrPermission  = errors.New("remote: permission denied")
+	ErrStorageFull = errors.New("remote: storage full")
+)
 
 // ObjectInfo describes a stored object without exposing its contents.
 type ObjectInfo struct {

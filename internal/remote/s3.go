@@ -234,8 +234,8 @@ func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*h
 		// Deliberately not ErrNotFound. Reporting a transport failure as
 		// absence would tell the sync layer another device pushed nothing,
 		// which is how a fast-forward turns into a fork.
-		return nil, fmt.Errorf("cannot reach bucket %q: check the endpoint, network and credentials with 'agentsync doctor': %w",
-			s.cfg.Bucket, err)
+		return nil, fmt.Errorf("%w: cannot reach bucket %q: check the endpoint, network and credentials with 'agentsync doctor': %w",
+			ErrNetwork, s.cfg.Bucket, err)
 	}
 	return resp, nil
 }
@@ -287,10 +287,16 @@ func (s *S3) checkStatusCode(resp *http.Response, key, code string) error {
 			code = "unknown 404 error"
 		}
 		return fmt.Errorf("storage rejected the request with %s: check the bucket name and endpoint with 'agentsync doctor'", code)
-	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
-		return errors.New("access denied: check the credentials and the bucket policy with 'agentsync doctor'")
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%w: access denied: credentials were rejected; check the credentials with 'agentsync doctor'", ErrCredentials)
+	case resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("%w: access denied: check the credentials and the bucket policy with 'agentsync doctor'", ErrPermission)
+	case resp.StatusCode == http.StatusInsufficientStorage:
+		return fmt.Errorf("%w: storage returned %s: check the bucket quota with 'agentsync doctor'", ErrStorageFull, resp.Status)
+	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		return fmt.Errorf("%w: storage returned %s: retry, or check the bucket with 'agentsync doctor'", ErrTransient, resp.Status)
 	default:
-		return fmt.Errorf("storage returned %s: retry, or check the bucket with 'agentsync doctor'", resp.Status)
+		return fmt.Errorf("storage returned %s: check the bucket with 'agentsync doctor'", resp.Status)
 	}
 }
 

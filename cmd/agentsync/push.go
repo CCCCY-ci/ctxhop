@@ -485,6 +485,14 @@ func classifyPushFailure(err error) syncer.FailureClass {
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, syncer.ErrLocalHistoryChanged), errors.Is(err, syncer.ErrInvalidCursorState), errors.Is(err, syncer.ErrCursorCommit):
 		return syncer.FailureSessionCorrupt
+	case errors.Is(err, remote.ErrCredentials):
+		return syncer.FailureCredentials
+	case errors.Is(err, remote.ErrPermission):
+		return syncer.FailurePermission
+	case errors.Is(err, remote.ErrStorageFull):
+		return syncer.FailureStorageFull
+	case errors.Is(err, remote.ErrNetwork), errors.Is(err, remote.ErrTransient):
+		return syncer.FailureNetwork
 	default:
 		return syncer.FailureNetwork
 	}
