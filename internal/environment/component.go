@@ -109,7 +109,7 @@ func (c Component) Validate() error {
 			return ErrInvalidComponent
 		}
 	case "settings":
-		if c.Name != codexSessionSettingsName || c.Format != "application/json" {
+		if !isSessionSettingsName(c.Name) || c.Format != "application/json" {
 			return ErrInvalidComponent
 		}
 	default:

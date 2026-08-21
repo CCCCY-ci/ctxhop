@@ -30,3 +30,29 @@ func (codexEnvironmentProvider) Apply(content environment.ComponentContent, agen
 	}
 	return environment.ApplyComponent(content, "codex", agentHome, projectRoot, backupRoot)
 }
+
+// claudeEnvironmentProvider keeps Claude Code's JSON environment rules behind
+// the Claude adapter. Core synchronization only sees the common Provider
+// contract and therefore does not branch on Agent names.
+type claudeEnvironmentProvider struct{}
+
+func (claudeEnvironmentProvider) Name() string { return "claude-code" }
+
+func (claudeEnvironmentProvider) Capture(records [][]byte, version, agentHome, projectRoot, projectID string) environment.CaptureResult {
+	references := environment.DiscoverClaude(records, version)
+	components := environment.CaptureClaudeSkillComponents(agentHome, projectRoot, projectID, references)
+	components = append(components, environment.CaptureClaudeMCPComponents(agentHome, projectRoot, projectID, references)...)
+	components = append(components, environment.CaptureClaudeSessionSettings(agentHome, projectRoot, records, projectID)...)
+	return environment.CaptureResult{
+		References: references,
+		Components: environment.NormalizeComponentContents(components),
+	}
+}
+
+func (claudeEnvironmentProvider) Inspect(component environment.Component, agentHome, projectRoot string) environment.LocalComponentState {
+	return environment.InspectClaudeComponent(component, agentHome, projectRoot)
+}
+
+func (claudeEnvironmentProvider) Apply(content environment.ComponentContent, agentHome, projectRoot, backupRoot string) (environment.LocalComponentState, error) {
+	return environment.ApplyClaudeComponent(content, agentHome, projectRoot, backupRoot)
+}

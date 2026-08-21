@@ -8,15 +8,15 @@ in a local directory or S3-compatible object storage, and restores a selected
 session on another device.
 
 AgentSync syncs session records and a small encrypted manifest of structured
-agent/tool dependencies observed in those sessions. For a Codex skill actually
+agent/tool dependencies observed in those sessions. For a Claude Code or Codex skill actually
 referenced by a session, it may also include a filtered, non-sensitive `SKILL.md`
-body. For an observed Codex MCP server, it may include an allowlisted non-secret
-intent record with a command basename, safe arguments and startup timeout. Project
+body. For an observed Claude Code or Codex MCP server, it may include an allowlisted non-secret
+intent record containing only transport fields that the corresponding adapter can verify safely. Project
 files are not included in normal `push`, Hook or `watch` runs. An explicit
 `push --include-workspace` can add a bounded, filtered snapshot containing only
 files selected by the session fingerprint for Git projects, or a filtered directory scan for projects without Git. It never includes credentials,
-tokens, key material, `.env` files or `.git` data. For a Codex session, it may include
-an allowlisted summary of the model, provider and effort recorded in structured session
+tokens, key material, `.env` files or `.git` data. For a supported session, it may include
+an allowlisted summary of the settings supported by that Agent adapter, recorded in structured session
 metadata. The target device must already have the relevant agent and project checkout.
 
 The synchronization Core handles session-linked workspace snapshots, Git state,
@@ -32,7 +32,7 @@ tokens and key material never enter this pipeline.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks, an Agent-neutral Core for workspace, Git and no-Git synchronization, Adapter-provided environment previews, and explicit application of filtered Codex Skill,
+restore safety checks, an Agent-neutral Core for workspace, Git and no-Git synchronization, Adapter-provided environment previews, and explicit application of filtered Claude Code and Codex Skill,
 MCP intent and session-setting values, and bounded workspace snapshots with explicit
 upload/apply steps. Raw configuration, credentials and executable components remain
 outside synchronization.
@@ -231,12 +231,12 @@ Before restoring, you can inspect the dependency references recorded for the ses
 ~~~
 
 This is a read-only preview. It does not install, apply or execute anything. If a safe
-Codex Skill, MCP intent or session-setting component was captured, the preview shows only
+Claude Code or Codex Skill, MCP intent or session-setting component was captured, the preview shows only
 its kind, scope, size and fingerprint; it never prints or applies the component body.
-For MCP intent and allowlisted Codex settings, the preview compares the relevant
+For MCP intent and allowlisted Claude Code and Codex settings, the preview compares the relevant
 global or project configuration and reports whether it is missing, changed, unchanged
 or in conflict. Unsafe or unreadable values remain unavailable/manual. Only the
-allowlisted values can be written later; raw TOML, env values and credentials are
+allowlisted values can be written later; raw Claude JSON/TOML configuration, env values and credentials are
 never copied. The preview also reports local tool availability and
 SessionEnd Hook status. A version difference is informational; adapter compatibility
 is determined from the fields the session actually contains.
@@ -255,8 +255,8 @@ creates a backup before replacing an existing file:
 ./agentsync env apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-This writes only the allowlisted Skill body, MCP command/arguments/timeout, and
-session-setting keys. Existing TOML and MCP env sections are preserved, and the full
+This writes only the allowlisted Claude Code or Codex Skill body, filtered MCP transport values, and
+session-setting keys. Existing JSON/TOML configuration and MCP env/header sections are preserved, and the full
 file is backed up before replacement. A global component with a different project
 override is reported as a conflict and is not written. AgentSync does not install
 tools, copy raw configuration, start MCP servers or execute commands.

@@ -136,12 +136,11 @@ func (l Layout) Name() string {
 	return "claude-code"
 }
 
-// Environment returns the Claude environment capability. Claude session,
-// workspace, and Git synchronization remains fully supported by Core; its
-// environment configuration is currently reported for manual handling until
-// its safe, allowlisted file formats are implemented here.
+// Environment returns Claude's filtered environment capability. Session,
+// workspace, Git, and no-Git synchronization remain Core behavior; the provider
+// only handles Claude-specific Skill, MCP, and allowlisted settings formats.
 func (l Layout) Environment() environment.Provider {
-	return environment.UnsupportedProvider{Agent: l.Name()}
+	return claudeEnvironmentProvider{}
 }
 
 // ReadSession reads the local file identified by ref.

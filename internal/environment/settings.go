@@ -9,9 +9,16 @@ import (
 	"unicode/utf8"
 )
 
-const codexSessionSettingsName = "codex-session-settings"
+const (
+	codexSessionSettingsName  = "codex-session-settings"
+	claudeSessionSettingsName = "claude-session-settings"
+)
 
 const maxCodexSettingsConfigBytes = 1 << 20
+
+func isSessionSettingsName(name string) bool {
+	return name == codexSessionSettingsName || name == claudeSessionSettingsName
+}
 
 var codexSessionSettingKeys = []string{
 	"effort",

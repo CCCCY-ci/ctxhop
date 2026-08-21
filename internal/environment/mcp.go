@@ -407,13 +407,26 @@ func safeMCPCommand(command string) (string, bool) {
 
 func safeMCPArgument(argument string) bool {
 	argument = strings.TrimSpace(argument)
-	if argument == "" || len(argument) > maxMCPArgLength || strings.ContainsAny(argument, "\r\n") || sensitiveMCPText(argument) {
+	if argument == "" || len(argument) > maxMCPArgLength || strings.ContainsAny(argument, "\r\n") || sensitiveMCPText(argument) || sensitiveMCPFlag(argument) {
 		return false
 	}
 	if filepath.IsAbs(argument) || strings.HasPrefix(argument, "/") || windowsAbsolutePath(argument) {
 		return false
 	}
 	return true
+}
+
+func sensitiveMCPFlag(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimLeft(value, "-")
+	if separator := strings.IndexByte(value, '='); separator >= 0 {
+		value = value[:separator]
+	}
+	switch value {
+	case "env", "env-file", "header", "headers", "token", "secret", "password", "api-key", "access-key", "authorization", "credential", "credentials":
+		return true
+	}
+	return sensitiveKey(value)
 }
 
 func sensitiveMCPText(value string) bool {

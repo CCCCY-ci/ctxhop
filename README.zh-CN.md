@@ -7,13 +7,13 @@ AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Co
 并允许在另一台设备上选择会话进行恢复。
 
 AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工具依赖时，
-保存一份很小的加密依赖清单。对于 session 结构化引用到的 Codex skill，如果本地存在
+保存一份很小的加密依赖清单。对于 session 结构化引用到的 Claude Code 或 Codex skill，如果本地存在
 经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传；对于实际调用到的
-Codex MCP server，只保留命令 basename、安全参数和启动超时这类非敏感意图。普通的
+Claude Code 或 Codex MCP server，只保存适配器允许的非敏感传输意图；命令、参数、HTTP 地址会按格式过滤，env、header 和凭据不会保存。普通的
 `push`、Hook 和 `watch` 不会上传项目文件正文。只有明确执行 `push --include-workspace`
 时，Git 项目会根据 session fingerprint 选择文件；完全没有 Git 的项目会扫描安全过滤后的项目目录；凭据、
 token、密钥材料、`.env`、`.git` 数据都不会进入快照。
-如果 Codex session 的结构化元数据中明确记录了 model、model_provider 或 effort，
+如果 session 的结构化元数据包含当前 Agent 适配器支持的设置（Codex 的 model、model_provider、effort，Claude Code 的 model），
 AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍需要提前安装相应的 Agent，
 并准备好对应项目的 checkout。
 
@@ -27,7 +27,7 @@ Claude Code、Codex 以及后续接入的 Agent 都走同一套规则。Agent �
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
 Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查、统一的 workspace/Git/无 Git Core 流程，以及只读环境预览、
-经过明确确认后按需应用的 Codex Skill、MCP 意图和 session 设置组件，以及有限工作区
+经过明确确认后按需应用的 Claude Code/Codex Skill、MCP 意图和 session 设置组件，以及有限工作区
 快照。原始配置、凭据和可执行组件不进入同步。
 
 ## 快速开始
@@ -210,12 +210,12 @@ cd /path/to/the/same/project
 ~~~
 
 这个命令只读远端加密 metadata，不会安装、应用或执行任何内容。如果上传了安全的
-Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作用域、大小和 fingerprint，
+Claude Code/Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作用域、大小和 fingerprint，
 不显示也不应用组件正文。
-对于 MCP 意图和白名单 Codex settings，预览会按组件的 global/project 作用域检查相应配置，
+对于 MCP 意图和白名单 Claude Code/Codex settings，预览会按组件的 global/project 作用域检查相应配置，
 并显示 missing、changed 或 unchanged。
 不安全或无法读取的值会保持为 unavailable/manual；全局配置存在不同的项目级覆盖时会显示
-conflict。只有白名单值可以在后续显式写入，原始 TOML、env 值和凭据永远不会复制。
+conflict。只有白名单值可以在后续显式写入，原始 Claude JSON/TOML、env、header 值和凭据永远不会复制。
 预览还会显示本机工具是否存在以及 SessionEnd Hook 状态。版本差异只作提示，适配器仍按
 session 实际包含的字段判断兼容性。
 
@@ -231,8 +231,8 @@ session 实际包含的字段判断兼容性。
 ./agentsync env apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-这个命令只会写入白名单 Skill 正文、MCP 的 command/args/启动超时，以及 session settings
-中的白名单键。它会保留其它 TOML 内容和 MCP 的 env 段，并在替换前备份整个配置文件。
+这个命令只会写入白名单 Claude Code/Codex Skill 正文、过滤后的 MCP 传输意图，以及 session settings
+中的白名单键。它会保留其它 JSON/TOML 内容以及 MCP 的 env/header 段，并在替换前备份整个配置文件。
 如果全局组件存在不同的项目级覆盖，会报告 conflict 并停止写入。它不会安装工具、复制原始
 配置、启动 MCP 或执行命令。
 如果设备 A 使用了 `push --include-workspace`，设备 B 可以先查看并明确应用这个有限工作区快照。

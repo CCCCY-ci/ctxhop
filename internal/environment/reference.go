@@ -49,7 +49,7 @@ func (r Reference) Validate() error {
 	if !validName(r.Name) {
 		return fmt.Errorf("%w: invalid name", ErrInvalidReference)
 	}
-	if r.Kind == "settings" && r.Name != codexSessionSettingsName {
+	if r.Kind == "settings" && !isSessionSettingsName(r.Name) {
 		return fmt.Errorf("%w: unsupported settings reference", ErrInvalidReference)
 	}
 	if r.Version != "" && (!utf8.ValidString(r.Version) || len([]rune(r.Version)) > maxVersionLen || strings.ContainsAny(r.Version, "\r\n")) {
