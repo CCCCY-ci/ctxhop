@@ -71,27 +71,33 @@ type Stash struct {
 }
 
 type TransferMetadata struct {
-	Requested      bool   `json:"requested,omitempty"`
-	CommitRange    string `json:"commitRange,omitempty"`
-	CommitTip      string `json:"commitTip,omitempty"`
-	CommitBytes    int64  `json:"commitBytes,omitempty"`
-	CommitDigest   string `json:"commitDigest,omitempty"`
-	WorktreeBase   string `json:"worktreeBase,omitempty"`
-	WorktreeTip    string `json:"worktreeTip,omitempty"`
-	WorktreeBytes  int64  `json:"worktreeBytes,omitempty"`
-	WorktreeDigest string `json:"worktreeDigest,omitempty"`
-	Reason         string `json:"reason,omitempty"`
+	Requested        bool   `json:"requested,omitempty"`
+	CommitRange      string `json:"commitRange,omitempty"`
+	CommitTip        string `json:"commitTip,omitempty"`
+	CommitBytes      int64  `json:"commitBytes,omitempty"`
+	CommitDigest     string `json:"commitDigest,omitempty"`
+	WorktreeBase     string `json:"worktreeBase,omitempty"`
+	WorktreeTip      string `json:"worktreeTip,omitempty"`
+	WorktreeStashRef string `json:"worktreeStashRef,omitempty"`
+	WorktreeBytes    int64  `json:"worktreeBytes,omitempty"`
+	WorktreeDigest   string `json:"worktreeDigest,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+type TransferOptions struct {
+	StashRef string
 }
 
 type Transfer struct {
-	Version         int
-	ProjectIdentity string
-	CommitRange     string
-	CommitTip       string
-	CommitBundle    []byte
-	WorktreeBase    string
-	WorktreeTip     string
-	WorktreeBundle  []byte
+	Version          int
+	ProjectIdentity  string
+	CommitRange      string
+	CommitTip        string
+	CommitBundle     []byte
+	WorktreeBase     string
+	WorktreeTip      string
+	WorktreeStashRef string
+	WorktreeBundle   []byte
 }
 
 type stateWire struct {
@@ -107,14 +113,15 @@ type stateWire struct {
 }
 
 type transferWire struct {
-	Version         int    `json:"version"`
-	ProjectIdentity string `json:"projectIdentity,omitempty"`
-	CommitRange     string `json:"commitRange,omitempty"`
-	CommitTip       string `json:"commitTip,omitempty"`
-	CommitBundle    []byte `json:"commitBundle,omitempty"`
-	WorktreeBase    string `json:"worktreeBase,omitempty"`
-	WorktreeTip     string `json:"worktreeTip,omitempty"`
-	WorktreeBundle  []byte `json:"worktreeBundle,omitempty"`
+	Version          int    `json:"version"`
+	ProjectIdentity  string `json:"projectIdentity,omitempty"`
+	CommitRange      string `json:"commitRange,omitempty"`
+	CommitTip        string `json:"commitTip,omitempty"`
+	CommitBundle     []byte `json:"commitBundle,omitempty"`
+	WorktreeBase     string `json:"worktreeBase,omitempty"`
+	WorktreeTip      string `json:"worktreeTip,omitempty"`
+	WorktreeStashRef string `json:"worktreeStashRef,omitempty"`
+	WorktreeBundle   []byte `json:"worktreeBundle,omitempty"`
 }
 
 func (s State) Validate() error {
@@ -173,8 +180,8 @@ func (s State) Validate() error {
 		return errors.New("gitstate: too many stashes")
 	}
 	for _, stash := range s.Stashes {
-		if !strings.HasPrefix(stash.Ref, "stash@{") || !strings.HasSuffix(stash.Ref, "}") {
-			return errors.New("gitstate: invalid stash reference")
+		if err := validateStashRef(stash.Ref); err != nil {
+			return err
 		}
 		if err := validateText(stash.Subject, MaxTextBytes, "stash subject"); err != nil {
 			return err
@@ -251,6 +258,9 @@ func (t Transfer) Validate() error {
 	if err := validateHexOptional(t.WorktreeTip, "worktree tip"); err != nil {
 		return err
 	}
+	if err := validateStashRef(t.WorktreeStashRef); err != nil {
+		return err
+	}
 	if len(t.CommitBundle) > MaxTransferBytes || len(t.WorktreeBundle) > MaxTransferBytes {
 		return errors.New("gitstate: transfer is too large")
 	}
@@ -267,7 +277,8 @@ func (t Transfer) MarshalBinary() ([]byte, error) {
 	data, err := json.Marshal(transferWire{
 		Version: t.Version, ProjectIdentity: t.ProjectIdentity,
 		CommitRange: t.CommitRange, CommitTip: t.CommitTip, CommitBundle: t.CommitBundle,
-		WorktreeBase: t.WorktreeBase, WorktreeTip: t.WorktreeTip, WorktreeBundle: t.WorktreeBundle,
+		WorktreeBase: t.WorktreeBase, WorktreeTip: t.WorktreeTip,
+		WorktreeStashRef: t.WorktreeStashRef, WorktreeBundle: t.WorktreeBundle,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gitstate: encode transfer: %w", err)
@@ -297,7 +308,8 @@ func ParseTransfer(data []byte) (Transfer, error) {
 	transfer := Transfer{
 		Version: wire.Version, ProjectIdentity: wire.ProjectIdentity,
 		CommitRange: wire.CommitRange, CommitTip: wire.CommitTip, CommitBundle: wire.CommitBundle,
-		WorktreeBase: wire.WorktreeBase, WorktreeTip: wire.WorktreeTip, WorktreeBundle: wire.WorktreeBundle,
+		WorktreeBase: wire.WorktreeBase, WorktreeTip: wire.WorktreeTip,
+		WorktreeStashRef: wire.WorktreeStashRef, WorktreeBundle: wire.WorktreeBundle,
 	}
 	if err := transfer.Validate(); err != nil {
 		return Transfer{}, err
@@ -311,6 +323,7 @@ func TransferMetadataFor(transfer Transfer, requested bool, reason string) Trans
 	metadata.CommitTip = transfer.CommitTip
 	metadata.WorktreeBase = transfer.WorktreeBase
 	metadata.WorktreeTip = transfer.WorktreeTip
+	metadata.WorktreeStashRef = transfer.WorktreeStashRef
 	if len(transfer.CommitBundle) != 0 {
 		metadata.CommitBytes = int64(len(transfer.CommitBundle))
 		metadata.CommitDigest = digest(transfer.CommitBundle)
@@ -341,6 +354,9 @@ func validateTransferMetadata(metadata TransferMetadata) error {
 		return err
 	}
 	if err := validateHexOptional(metadata.WorktreeTip, "worktree tip"); err != nil {
+		return err
+	}
+	if err := validateStashRef(metadata.WorktreeStashRef); err != nil {
 		return err
 	}
 	for name, value := range map[string]string{"commit digest": metadata.CommitDigest, "worktree digest": metadata.WorktreeDigest} {
@@ -382,6 +398,30 @@ func validateRef(value, name string) error {
 	}
 	if len(value) > MaxPathBytes || strings.ContainsAny(value, "\x00\r\n") || strings.HasPrefix(value, "-") {
 		return fmt.Errorf("gitstate: invalid %s", name)
+	}
+	return nil
+}
+
+func ValidateStashRef(value string) error {
+	return validateStashRef(value)
+}
+
+func validateStashRef(value string) error {
+	if value == "" {
+		return nil
+	}
+	const prefix = "stash@{"
+	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, "}") {
+		return errors.New("gitstate: invalid stash reference")
+	}
+	index := value[len(prefix) : len(value)-1]
+	if index == "" {
+		return errors.New("gitstate: invalid stash reference")
+	}
+	for _, r := range index {
+		if r < '0' || r > '9' {
+			return errors.New("gitstate: invalid stash reference")
+		}
 	}
 	return nil
 }

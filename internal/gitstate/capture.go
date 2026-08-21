@@ -155,27 +155,39 @@ func Capture(ctx context.Context, root, projectIdentity string) (State, error) {
 }
 
 func CaptureTransfer(ctx context.Context, root string, state State) (State, Transfer, error) {
+	return CaptureTransferWithOptions(ctx, root, state, TransferOptions{})
+}
+
+func CaptureTransferWithOptions(ctx context.Context, root string, state State, options TransferOptions) (State, Transfer, error) {
 	if ctx == nil {
 		return State{}, Transfer{}, errors.New("gitstate: context is required")
 	}
 	if err := state.Validate(); err != nil {
 		return State{}, Transfer{}, err
 	}
+	if err := validateStashRef(options.StashRef); err != nil {
+		return State{}, Transfer{}, err
+	}
 	state.Transfer = TransferMetadata{Requested: true}
 	transfer := Transfer{Version: Version, ProjectIdentity: state.ProjectIdentity}
 	if state.Mode != ModeGit {
+		if options.StashRef != "" {
+			return State{}, Transfer{}, errors.New("gitstate: selected stash requires a Git project")
+		}
 		state.Transfer.Reason = "Git is not available for this project"
 		return state, transfer, nil
-	}
-	if state.Worktree.SensitiveOmitted {
-		return State{}, Transfer{}, ErrSensitiveContent
 	}
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return State{}, Transfer{}, fmt.Errorf("gitstate: locate project root: %w", err)
 	}
-	if err := inspectWorkingTree(ctx, absolute, state); err != nil {
-		return State{}, Transfer{}, err
+	if options.StashRef == "" {
+		if state.Worktree.SensitiveOmitted {
+			return State{}, Transfer{}, ErrSensitiveContent
+		}
+		if err := inspectWorkingTree(ctx, absolute, state); err != nil {
+			return State{}, Transfer{}, err
+		}
 	}
 	if state.Repository.Ahead > 0 {
 		if state.Repository.Upstream == "" || state.Repository.Head == "" {
@@ -193,7 +205,26 @@ func CaptureTransfer(ctx context.Context, root string, state State) (State, Tran
 			transfer.CommitBundle = bundle
 		}
 	}
-	if len(state.Worktree.Entries) != 0 {
+	if options.StashRef != "" {
+		if state.Repository.Head == "" {
+			return State{}, Transfer{}, errors.New("gitstate: selected stash requires a repository base commit")
+		}
+		stashTip, resolveErr := resolveSelectedStash(ctx, absolute, options.StashRef)
+		if resolveErr != nil {
+			return State{}, Transfer{}, resolveErr
+		}
+		if inspectErr := inspectStash(ctx, absolute, stashTip); inspectErr != nil {
+			return State{}, Transfer{}, inspectErr
+		}
+		bundle, bundleErr := createBundle(ctx, absolute, stashTip)
+		if bundleErr != nil {
+			return State{}, Transfer{}, bundleErr
+		}
+		transfer.WorktreeBase = state.Repository.Head
+		transfer.WorktreeTip = stashTip
+		transfer.WorktreeStashRef = options.StashRef
+		transfer.WorktreeBundle = bundle
+	} else if len(state.Worktree.Entries) != 0 {
 		if state.Repository.Head == "" {
 			state.Transfer.Reason = "the repository has no base commit for a worktree snapshot"
 		} else {
@@ -213,6 +244,54 @@ func CaptureTransfer(ctx context.Context, root string, state State) (State, Tran
 		state.Transfer.Reason = "no unpushed commits or uncommitted changes were found"
 	}
 	return state, transfer, nil
+}
+
+func resolveSelectedStash(ctx context.Context, root, ref string) (string, error) {
+	if err := validateStashRef(ref); err != nil {
+		return "", err
+	}
+	tip, err := runGit(ctx, root, "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("gitstate: selected stash %q was not found: %w", ref, ErrTransferUnavailable)
+	}
+	tip = strings.TrimSpace(tip)
+	if err := validateHex(tip, "stash tip"); err != nil {
+		return "", fmt.Errorf("gitstate: selected stash %q is invalid: %w", ref, ErrTransferUnavailable)
+	}
+	return tip, nil
+}
+
+func inspectStash(ctx context.Context, root, ref string) error {
+	data, err := runGitRaw(ctx, root, "stash", "show", "--name-only", "--include-untracked", ref)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("gitstate: inspect selected stash paths: %w", ErrTransferUnavailable)
+	}
+	paths, pathsErr := stashShowPaths(data)
+	if pathsErr != nil {
+		return pathsErr
+	}
+	for _, path := range paths {
+		if err := validateRelativePath(path); err != nil {
+			return fmt.Errorf("gitstate: selected stash contains an invalid path: %w", err)
+		}
+		if sensitivePath(path) {
+			return ErrSensitiveContent
+		}
+	}
+	data, err = runGitRaw(ctx, root, "stash", "show", "--include-untracked", "--patch", "--binary", "--no-ext-diff", ref)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("gitstate: inspect selected stash changes: %w", ErrTransferUnavailable)
+	}
+	return inspectDiff(data)
 }
 
 // Git stash create does not include ordinary untracked files on supported Git

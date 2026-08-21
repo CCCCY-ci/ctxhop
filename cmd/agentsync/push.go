@@ -30,6 +30,7 @@ type pushOptions struct {
 	session          string
 	includeWorkspace bool
 	includeGitState  bool
+	gitStash         string
 }
 
 type pushSummary struct {
@@ -145,6 +146,7 @@ func parsePushOptions(args []string) (pushOptions, error) {
 	flags.StringVar(&options.session, "session", "", "push one native session ID")
 	flags.BoolVar(&options.includeWorkspace, "include-workspace", false, "upload a filtered workspace snapshot; no-Git projects scan the safe project directory")
 	flags.BoolVar(&options.includeGitState, "include-git-state", false, "upload explicit Git commit and worktree transfer data")
+	flags.StringVar(&options.gitStash, "git-stash", "", "select an existing Git stash for the worktree transfer")
 	if err := flags.Parse(args); err != nil {
 		return pushOptions{}, fmt.Errorf("push: %w", err)
 	}
@@ -159,6 +161,13 @@ func parsePushOptions(args []string) (pushOptions, error) {
 	}
 	if strings.ContainsRune(options.session, 0) {
 		return pushOptions{}, errors.New("push: session ID contains an invalid character")
+	}
+	if options.gitStash != "" {
+		if err := gitstate.ValidateStashRef(options.gitStash); err != nil {
+			return pushOptions{}, fmt.Errorf("push: --git-stash: %w", err)
+		}
+		// Selecting a stash is itself the explicit opt-in for Git transfer data.
+		options.includeGitState = true
 	}
 	return options, nil
 }
@@ -239,7 +248,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.includeWorkspace, includeDirectoryWorkspace: options.includeWorkspace && !current.GitBacked, includeGitTransfer: options.includeGitState})
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.includeWorkspace, includeDirectoryWorkspace: options.includeWorkspace && !current.GitBacked, includeGitTransfer: options.includeGitState, gitStash: options.gitStash})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -289,6 +298,7 @@ type pushSessionOptions struct {
 	includeWorkspace          bool
 	includeDirectoryWorkspace bool
 	includeGitTransfer        bool
+	gitStash                  string
 	projectIdentity           string
 }
 
@@ -410,7 +420,7 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 		var transfer gitstate.Transfer
 		if options.includeGitTransfer {
 			var transferErr error
-			gitState, transfer, transferErr = gitstate.CaptureTransfer(ctx, projectRoot, gitState)
+			gitState, transfer, transferErr = gitstate.CaptureTransferWithOptions(ctx, projectRoot, gitState, gitstate.TransferOptions{StashRef: options.gitStash})
 			if transferErr != nil {
 				summary.fail("git-transfer-record", transferErr)
 				continue

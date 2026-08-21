@@ -135,6 +135,17 @@ tracked/untracked 的未提交修改到另一份 checkout，执行：
 这个选项会先做敏感内容预检，再生成 Git 原生 bundle。它不会上传整个 .git 目录。
 设备 B 需要明确执行应用；commit 会先导入隐藏的 AgentSync ref，当前分支不会自动改变。
 
+如果要传输已有的 stash，而不是当前工作区，先查看 stash 列表，再明确指定引用：
+
+~~~bash
+git stash list
+./agentsync push --git-stash 'stash@{0}'
+~~~
+
+`--git-stash` 会自动启用显式 Git 传输，并用指定 stash 替代传输中的 worktree 部分。
+原 stash 只会被读取，不会被应用、修改或删除；当前工作区的修改不会进入这份 worktree bundle。
+指定的 stash 仍会执行同样的敏感路径和内容安全检查。
+
 没有可用 Git 身份的项目使用手动名称：
 
 ~~~bash
@@ -307,7 +318,7 @@ cd /path/to/another/project
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | 设置项目同步策略。 |
 | `agentsync project list [--json]` | 列出已绑定项目及其策略。 |
 | `agentsync project discover [--json]` | 列出已授权设备发布的项目；不会自动绑定或 clone 项目。 |
-| `agentsync push [--include-workspace] [--include-git-state] [--session SESSION_ID 或 SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录和加密 Git 状态；--include-git-state 明确上传 Git 原生 commit/worktree 传输内容，--include-workspace 是另一条有限文件快照路径。 |
+| `agentsync push [--include-workspace] [--include-git-state] [--git-stash STASH_REF] [--session SESSION_ID 或 SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录和加密 Git 状态；--include-git-state 明确上传 Git 原生 commit/worktree 传输内容，--git-stash 选择已有的 `stash@{N}` 并自动启用 --include-git-state，--include-workspace 是另一条有限文件快照路径。 |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |

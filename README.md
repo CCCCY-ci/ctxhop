@@ -147,6 +147,20 @@ uploads the whole .git directory. The target device must apply the transfer
 explicitly; commits are imported into a hidden AgentSync ref and the current
 branch is left unchanged.
 
+If you want to transfer an existing stash instead of the current worktree,
+inspect the available refs and select one explicitly:
+
+~~~bash
+git stash list
+./agentsync push --git-stash 'stash@{0}'
+~~~
+
+`--git-stash` automatically enables the explicit Git transfer path. It replaces
+the worktree part of the transfer with the selected stash; the original stash
+is only read and is not applied, changed or deleted. The current worktree
+changes are not included in that worktree bundle. The selected stash still
+goes through the same path and content safety checks.
+
 For a project without a usable Git identity:
 
 ~~~bash
@@ -343,7 +357,7 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | Set a project's synchronization policy. |
 | `agentsync project list [--json]` | List bound projects and their policies. |
 | `agentsync project discover [--json]` | List projects announced by authorized devices. It does not bind or clone them. |
-| `agentsync push [--include-workspace] [--include-git-state] [--session SESSION_ID or SESSION_ID] [--agentsync-hook]` | Upload new records and encrypted Git metadata for the current project. --include-git-state explicitly uploads Git-native commit/worktree transfer data; --include-workspace is the separate bounded file snapshot. |
+| `agentsync push [--include-workspace] [--include-git-state] [--git-stash STASH_REF] [--session SESSION_ID or SESSION_ID] [--agentsync-hook]` | Upload new records and encrypted Git metadata for the current project. --include-git-state explicitly uploads Git-native commit/worktree transfer data; --git-stash selects an existing `stash@{N}` and implies --include-git-state; --include-workspace is the separate bounded file snapshot. |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | Repeatedly scan and push the current project; `--once` performs one scan. |
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |

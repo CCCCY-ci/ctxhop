@@ -45,15 +45,16 @@ type gitStashReport struct {
 }
 
 type gitTransferReport struct {
-	Requested      bool   `json:"requested"`
-	CommitRange    string `json:"commitRange,omitempty"`
-	CommitBytes    int64  `json:"commitBytes,omitempty"`
-	CommitDigest   string `json:"commitDigest,omitempty"`
-	WorktreeBase   string `json:"worktreeBase,omitempty"`
-	WorktreeBytes  int64  `json:"worktreeBytes,omitempty"`
-	WorktreeDigest string `json:"worktreeDigest,omitempty"`
-	Reason         string `json:"reason,omitempty"`
-	BodyAvailable  bool   `json:"bodyAvailable"`
+	Requested        bool   `json:"requested"`
+	CommitRange      string `json:"commitRange,omitempty"`
+	CommitBytes      int64  `json:"commitBytes,omitempty"`
+	CommitDigest     string `json:"commitDigest,omitempty"`
+	WorktreeBase     string `json:"worktreeBase,omitempty"`
+	WorktreeStashRef string `json:"worktreeStashRef,omitempty"`
+	WorktreeBytes    int64  `json:"worktreeBytes,omitempty"`
+	WorktreeDigest   string `json:"worktreeDigest,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	BodyAvailable    bool   `json:"bodyAvailable"`
 }
 
 type gitPreviewReport struct {
@@ -295,8 +296,9 @@ func buildGitPreviewReport(state environmentContext, session *listSession, sourc
 		SourceClean: source.Worktree.Clean, SensitiveOmitted: source.Worktree.SensitiveOmitted,
 		Transfer: gitTransferReport{Requested: source.Transfer.Requested, CommitRange: source.Transfer.CommitRange,
 			CommitBytes: source.Transfer.CommitBytes, CommitDigest: source.Transfer.CommitDigest,
-			WorktreeBase: source.Transfer.WorktreeBase, WorktreeBytes: source.Transfer.WorktreeBytes,
-			WorktreeDigest: source.Transfer.WorktreeDigest, Reason: source.Transfer.Reason},
+			WorktreeBase: source.Transfer.WorktreeBase, WorktreeStashRef: source.Transfer.WorktreeStashRef,
+			WorktreeBytes: source.Transfer.WorktreeBytes, WorktreeDigest: source.Transfer.WorktreeDigest,
+			Reason: source.Transfer.Reason},
 		Status: "metadata-only",
 		Notes:  []string{"Git metadata is read from the encrypted source-device object; no local Git state has changed"},
 	}
@@ -393,6 +395,11 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 	}
 	if report.Transfer.CommitBytes != 0 || report.Transfer.WorktreeBytes != 0 {
 		if _, err := fmt.Fprintf(w, "transfer bytes: commits=%d worktree=%d\n", report.Transfer.CommitBytes, report.Transfer.WorktreeBytes); err != nil {
+			return err
+		}
+	}
+	if report.Transfer.WorktreeStashRef != "" {
+		if _, err := fmt.Fprintf(w, "selected stash: %s\n", safeListText(report.Transfer.WorktreeStashRef)); err != nil {
 			return err
 		}
 	}

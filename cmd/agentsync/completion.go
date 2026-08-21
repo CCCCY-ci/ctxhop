@@ -38,7 +38,7 @@ var completionOptions = map[string][]string{
 	"history":               {"--json"},
 	"history prune":         {"--yes", "--remote-id", "--path", "--keep", "--before"},
 	"stats":                 {"--json"},
-	"push":                  {"--agentsync-hook", "--session", "--include-workspace", "--include-git-state"},
+	"push":                  {"--agentsync-hook", "--session", "--include-workspace", "--include-git-state", "--git-stash"},
 	"watch":                 {"--interval", "--once", "--json"},
 	"doctor":                {"--json"},
 	"env preview":           {"--json"},
