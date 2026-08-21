@@ -79,6 +79,9 @@ func run(args []string) error {
 	if len(args) == 0 {
 		return runHelp(nil)
 	}
+	if args[0] == "/" {
+		return writeCommandDiscovery(os.Stdout, args[1:])
+	}
 
 	name := args[0]
 	for _, c := range commands {
@@ -100,9 +103,12 @@ func runVersion([]string) error {
 	return err
 }
 
-func runHelp([]string) error {
+func runHelp(args []string) error {
 	// Usage goes to stdout: it is the requested output of `help`, not a
 	// diagnostic (§11.2).
+	if len(args) != 0 {
+		return writeCommandDiscovery(os.Stdout, args)
+	}
 	return writeHelp(os.Stdout)
 }
 
@@ -119,6 +125,6 @@ func writeHelp(w io.Writer) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprint(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\n")
+	_, err := fmt.Fprint(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nUse `agentsync /` to browse command groups.\n")
 	return err
 }

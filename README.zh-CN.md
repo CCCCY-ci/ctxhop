@@ -334,6 +334,9 @@ cd /path/to/another/project
 下面是一张当前支持的完整命令表。除非命令提供 path 参数，会话相关命令都针对
 当前项目。删除类命令默认会要求确认，传入 `--yes` 才会跳过确认。
 
+如果忘记命令，可以运行 `agentsync /` 查看一级命令，再运行 `agentsync / git`（或其他分组）
+只查看该分组的动作。`agentsync help git apply` 会显示这个入口支持的参数。已有命令写法仍然保留。
+
 | 命令 | 说明 |
 |---|---|
 | `agentsync help` | 显示命令用法。 |

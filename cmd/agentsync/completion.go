@@ -117,7 +117,8 @@ func parseCompletionShell(args []string) (string, error) {
 }
 
 func completionCommandNames() []string {
-	names := make([]string, 0, len(commands))
+	names := make([]string, 0, len(commands)+1)
+	names = append(names, "/")
 	for _, command := range commands {
 		names = append(names, command.name)
 	}
