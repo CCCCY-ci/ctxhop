@@ -128,10 +128,12 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		},
 	}
 	agentHome := ""
+	var provider environment.Provider = environment.UnsupportedProvider{Agent: session.Agent}
 	if session.Agent != "" {
 		installed, err := adapter.FindInstalled(ctx, session.Agent)
 		if err == nil {
 			agentHome = installed.Installation.DataDir
+			provider = adapter.EnvironmentFor(installed.Layout)
 			report.HookState = inspectEnvironmentHook(installed)
 		} else if errors.Is(err, adapter.ErrNotInstalled) {
 			report.HookState = "not-installed"
@@ -141,7 +143,7 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		}
 	}
 	for _, component := range report.Components {
-		local := environment.InspectComponent(component, session.Agent, agentHome, state.CurrentRoot)
+		local := provider.Inspect(component, agentHome, state.CurrentRoot)
 		report.Changes = append(report.Changes, environmentComponentChange{
 			Component: component,
 			Path:      local.Path,
@@ -154,7 +156,7 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		report.Notes = append(report.Notes, "no structured dependency was observed in this session")
 	}
 	if len(report.Changes) != 0 {
-		report.Notes = append(report.Notes, "local component state is compared by fingerprint; only filtered Codex component values are eligible for explicit apply")
+		report.Notes = append(report.Notes, "local component state is compared by fingerprint; only values supported by the selected Agent adapter are eligible for explicit apply")
 	}
 	return report
 }
@@ -249,10 +251,12 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 		}
 	}
 	agentHome := ""
+	var provider environment.Provider = environment.UnsupportedProvider{Agent: session.Agent}
 	if session.Agent != "" {
 		installed, installErr := adapter.FindInstalled(ctx, session.Agent)
 		if installErr == nil {
 			agentHome = installed.Installation.DataDir
+			provider = adapter.EnvironmentFor(installed.Layout)
 		} else if !errors.Is(installErr, adapter.ErrNotInstalled) {
 			return fmt.Errorf("env apply: inspect %s installation: %w", session.Agent, installErr)
 		}
@@ -284,13 +288,7 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 			applyErrors = append(applyErrors, fmt.Errorf("%s: component body is unavailable", change.Component.Name))
 			continue
 		}
-		var local environment.LocalComponentState
-		var applyErr error
-		if change.Component.Kind == "mcp" || change.Component.Kind == "settings" {
-			local, applyErr = environment.ApplyConfigComponent(content, session.Agent, agentHome, state.CurrentRoot, backupRoot)
-		} else {
-			local, applyErr = environment.ApplyComponent(content, session.Agent, agentHome, state.CurrentRoot, backupRoot)
-		}
+		local, applyErr := provider.Apply(content, agentHome, state.CurrentRoot, backupRoot)
 		change.Path = local.Path
 		change.State = local.State
 		change.Backup = local.Backup
@@ -314,9 +312,9 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 		report.Status = "no-changes"
 	}
 	if applied != 0 {
-		report.Notes = append(report.Notes, fmt.Sprintf("applied %d filtered Codex component(s); backups were created before replacements", applied))
+		report.Notes = append(report.Notes, fmt.Sprintf("applied %d filtered environment component(s); backups were created before replacements", applied))
 	}
-	report.Notes = append(report.Notes, "only allowlisted Skill, MCP intent and session-setting values were written; raw configuration, secrets and commands were not copied or executed")
+	report.Notes = append(report.Notes, "only allowlisted values supplied by the Agent adapter were written; raw configuration, secrets and commands were not copied or executed")
 	if len(applyErrors) != 0 {
 		return errors.Join(applyErrors...)
 	}

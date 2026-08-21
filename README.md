@@ -19,6 +19,11 @@ tokens, key material, `.env` files or `.git` data. For a Codex session, it may i
 an allowlisted summary of the model, provider and effort recorded in structured session
 metadata. The target device must already have the relevant agent and project checkout.
 
+The synchronization Core handles session-linked workspace snapshots, Git state,
+and no-Git directory snapshots the same way for every supported Agent. Agent-specific
+environment files are selected only by the corresponding Adapter; an unknown format
+is shown as manual and is never guessed, installed, or written.
+
 Session and environment payloads, workspace snapshots, and Git transfer bodies are
 normalized and compressed when beneficial before encryption. The versioned wrapper
 has bounded decompression and expansion checks; small or incompressible bodies stay
@@ -27,7 +32,7 @@ tokens and key material never enter this pipeline.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks, environment previews, explicit application of filtered Codex Skill,
+restore safety checks, an Agent-neutral Core for workspace, Git and no-Git synchronization, Adapter-provided environment previews, and explicit application of filtered Codex Skill,
 MCP intent and session-setting values, and bounded workspace snapshots with explicit
 upload/apply steps. Raw configuration, credentials and executable components remain
 outside synchronization.
@@ -475,7 +480,7 @@ Environment credentials are not written to disk.
   key material or .env file is uploaded. git preview is read-only; git apply --yes
   imports commits into a hidden ref and applies a worktree snapshot only on a clean matching
   base. It never switches branches, commits, merges, rebases or pushes.
-- The target device must already have Claude Code and the project prepared. Environment apply does not install the Agent, MCP servers or runtime dependencies.
+- The target device must already have the relevant Agent and the project prepared. Environment apply does not install the Agent, MCP servers or runtime dependencies.
 - Git projects provide stronger workspace checks. No-Git projects use a manual identity;
   normal workspace context uses a touched-file fallback, while explicit --include-workspace uses a bounded directory scan.
 - A server without Claude Code can store data and run administrative checks, but

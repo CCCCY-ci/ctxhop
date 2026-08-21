@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 )
 
 // CodexLayout locates the JSONL sessions written by Codex CLI.
@@ -48,6 +50,13 @@ func DefaultCodexHome() (string, error) {
 // Name identifies the Codex adapter in configuration and session metadata.
 func (l CodexLayout) Name() string {
 	return "codex"
+}
+
+// Environment returns the Codex-specific filtered environment capability.
+// Core invokes it through adapter.EnvironmentFor and never selects it by
+// comparing an Agent name.
+func (l CodexLayout) Environment() environment.Provider {
+	return codexEnvironmentProvider{}
 }
 
 // SessionsDir is the root of Codex's dated JSONL session tree.

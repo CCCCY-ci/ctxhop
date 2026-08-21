@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 )
 
 // ErrCorruptSession reports a record that is fully written but unparseable.
@@ -132,6 +134,14 @@ type Layout struct {
 // Name identifies the Claude Code adapter in configuration and metadata.
 func (l Layout) Name() string {
 	return "claude-code"
+}
+
+// Environment returns the Claude environment capability. Claude session,
+// workspace, and Git synchronization remains fully supported by Core; its
+// environment configuration is currently reported for manual handling until
+// its safe, allowlisted file formats are implemented here.
+func (l Layout) Environment() environment.Provider {
+	return environment.UnsupportedProvider{Agent: l.Name()}
 }
 
 // ReadSession reads the local file identified by ref.

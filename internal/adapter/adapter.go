@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/CCCCY-ci/agentsync/internal/environment"
 )
 
 // ErrNotInstalled is returned by Detect when the agent is absent from this
@@ -212,4 +214,26 @@ type HookInstaller interface {
 
 	// HookInstalled reports whether our hook is currently registered.
 	HookInstalled() (bool, error)
+}
+
+// EnvironmentCapable is an optional Adapter capability. Core session,
+// workspace, Git, and no-Git synchronization never requires it; it is only
+// used for environment components whose on-disk format belongs to one Agent.
+type EnvironmentCapable interface {
+	Environment() environment.Provider
+}
+
+// EnvironmentFor returns the environment provider owned by a layout. Layouts
+// that do not expose one receive a fail-closed provider instead of causing the
+// command layer to branch on an Agent name.
+func EnvironmentFor(layout SessionLayout) environment.Provider {
+	if layout != nil {
+		if capable, ok := layout.(EnvironmentCapable); ok {
+			if provider := capable.Environment(); provider != nil {
+				return provider
+			}
+		}
+		return environment.UnsupportedProvider{Agent: layout.Name()}
+	}
+	return environment.UnsupportedProvider{}
 }

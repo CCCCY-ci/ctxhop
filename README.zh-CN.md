@@ -17,12 +17,16 @@ token、密钥材料、`.env`、`.git` 数据都不会进入快照。
 AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍需要提前安装相应的 Agent，
 并准备好对应项目的 checkout。
 
+workspace 快照、Git 状态、Git/非 Git 项目处理和会话恢复属于统一的 Core 流程，
+Claude Code、Codex 以及后续接入的 Agent 都走同一套规则。Agent 特有的环境文件只由
+对应 Adapter 处理；无法确认格式时只显示为 manual，不会猜测路径、自动安装或写入文件。
+
 会话正文、环境清单、工作区快照和 Git 传输正文会先规范化，并在压缩确实能减少体积时压缩，
 再加密上传。压缩封装带有格式版本、大小和解压比例限制；过小或不可压缩的内容保持原样，
 旧的未压缩远端对象仍然可以读取。凭据、token 和密钥材料不会进入这条流水线。
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
-Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查，以及只读环境预览、
+Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查、统一的 workspace/Git/无 Git Core 流程，以及只读环境预览、
 经过明确确认后按需应用的 Codex Skill、MCP 意图和 session 设置组件，以及有限工作区
 快照。原始配置、凭据和可执行组件不进入同步。
 
@@ -421,7 +425,7 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
   密钥材料和 .env 文件永不上传。git preview 只读；git apply --yes 只会把 commit
   导入隐藏 ref，并在目标工作区干净且基线匹配时应用工作区快照，不会切换分支、提交、
   merge、rebase 或 push。
-- 目标设备必须提前准备好 Claude Code 和项目；环境应用不会安装 Agent、MCP server 或运行时依赖。
+- 目标设备必须提前准备好对应的 Agent 和项目；环境应用不会安装 Agent、MCP server 或运行时依赖。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 manual identity。普通工作区上下文使用 touched 文件回退检查，显式 --include-workspace 时使用有限目录扫描。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复
   Claude 会话。

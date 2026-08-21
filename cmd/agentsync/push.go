@@ -14,7 +14,6 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/environment"
 	"github.com/CCCCY-ci/agentsync/internal/gitstate"
 	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
@@ -374,16 +373,8 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 			summary.fail("remote-push", err)
 			continue
 		}
-		agentName := ref.Agent
-		if agentName == "" {
-			agentName = layout.Name()
-		}
-		dependencies := environment.Discover(data.Records, agentName, installation.Version)
-		components := environment.CaptureSkillComponents(agentName, installation.DataDir, projectRoot, projectID, dependencies)
-		components = append(components, environment.CaptureMCPComponents(agentName, installation.DataDir, projectRoot, projectID, dependencies)...)
-		components = append(components, environment.CaptureSessionSettingsWithSources(agentName, installation.DataDir, projectRoot, data.Records, projectID)...)
-		components = environment.NormalizeComponentContents(components)
-		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, dependencies, components); err != nil {
+		environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
+		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
 			summary.fail("environment-record", err)
 			continue
 		}
