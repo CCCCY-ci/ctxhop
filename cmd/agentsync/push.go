@@ -49,7 +49,7 @@ func (s *pushSummary) fail(stage string, err error) {
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
 	switch stage {
-	case "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-record", "device-record", "project-record":
+	case "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
@@ -413,7 +413,7 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 			var transferErr error
 			gitState, transfer, transferErr = gitstate.CaptureTransferWithOptions(ctx, projectRoot, gitState, gitstate.TransferOptions{StashRef: options.gitStash})
 			if transferErr != nil {
-				summary.fail("git-transfer-record", transferErr)
+				summary.fail("git-transfer-capture", transferErr)
 				continue
 			}
 		}
@@ -423,7 +423,7 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 		}
 		if options.includeGitTransfer && (len(transfer.CommitBundle) != 0 || len(transfer.WorktreeBundle) != 0) {
 			if publishErr := syncer.PutGitTransfer(ctx, store, public, objectLayout, transfer); publishErr != nil {
-				summary.fail("git-transfer-record", publishErr)
+				summary.fail("git-transfer-upload", publishErr)
 				continue
 			}
 		}

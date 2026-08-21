@@ -473,8 +473,14 @@ func inspectDiff(data []byte) error {
 	if len(data) > maxInspectionBytes {
 		return ErrInspectionTooLarge
 	}
-	if bytes.Contains(data, []byte("Binary files ")) {
-		return ErrTransferUnavailable
+	// `git diff --binary` marks real binary content with a standalone
+	// `GIT binary patch` line. Check complete diff lines so source text that
+	// merely mentions the marker is not rejected as binary content.
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if bytes.HasPrefix(line, []byte("GIT binary patch")) || bytes.HasPrefix(line, []byte("Binary files ")) {
+			return ErrTransferUnavailable
+		}
 	}
 	if containsSensitiveContent(data) {
 		return ErrSensitiveContent
