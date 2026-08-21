@@ -40,6 +40,7 @@ type resumeReport struct {
 	Workspace       string   `json:"workspace"`
 	Differences     int      `json:"differences"`
 	Replaced        bool     `json:"replaced"`
+	Merged          bool     `json:"merged"`
 	ContextInjected bool     `json:"contextInjected"`
 	Sources         []string `json:"sources"`
 }
@@ -222,6 +223,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		AllowDivergent:         options.allowDivergent,
 		InjectWorkspaceContext: !options.noWorkspaceContext,
 		Agent:                  layout.Name(),
+		AgentHome:              installation.DataDir,
 		ReplaceExisting:        options.replaceExisting,
 	})
 	if err != nil {
@@ -241,6 +243,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		Workspace:       result.Workspace.Verdict.String(),
 		Differences:     len(result.Workspace.Files),
 		Replaced:        result.Replaced,
+		Merged:          result.Merged,
 		ContextInjected: result.ContextInjected,
 		Sources:         sources,
 	}, nil
@@ -436,7 +439,7 @@ func safeResumePlanError(err error) error {
 
 func safeResumeApplyError(err error) error {
 	switch {
-	case errors.Is(err, syncflow.ErrWorkspaceDiverged), errors.Is(err, syncflow.ErrWorkspaceFingerprintRequired), errors.Is(err, syncflow.ErrWorkspaceContextInjection), errors.Is(err, syncflow.ErrRestoreCompatibility), errors.Is(err, adapter.ErrSessionExists):
+	case errors.Is(err, syncflow.ErrWorkspaceDiverged), errors.Is(err, syncflow.ErrWorkspaceFingerprintRequired), errors.Is(err, syncflow.ErrWorkspaceContextInjection), errors.Is(err, syncflow.ErrRestoreCompatibility), errors.Is(err, syncflow.ErrExistingSessionConflict), errors.Is(err, adapter.ErrSessionExists):
 		return fmt.Errorf("resume: %w", err)
 	default:
 		return errors.New("resume: session was not written because a safety check failed")
@@ -470,6 +473,11 @@ func writeResumeText(w io.Writer, report resumeReport) error {
 	if report.Replaced {
 		_, err := fmt.Fprintln(w, "existing session: replaced")
 		return err
+	}
+	if report.Merged {
+		if _, err := fmt.Fprintln(w, "existing session: extended"); err != nil {
+			return err
+		}
 	}
 	if report.ContextInjected {
 		_, err := fmt.Fprintln(w, "workspace context: injected")

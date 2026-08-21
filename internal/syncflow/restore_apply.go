@@ -39,6 +39,10 @@ var (
 
 	// ErrRestoreWrite reports an adapter write failure after all checks passed.
 	ErrRestoreWrite = errors.New("syncflow: restore write failed")
+	// ErrExistingSessionConflict reports a local session that cannot be proven
+	// to be a prefix of the selected remote version. The restore must stop
+	// rather than overwrite a local branch that may contain newer work.
+	ErrExistingSessionConflict = errors.New("syncflow: existing session cannot be safely extended")
 )
 
 // SessionWriter is the narrow adapter contract needed to install one session.
@@ -46,6 +50,14 @@ var (
 type SessionWriter interface {
 	WriteSession(projectRoot, sessionID string, records [][]byte) error
 	ReplaceSession(projectRoot, sessionID string, records [][]byte) error
+}
+
+// ExistingSessionReader is an optional capability used when a create-only
+// restore finds the same native session locally. Layouts that implement it
+// allow the core to verify a common canonical prefix before appending remote
+// records. A layout that does not expose reads keeps the original refusal.
+type ExistingSessionReader interface {
+	ReadSession(adapter.SessionRef) (adapter.SessionData, error)
 }
 
 // RestoreApplyOptions contains decisions that may make a restore less
@@ -64,6 +76,9 @@ type RestoreApplyOptions struct {
 
 	// ReplaceExisting selects the adapter's explicit replacement operation.
 	ReplaceExisting bool
+	// AgentHome is the target agent data directory. It is used only when an
+	// existing session is being checked for a canonical prefix.
+	AgentHome string
 	// InjectWorkspaceContext appends a local-only explanation when the caller
 	// enables a non-consistent workspace explanation. The marker is filtered from
 	// future remote pushes.
@@ -79,6 +94,9 @@ type RestoreApplyOptions struct {
 type RestoreApplyResult struct {
 	Workspace project.Report
 	Replaced  bool
+	// Merged reports that an existing local session was safely extended with
+	// remote records instead of being replaced.
+	Merged bool
 	// ContextInjected reports that the restored local session received a
 	// local-only workspace difference explanation.
 	ContextInjected bool
@@ -148,6 +166,14 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 		writeErr = writer.ReplaceSession(projectRoot, sessionID, localized)
 	} else {
 		writeErr = writer.WriteSession(projectRoot, sessionID, localized)
+		if errors.Is(writeErr, adapter.ErrSessionExists) {
+			merged, mergeErr := mergeExistingSession(writer, projectRoot, sessionID, plan.CanonicalRecords, localized, len(plan.LocalizedRecords), options.AgentHome)
+			if mergeErr == nil {
+				result.Merged = merged
+				return result, nil
+			}
+			writeErr = mergeErr
+		}
 	}
 	if writeErr != nil {
 		return result, fmt.Errorf("%w: %w", ErrRestoreWrite, writeErr)
@@ -156,6 +182,72 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 	return result, nil
 }
 
+// mergeExistingSession extends a local session only when its non-local-only
+// records canonicalize to an exact prefix of the selected remote version.
+// Local records are retained byte-for-byte; only the remote suffix is
+// localized already and appended through the adapter's atomic replacement.
+func mergeExistingSession(writer SessionWriter, projectRoot, sessionID string, canonical, localized [][]byte, remoteCount int, agentHome string) (bool, error) {
+	reader, ok := writer.(ExistingSessionReader)
+	if !ok {
+		return false, adapter.ErrSessionExists
+	}
+	if remoteCount < 0 || remoteCount > len(localized) || remoteCount != len(canonical) {
+		return false, fmt.Errorf("%w: remote record counts are inconsistent", ErrExistingSessionConflict)
+	}
+	data, err := reader.ReadSession(adapter.SessionRef{NativeID: sessionID, ProjectPath: projectRoot})
+	if err != nil {
+		return false, fmt.Errorf("%w: read local session: %v", ErrExistingSessionConflict, err)
+	}
+	if data.DroppedTail {
+		return false, fmt.Errorf("%w: local session has an incomplete final record", ErrExistingSessionConflict)
+	}
+
+	canonicalizer := adapter.NewCanonicalizer(adapter.PathSpace{ProjectRoot: projectRoot, AgentHome: agentHome})
+	localCanonical := make([][]byte, 0, len(data.Records))
+	for i, record := range data.Records {
+		if isWorkspaceContextRecord(record) {
+			continue
+		}
+		localRecord, err := canonicalizer.Record(record)
+		if err != nil {
+			return false, fmt.Errorf("%w: canonicalize local record %d: %v", ErrExistingSessionConflict, i+1, err)
+		}
+		localCanonical = append(localCanonical, localRecord)
+	}
+	if len(localCanonical) > len(canonical) {
+		return false, fmt.Errorf("%w: local session is ahead of the selected remote version", ErrExistingSessionConflict)
+	}
+	for i := range localCanonical {
+		if !bytes.Equal(localCanonical[i], canonical[i]) {
+			return false, fmt.Errorf("%w: local session diverges before remote record %d", ErrExistingSessionConflict, i+1)
+		}
+	}
+
+	merged := cloneRestoreRecords(data.Records)
+	if len(localCanonical) < remoteCount {
+		merged = append(merged, cloneRestoreRecords(localized[len(localCanonical):remoteCount])...)
+	}
+	localOnly := localized[remoteCount:]
+	if len(localOnly) != 0 && !hasWorkspaceContextRecord(data.Records) {
+		merged = append(merged, cloneRestoreRecords(localOnly)...)
+	}
+	if len(merged) == len(data.Records) {
+		return false, nil
+	}
+	if err := writer.ReplaceSession(projectRoot, sessionID, merged); err != nil {
+		return false, fmt.Errorf("%w: append remote records: %v", ErrExistingSessionConflict, err)
+	}
+	return true, nil
+}
+
+func hasWorkspaceContextRecord(records [][]byte) bool {
+	for _, record := range records {
+		if isWorkspaceContextRecord(record) {
+			return true
+		}
+	}
+	return false
+}
 func validateApplyCompatibility(plan RestorePlan, options RestoreApplyOptions) error {
 	switch plan.Compatibility {
 	case adapter.CompatFull:
