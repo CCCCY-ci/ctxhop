@@ -89,7 +89,7 @@ func runEnvironmentWithStreams(args []string, input io.Reader, output, prompt io
 	if options.action == "apply" {
 		if !options.yes {
 			report.Status = "confirmation-required"
-			report.Notes = append(report.Notes, "no files changed; rerun with 'env apply --yes' to write filtered Codex Skill files")
+			report.Notes = append(report.Notes, "no files changed; rerun with 'env apply --yes' to write filtered Codex component values")
 		} else {
 			applyErr = applyEnvironmentComponents(ctx, state, session, &report)
 		}
@@ -120,7 +120,7 @@ func parseEnvironmentOptions(args []string) (envOptions, error) {
 	flags := flag.NewFlagSet("env "+action, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
-	yes := flags.Bool("yes", false, "confirm writing filtered Codex Skill files")
+	yes := flags.Bool("yes", false, "confirm writing filtered Codex component values")
 	if err := flags.Parse(args[1:]); err != nil {
 		return envOptions{}, fmt.Errorf("env %s: %w", action, err)
 	}

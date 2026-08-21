@@ -27,7 +27,18 @@ func inspectMCPComponent(component Component, agentHome, projectRoot string) Loc
 		return LocalComponentState{State: ComponentStateUnavailable, Reason: err.Error()}
 	}
 	result := LocalComponentState{Path: path}
-	info, err := os.Stat(path)
+	root, rootErr := configComponentRoot(component, agentHome, projectRoot)
+	if rootErr != nil {
+		result.State = ComponentStateUnavailable
+		result.Reason = rootErr.Error()
+		return result
+	}
+	if targetErr := validateConfigTarget(root, path); targetErr != nil {
+		result.State = ComponentStateFailed
+		result.Reason = targetErr.Error()
+		return result
+	}
+	info, err := os.Lstat(path)
 	switch {
 	case os.IsNotExist(err):
 		result.State = ComponentStateMissing
@@ -35,6 +46,10 @@ func inspectMCPComponent(component Component, agentHome, projectRoot string) Loc
 	case err != nil:
 		result.State = ComponentStateUnavailable
 		result.Reason = err.Error()
+		return result
+	case info.Mode()&os.ModeSymlink != 0:
+		result.State = ComponentStateFailed
+		result.Reason = "local MCP config is a symbolic link"
 		return result
 	case !info.Mode().IsRegular():
 		result.State = ComponentStateFailed
@@ -70,8 +85,8 @@ func inspectMCPComponent(component Component, agentHome, projectRoot string) Loc
 				return result
 			}
 			if !strings.EqualFold(projectLocal.Component.Fingerprint, local.Component.Fingerprint) {
-				result.State = ComponentStateChanged
-				result.Reason = "project MCP configuration overrides the global component"
+				result.State = ComponentStateConflict
+				result.Reason = "project MCP configuration overrides the global component; apply the project component or resolve it manually"
 			}
 		}
 	}

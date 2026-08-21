@@ -154,7 +154,7 @@ func buildEnvironmentPreviewReport(ctx context.Context, state environmentContext
 		report.Notes = append(report.Notes, "no structured dependency was observed in this session")
 	}
 	if len(report.Changes) != 0 {
-		report.Notes = append(report.Notes, "local component state is compared by fingerprint; only Codex Skill files have an apply target")
+		report.Notes = append(report.Notes, "local component state is compared by fingerprint; only filtered Codex component values are eligible for explicit apply")
 	}
 	return report
 }
@@ -225,20 +225,28 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 		return errors.New("env apply: report is required")
 	}
 	needsBody := false
+	hasConflict := false
 	for _, change := range report.Changes {
-		if change.Component.Kind == "skill" && (change.State == environment.ComponentStateMissing || change.State == environment.ComponentStateChanged) {
+		if change.State == environment.ComponentStateConflict {
+			hasConflict = true
+		}
+		if (change.Component.Kind == "skill" || change.Component.Kind == "mcp" || change.Component.Kind == "settings") &&
+			(change.State == environment.ComponentStateMissing || change.State == environment.ComponentStateChanged) {
 			needsBody = true
-			break
 		}
 	}
-	if !needsBody {
+	if !needsBody && !hasConflict {
 		report.Status = "no-changes"
-		report.Notes = append(report.Notes, "no Skill file needs to be written; MCP and settings components remain preview-only")
+		report.Notes = append(report.Notes, "no filtered component needs to be written; raw MCP/settings configuration is never copied")
 		return nil
 	}
-	contents, err := readEnvironmentComponentContents(ctx, state, session)
-	if err != nil {
-		return err
+	var contents []environment.ComponentContent
+	if needsBody {
+		var err error
+		contents, err = readEnvironmentComponentContents(ctx, state, session)
+		if err != nil {
+			return err
+		}
 	}
 	agentHome := ""
 	if session.Agent != "" {
@@ -261,7 +269,12 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 	applied := 0
 	for index := range report.Changes {
 		change := &report.Changes[index]
-		if change.Component.Kind != "skill" || (change.State != environment.ComponentStateMissing && change.State != environment.ComponentStateChanged) {
+		if change.State == environment.ComponentStateConflict {
+			applyErrors = append(applyErrors, fmt.Errorf("%s: %w: %s", change.Component.Name, environment.ErrConfigConflict, change.Reason))
+			continue
+		}
+		if (change.Component.Kind != "skill" && change.Component.Kind != "mcp" && change.Component.Kind != "settings") ||
+			(change.State != environment.ComponentStateMissing && change.State != environment.ComponentStateChanged) {
 			continue
 		}
 		content, found := findEnvironmentComponentContent(contents, change.Component)
@@ -271,7 +284,13 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 			applyErrors = append(applyErrors, fmt.Errorf("%s: component body is unavailable", change.Component.Name))
 			continue
 		}
-		local, applyErr := environment.ApplyComponent(content, session.Agent, agentHome, state.CurrentRoot, backupRoot)
+		var local environment.LocalComponentState
+		var applyErr error
+		if change.Component.Kind == "mcp" || change.Component.Kind == "settings" {
+			local, applyErr = environment.ApplyConfigComponent(content, session.Agent, agentHome, state.CurrentRoot, backupRoot)
+		} else {
+			local, applyErr = environment.ApplyComponent(content, session.Agent, agentHome, state.CurrentRoot, backupRoot)
+		}
 		change.Path = local.Path
 		change.State = local.State
 		change.Backup = local.Backup
@@ -295,8 +314,9 @@ func applyEnvironmentComponents(ctx context.Context, state environmentContext, s
 		report.Status = "no-changes"
 	}
 	if applied != 0 {
-		report.Notes = append(report.Notes, fmt.Sprintf("applied %d filtered Codex Skill component(s); backups were created before replacements", applied))
+		report.Notes = append(report.Notes, fmt.Sprintf("applied %d filtered Codex component(s); backups were created before replacements", applied))
 	}
+	report.Notes = append(report.Notes, "only allowlisted Skill, MCP intent and session-setting values were written; raw configuration, secrets and commands were not copied or executed")
 	if len(applyErrors) != 0 {
 		return errors.Join(applyErrors...)
 	}

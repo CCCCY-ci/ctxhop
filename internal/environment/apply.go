@@ -18,11 +18,13 @@ const (
 	ComponentStateChanged     = "changed"
 	ComponentStateUnavailable = "unavailable"
 	ComponentStateManual      = "manual"
+	ComponentStateConflict    = "conflict"
 	ComponentStateApplied     = "applied"
 	ComponentStateFailed      = "failed"
 )
 
 var ErrUnsupportedComponentApply = errors.New("environment: component has no safe file apply target")
+var ErrConfigConflict = errors.New("environment: local config has a conflicting override")
 
 // LocalComponentState describes what the target device currently has for one
 // component. It contains local paths for the user's preview only; paths are
@@ -35,8 +37,8 @@ type LocalComponentState struct {
 }
 
 // InspectComponent compares a filtered component descriptor with the local
-// target. Only Codex Skill files have an automatic file target in this phase;
-// MCP and settings components are inspected read-only and remain manual for apply.
+// target. It never reads or returns raw configuration values; MCP and settings
+// are compared through their allowlisted values only.
 func InspectComponent(component Component, agent, agentHome, projectRoot string) LocalComponentState {
 	if err := component.Validate(); err != nil {
 		return LocalComponentState{State: ComponentStateUnavailable, Reason: "remote component metadata is invalid"}
@@ -113,11 +115,24 @@ func InspectComponent(component Component, agent, agentHome, projectRoot string)
 // obtained explicit confirmation. Existing files are backed up before the
 // atomic replacement. Unsupported components are reported as manual and do
 // not cause any config, command or process side effect.
+func ApplyConfigComponent(content ComponentContent, agent, agentHome, projectRoot, backupRoot string) (LocalComponentState, error) {
+	if err := content.Validate(); err != nil {
+		return LocalComponentState{State: ComponentStateFailed, Reason: "remote component content is invalid"}, err
+	}
+	if agent != "codex" || (content.Component.Kind != "mcp" && content.Component.Kind != "settings") {
+		return LocalComponentState{State: ComponentStateManual, Reason: "only filtered Codex MCP and settings components have a safe configuration target"}, nil
+	}
+	return applyFilteredConfigComponent(content, agentHome, projectRoot, backupRoot)
+}
+
 func ApplyComponent(content ComponentContent, agent, agentHome, projectRoot, backupRoot string) (LocalComponentState, error) {
 	if err := content.Validate(); err != nil {
 		return LocalComponentState{State: ComponentStateFailed, Reason: "remote component content is invalid"}, err
 	}
-	if content.Component.Kind != "skill" || agent != "codex" {
+	if agent != "codex" {
+		return LocalComponentState{State: ComponentStateManual, Reason: "only Codex environment components have a safe automatic file target"}, nil
+	}
+	if content.Component.Kind != "skill" {
 		return LocalComponentState{State: ComponentStateManual, Reason: "only filtered Codex Skill files have a safe automatic file target"}, nil
 	}
 	state := InspectComponent(content.Component, agent, agentHome, projectRoot)

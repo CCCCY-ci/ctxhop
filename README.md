@@ -27,9 +27,10 @@ tokens and key material never enter this pipeline.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks, read-only environment previews, explicit application of filtered
-Codex Skill files and bounded workspace snapshots with explicit upload/apply steps; MCP
-intent and session-setting components remain preview-only.
+restore safety checks, environment previews, explicit application of filtered Codex Skill,
+MCP intent and session-setting values, and bounded workspace snapshots with explicit
+upload/apply steps. Raw configuration, credentials and executable components remain
+outside synchronization.
 
 ## Quick start
 
@@ -228,9 +229,10 @@ This is a read-only preview. It does not install, apply or execute anything. If 
 Codex Skill, MCP intent or session-setting component was captured, the preview shows only
 its kind, scope, size and fingerprint; it never prints or applies the component body.
 For MCP intent and allowlisted Codex settings, the preview compares the relevant
-global or project configuration and reports whether it is missing, changed or unchanged. Unsafe or unreadable
-values remain unavailable/manual; these configurations are never written by
-`env apply`. The preview also reports local tool availability and
+global or project configuration and reports whether it is missing, changed, unchanged
+or in conflict. Unsafe or unreadable values remain unavailable/manual. Only the
+allowlisted values can be written later; raw TOML, env values and credentials are
+never copied. The preview also reports local tool availability and
 SessionEnd Hook status. A version difference is informational; adapter compatibility
 is determined from the fields the session actually contains.
 
@@ -241,15 +243,18 @@ supports a no-write confirmation step; without `--yes` it only prints the change
 ./agentsync env apply <NATIVE_SESSION_ID>
 ~~~
 
-After checking the output, add `--yes` to explicitly apply filtered Codex Skill files. AgentSync
+After checking the output, add `--yes` to explicitly apply the filtered values. AgentSync
 creates a backup before replacing an existing file:
 
 ~~~bash
 ./agentsync env apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-MCP and session-setting components remain preview-only. AgentSync does not install tools,
-change raw MCP configuration or execute commands.
+This writes only the allowlisted Skill body, MCP command/arguments/timeout, and
+session-setting keys. Existing TOML and MCP env sections are preserved, and the full
+file is backed up before replacement. A global component with a different project
+override is reported as a conflict and is not written. AgentSync does not install
+tools, copy raw configuration, start MCP servers or execute commands.
 
 If device A used `push --include-workspace`, device B can inspect and explicitly apply
 that filtered workspace snapshot. Preview does not write files; `--yes` writes only
@@ -262,8 +267,11 @@ available file bodies and backs up an existing file before replacement:
 ~~~
 
 Git projects use files selected by the session fingerprint; no-Git projects use a filtered directory scan. Unavailable,
-sensitive, binary or oversized bodies remain manual items. A no-Git snapshot may show local-only files as deletion candidates. It never deletes local files,
-switches branches, commits, stashes or runs Git commands.
+sensitive, binary or oversized bodies remain manual items. A no-Git snapshot may show local-only files as deletion candidates.
+The text and `--json` reports list conflicts such as `target-conflict`, `manual-item`,
+`unsafe-path` and `apply-failed`. `status: attention` means the snapshot still has
+items that require manual handling; it never deletes local files, switches branches, commits, stashes
+or runs Git commands.
 
 Before restoring, inspect the Git state that was recorded with the session:
 
@@ -321,10 +329,10 @@ AgentSync.
 references and local component differences when the session recorded them. `workspace preview`
 shows the bounded workspace snapshot only when the source used `push --include-workspace`.
 `resume` downloads the selected encrypted session and restores it to Claude Code. `env apply`
-without `--yes` only reports changes; `env apply --yes` writes filtered Codex Skill files
-with a backup. `workspace apply --yes` similarly writes only available, filtered workspace
-bodies after a backup. Neither command installs tools, changes raw MCP configuration or
-executes commands.
+without `--yes` only reports changes; `env apply --yes` writes only filtered
+Skill, MCP intent and session-setting values after creating backups. `workspace apply --yes`
+similarly writes only available, filtered workspace bodies after a backup. Neither command
+installs tools, copies raw configuration, deletes local files or executes commands.
 
 When restoring a session:
 
@@ -388,7 +396,7 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |
 | `agentsync env preview [--json] SESSION_ID` | Show structured dependency references and local component differences. This is read-only. |
-| `agentsync env apply [--yes] [--json] SESSION_ID` | Show component changes; only with `--yes` write filtered Codex Skill files, with a backup before replacement. MCP/settings remain preview-only. |
+| `agentsync env apply [--yes] [--json] SESSION_ID` | Show component changes; only with `--yes` write filtered Skill, MCP intent and session-setting values, with a backup before replacement. Raw config remains excluded. |
 | `agentsync workspace preview [--json] SESSION_ID` | Compare the explicit, bounded workspace snapshot with the current project; read-only and never prints file bodies. |
 | `agentsync workspace apply [--yes] [--json] SESSION_ID` | Show workspace changes; only with `--yes` write available filtered file bodies, backing up existing files first. It never deletes files or runs Git commands. |
 | `agentsync git preview/apply [--yes] [--json] SESSION_ID` | Inspect or explicitly apply the recorded Git state. preview and apply without --yes are read-only; apply --yes only imports hidden refs and applies a matching clean worktree. |
@@ -467,7 +475,7 @@ Environment credentials are not written to disk.
   key material or .env file is uploaded. git preview is read-only; git apply --yes
   imports commits into a hidden ref and applies a worktree snapshot only on a clean matching
   base. It never switches branches, commits, merges, rebases or pushes.
-- The target device must already have Claude Code and the project prepared.
+- The target device must already have Claude Code and the project prepared. Environment apply does not install the Agent, MCP servers or runtime dependencies.
 - Git projects provide stronger workspace checks. No-Git projects use a manual identity;
   normal workspace context uses a touched-file fallback, while explicit --include-workspace uses a bounded directory scan.
 - A server without Claude Code can store data and run administrative checks, but

@@ -59,9 +59,37 @@ type workspacePreviewReport struct {
 	Dirty       []string          `json:"dirty,omitempty"`
 	Complete    bool              `json:"complete"`
 	Warnings    []string          `json:"warnings,omitempty"`
+	Conflicts   []string          `json:"conflicts,omitempty"`
 	Changes     []workspaceChange `json:"changes,omitempty"`
 	Status      string            `json:"status"`
 	Notes       []string          `json:"notes"`
+}
+
+func appendWorkspaceConflict(conflicts []string, kind string) []string {
+	if kind == "" {
+		return conflicts
+	}
+	for _, existing := range conflicts {
+		if existing == kind {
+			return conflicts
+		}
+	}
+	return append(conflicts, kind)
+}
+
+func workspaceConflictKind(state string) string {
+	switch state {
+	case workspacepkg.StateConflict:
+		return "target-conflict"
+	case workspacepkg.StateManual:
+		return "manual-item"
+	case workspacepkg.StateUnavailable:
+		return "target-unavailable"
+	case workspacepkg.StateFailed:
+		return "unsafe-path"
+	default:
+		return ""
+	}
 }
 
 type workspaceSource struct {
@@ -307,6 +335,9 @@ func buildWorkspacePreviewReport(ctx context.Context, state environmentContext, 
 			}
 		}
 	}
+	for _, change := range report.Changes {
+		report.Conflicts = appendWorkspaceConflict(report.Conflicts, workspaceConflictKind(change.State))
+	}
 	if !snapshot.Complete {
 		report.Notes = append(report.Notes, "some file bodies were omitted by the safety or size limits and require manual handling")
 	}
@@ -345,9 +376,11 @@ func applyWorkspaceSnapshot(state environmentContext, snapshot workspacepkg.Snap
 		change.Backup = local.Backup
 		change.Reason = local.Reason
 		if err != nil {
+			report.Conflicts = appendWorkspaceConflict(report.Conflicts, "apply-failed")
 			applyErrors = append(applyErrors, fmt.Errorf("%s: %w", safeListText(snapshot.Files[index].Path), err))
 			continue
 		}
+		report.Conflicts = appendWorkspaceConflict(report.Conflicts, workspaceConflictKind(local.State))
 		if local.State == workspacepkg.StateApplied {
 			applied++
 		}
@@ -357,8 +390,12 @@ func applyWorkspaceSnapshot(state environmentContext, snapshot workspacepkg.Snap
 		report.Status = "partial"
 	case len(applyErrors) != 0:
 		report.Status = "failed"
+	case applied != 0 && len(report.Conflicts) != 0:
+		report.Status = "partial"
 	case applied != 0:
 		report.Status = "applied"
+	case len(report.Conflicts) != 0:
+		report.Status = "attention"
 	default:
 		report.Status = "no-changes"
 	}
@@ -457,6 +494,11 @@ func writeWorkspacePreviewText(w io.Writer, report workspacePreviewReport) error
 			if _, err := fmt.Fprintf(w, "warning: %s\n", safeListText(warning)); err != nil {
 				return err
 			}
+		}
+	}
+	if len(report.Conflicts) != 0 {
+		if _, err := fmt.Fprintf(w, "conflicts: %s\n", strings.Join(report.Conflicts, ", ")); err != nil {
+			return err
 		}
 	}
 	if _, err := fmt.Fprintf(w, "status: %s\n", safeListText(report.Status)); err != nil {

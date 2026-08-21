@@ -23,8 +23,8 @@ AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍�
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
 Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查，以及只读环境预览、
-经过明确确认后按需应用的 Codex Skill 组件和有限工作区快照；MCP 意图和 session 设置
-组件仍只做预览。
+经过明确确认后按需应用的 Codex Skill、MCP 意图和 session 设置组件，以及有限工作区
+快照。原始配置、凭据和可执行组件不进入同步。
 
 ## 快速开始
 
@@ -210,7 +210,8 @@ Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作�
 不显示也不应用组件正文。
 对于 MCP 意图和白名单 Codex settings，预览会按组件的 global/project 作用域检查相应配置，
 并显示 missing、changed 或 unchanged。
-不安全或无法读取的值会保持为 unavailable/manual；`env apply` 不会写入这些配置。
+不安全或无法读取的值会保持为 unavailable/manual；全局配置存在不同的项目级覆盖时会显示
+conflict。只有白名单值可以在后续显式写入，原始 TOML、env 值和凭据永远不会复制。
 预览还会显示本机工具是否存在以及 SessionEnd Hook 状态。版本差异只作提示，适配器仍按
 session 实际包含的字段判断兼容性。
 
@@ -220,13 +221,16 @@ session 实际包含的字段判断兼容性。
 ./agentsync env apply <NATIVE_SESSION_ID>
 ~~~
 
-确认输出后，明确加上 `--yes` 才会应用过滤后的 Codex Skill 文件；替换已有文件前会先创建备份：
+确认输出后，明确加上 `--yes` 才会应用过滤后的值；替换已有文件前会先创建备份：
 
 ~~~bash
 ./agentsync env apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-MCP 和 session 设置组件目前只做预览，不会修改原始配置、安装工具或执行命令。
+这个命令只会写入白名单 Skill 正文、MCP 的 command/args/启动超时，以及 session settings
+中的白名单键。它会保留其它 TOML 内容和 MCP 的 env 段，并在替换前备份整个配置文件。
+如果全局组件存在不同的项目级覆盖，会报告 conflict 并停止写入。它不会安装工具、复制原始
+配置、启动 MCP 或执行命令。
 如果设备 A 使用了 `push --include-workspace`，设备 B 可以先查看并明确应用这个有限工作区快照。
 预览不会写入文件；加上 `--yes` 后才会写入可用的文件正文，替换已有文件前会先备份：
 
@@ -237,7 +241,10 @@ MCP 和 session 设置组件目前只做预览，不会修改原始配置、安�
 ~~~
 
 Git 项目快照只包含该 session fingerprint 已选中的文件；无 Git 项目快照来自安全过滤后的目录扫描。不可用、敏感、二进制或超出大小限制的正文
-会保留为需要手动处理的项目。无 Git 快照中的本地多余文件会显示为删除候选，但不会自动删除本地文件，也不会切换分支、提交、stash 或执行 Git 命令。
+会保留为需要手动处理的项目。无 Git 快照中的本地多余文件会显示为删除候选。
+文本和 `--json` 输出会列出 `target-conflict`、`manual-item`、`unsafe-path`、
+`apply-failed` 等冲突值。`status: attention` 表示仍有需要手动处理的项目；它不会自动删除
+本地文件、切换分支、提交、stash 或执行 Git 命令。
 
 使用 `list` 打印出的会话 ID 进行恢复：
 
@@ -258,9 +265,9 @@ claude --resume
 `pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的结构化依赖和本地
 组件差异。只有源设备使用了 `push --include-workspace` 时，`workspace preview` 才会显示
 有限工作区快照。`resume` 才会下载选中的加密会话并恢复到 Claude Code。`env apply` 不加
-`--yes` 只显示差异；`env apply --yes` 会备份后写入过滤后的 Codex Skill 文件，
-`workspace apply --yes` 会用同样的方式写入可用的有限工作区正文。它们都不会安装工具、
-修改原始 MCP 配置或执行命令。
+`--yes` 只显示差异；`env apply --yes` 会备份后写入过滤后的 Skill、MCP 意图和
+session settings 白名单值。`workspace apply --yes` 会用同样的方式写入可用的有限工作区正文。
+它们都不会安装工具、复制原始配置、删除本地文件或执行命令。
 
 恢复前可以先查看 session 记录的 Git 状态：
 
@@ -343,7 +350,7 @@ cd /path/to/another/project
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |
 | `agentsync env preview [--json] SESSION_ID` | 查看 session 记录到的结构化依赖和本地组件差异；只读。 |
-| `agentsync env apply [--yes] [--json] SESSION_ID` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Codex Skill 文件，MCP/settings 仍只做预览。 |
+| `agentsync env apply [--yes] [--json] SESSION_ID` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Skill、MCP 意图和 session settings 白名单值，原始配置仍不复制。 |
 | `agentsync workspace preview [--json] SESSION_ID` | 对比明确上传的有限工作区快照和当前项目；只读，不显示文件正文。 |
 | `agentsync workspace apply [--yes] [--json] SESSION_ID` | 显示工作区差异；只有加上 `--yes` 才会先备份再写入可用的过滤后文件正文，不会删除文件或执行 Git 命令。 |
 | `agentsync git preview/apply [--yes] [--json] SESSION_ID` | 查看或明确应用 session 的 Git 状态；preview 和不加 --yes 的 apply 只读，apply --yes 只导入隐藏 ref 并在匹配的干净基线上应用工作区。 |
@@ -414,7 +421,7 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
   密钥材料和 .env 文件永不上传。git preview 只读；git apply --yes 只会把 commit
   导入隐藏 ref，并在目标工作区干净且基线匹配时应用工作区快照，不会切换分支、提交、
   merge、rebase 或 push。
-- 目标设备必须提前准备好 Claude Code 和项目。
+- 目标设备必须提前准备好 Claude Code 和项目；环境应用不会安装 Agent、MCP server 或运行时依赖。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 manual identity。普通工作区上下文使用 touched 文件回退检查，显式 --include-workspace 时使用有限目录扫描。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复
   Claude 会话。
