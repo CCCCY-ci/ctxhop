@@ -272,6 +272,14 @@ unchanged. It does not switch branches, merge, rebase, commit or push. If Git
 fails after worktree application starts, the result is marked partial and the
 command tells you to inspect `git status`; AgentSync does not run an automatic
 reset or delete files.
+
+When a commit bundle is imported, the output records the hidden commit ref,
+source base and target branch for manual review. Inspect the ref with
+`git log --oneline --reverse <COMMIT_REF>`, then use normal Git operations if
+you decide to integrate it. AgentSync does not run that integration. Re-running
+`git apply --yes` for the same transfer after a successful apply reports
+`already-applied` and does not change the worktree again. A previous partial
+apply that requires cleanup must be resolved manually before retrying.
 Restore the session ID printed by `list`:
 
 ~~~bash

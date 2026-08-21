@@ -267,6 +267,12 @@ HEAD 与来源基线一致时才会应用。应用前还会检查快照涉及的
 忽略的同名文件/目录，即使 `git status` 看起来干净，也会报告冲突并保持目标不变。它不会
 切换分支、merge、rebase、commit 或 push。如果 Git 应用已经启动但中途失败，结果会标记为
 partial，并提示检查 `git status`；AgentSync 不会自动 reset 或删除文件。
+
+commit bundle 导入后，输出和本地应用记录会保存隐藏 commit ref、来源基线和目标分支，
+方便你手动检查。可以先执行 `git log --oneline --reverse <COMMIT_REF>`，确认后再用
+正常 Git 命令整合；AgentSync 不会自动执行这一步。相同传输成功应用后再次执行
+`git apply --yes` 会报告 `already-applied`，不会再次修改工作区。如果之前的应用失败并
+要求手动清理，需要先处理 `git status`，再重试。
 恢复 session 时：
 
 - AgentSync 会先检查相关的项目文件。这里检查的是项目文件，不是 session 内容；如果这些

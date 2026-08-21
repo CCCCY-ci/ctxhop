@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	ApplyReady    = "ready"
-	ApplyConflict = "conflict"
-	ApplyApplied  = "applied"
-	ApplyPartial  = "partial"
-	ApplyNoChange = "no-changes"
+	ApplyReady          = "ready"
+	ApplyConflict       = "conflict"
+	ApplyApplied        = "applied"
+	ApplyAlreadyApplied = "already-applied"
+	ApplyPartial        = "partial"
+	ApplyNoChange       = "no-changes"
 )
 
 type ApplyPreview struct {
@@ -275,7 +276,7 @@ func importBundle(ctx context.Context, root string, bundle []byte, tip, kind str
 }
 
 func (r ApplyResult) Validate() error {
-	if r.Status != ApplyNoChange && r.Status != ApplyApplied && r.Status != ApplyPartial && r.Status != ApplyConflict {
+	if r.Status != ApplyNoChange && r.Status != ApplyApplied && r.Status != ApplyAlreadyApplied && r.Status != ApplyPartial && r.Status != ApplyConflict {
 		return fmt.Errorf("gitstate: invalid apply result status %q", r.Status)
 	}
 	for name, value := range map[string]string{"current head": r.CurrentHead} {

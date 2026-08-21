@@ -150,6 +150,16 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.Transfer.BodyAvailable = true
 		}
 	}
+	var priorApply *gitstate.ApplyRecord
+	if options.action == "apply" && options.yes && transfer != nil {
+		record, found, recordErr := gitstate.FindMatchingApplyRecord(configDir, state.ProjectID, session.RemoteID, source)
+		if recordErr != nil {
+			return fmt.Errorf("git apply: read local apply record: %w", recordErr)
+		}
+		if found {
+			priorApply = &record
+		}
+	}
 	if source.Mode == gitstate.ModeGit && report.Status != "transfer-missing" {
 		preview, previewErr := gitstate.PreviewTransfer(ctx, state.CurrentRoot, source, transfer)
 		if previewErr != nil {
@@ -165,6 +175,25 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 		} else if source.Mode != gitstate.ModeGit || transfer == nil {
 			report.Status = gitstate.ApplyNoChange
 			report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
+		} else if priorApply != nil && priorApply.ManualCleanupRequired {
+			report.Status = gitstate.ApplyPartial
+			report.CommitRef = priorApply.CommitRef
+			report.WorktreeRef = priorApply.WorktreeRef
+			report.WorktreeApplyStarted = priorApply.WorktreeApplyStarted
+			report.WorktreeApplied = priorApply.WorktreeApplied
+			report.ManualCleanupRequired = true
+			report.Notes = append(report.Notes, "a previous application of this exact Git transfer did not complete; inspect 'git status' and clean up manually before retrying; no new Git state was changed")
+			applyErr = errors.New("git apply: previous application requires manual cleanup")
+		} else if priorApply != nil && priorApply.Status == gitstate.ApplyApplied {
+			report.Status = gitstate.ApplyAlreadyApplied
+			report.CommitRef = priorApply.CommitRef
+			report.WorktreeRef = priorApply.WorktreeRef
+			report.WorktreeApplyStarted = priorApply.WorktreeApplyStarted
+			report.WorktreeApplied = priorApply.WorktreeApplied
+			report.Notes = append(report.Notes, fmt.Sprintf("this exact Git transfer was already applied at %s; no local Git state was changed", priorApply.AppliedAt.UTC().Format(time.RFC3339)))
+			if priorApply.CommitRef != "" {
+				report.Notes = append(report.Notes, gitManualIntegrationNote(source, priorApply.CommitRef, priorApply.Branch))
+			}
 		} else {
 			result, resultErr := gitstate.ApplyTransfer(ctx, state.CurrentRoot, source, *transfer)
 			report.Status = result.Status
@@ -177,13 +206,16 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.CurrentBranch = result.CurrentBranch
 			report.Notes = append(report.Notes, result.Notes...)
 			if result.CommitRef != "" {
-				report.Notes = append(report.Notes, fmt.Sprintf("inspect %s with 'git log --oneline %s', then integrate it manually with normal Git operations; the current branch was not changed", result.CommitRef, result.CommitRef))
+				report.Notes = append(report.Notes, gitManualIntegrationNote(source, result.CommitRef, result.CurrentBranch))
 			}
 			recordErr := gitstate.WriteApplyRecord(configDir, gitstate.ApplyRecord{
 				Version: gitstate.Version, AppliedAt: time.Now().UTC(), ProjectID: state.ProjectID,
 				SessionID: session.RemoteID, ProjectIdentity: state.ProjectIdentity,
-				SourceHead: source.Repository.Head, CurrentHead: result.CurrentHead, Branch: result.CurrentBranch,
-				CommitRef: result.CommitRef, WorktreeRef: result.WorktreeRef,
+				SourceHead: source.Repository.Head, SourceBase: source.Repository.UpstreamHead,
+				SourceBranch: source.Repository.Branch, CurrentHead: result.CurrentHead, Branch: result.CurrentBranch,
+				CommitDigest: source.Transfer.CommitDigest, WorktreeDigest: source.Transfer.WorktreeDigest,
+				WorktreeStashRef: source.Transfer.WorktreeStashRef,
+				CommitRef:        result.CommitRef, WorktreeRef: result.WorktreeRef,
 				WorktreeApplyStarted: result.WorktreeApplyStarted, WorktreeApplied: result.WorktreeApplied,
 				ManualCleanupRequired: result.ManualCleanupRequired, Status: result.Status,
 			})
@@ -203,6 +235,19 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 		return err
 	}
 	return applyErr
+}
+
+func gitManualIntegrationNote(source gitstate.State, commitRef, targetBranch string) string {
+	note := fmt.Sprintf("manual integration pending: inspect %s with 'git log --oneline --reverse %s'", commitRef, commitRef)
+	if source.Repository.UpstreamHead != "" {
+		note += fmt.Sprintf("; source base is %s", source.Repository.UpstreamHead)
+	}
+	if targetBranch != "" {
+		note += fmt.Sprintf("; integrate on branch %s with normal Git operations", targetBranch)
+	} else {
+		note += "; integrate on the current branch with normal Git operations"
+	}
+	return note + "; AgentSync will not merge, rebase, cherry-pick or push"
 }
 
 func parseGitOptions(args []string) (gitOptions, error) {
