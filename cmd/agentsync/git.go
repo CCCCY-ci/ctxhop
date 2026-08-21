@@ -85,8 +85,28 @@ type gitPreviewReport struct {
 	WorktreeApplyStarted  bool              `json:"worktreeApplyStarted"`
 	WorktreeApplied       bool              `json:"worktreeApplied"`
 	ManualCleanupRequired bool              `json:"manualCleanupRequired"`
+	Conflicts             []string          `json:"conflicts,omitempty"`
 	Status                string            `json:"status"`
 	Notes                 []string          `json:"notes"`
+}
+
+func appendGitConflicts(conflicts []string, kinds ...string) []string {
+	for _, kind := range kinds {
+		if kind == "" {
+			continue
+		}
+		found := false
+		for _, existing := range conflicts {
+			if existing == kind {
+				found = true
+				break
+			}
+		}
+		if !found {
+			conflicts = append(conflicts, kind)
+		}
+	}
+	return conflicts
 }
 
 func init() {
@@ -142,6 +162,7 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 		loaded, readErr := syncer.ReadGitTransfer(ctx, state.Access.Store, layout, state.Access.Identities)
 		if errors.Is(readErr, remote.ErrNotFound) {
 			report.Status = "transfer-missing"
+			report.Conflicts = appendGitConflicts(report.Conflicts, gitstate.ConflictTransferMissing)
 			report.Notes = append(report.Notes, "the source recorded a Git transfer but its encrypted body is not available")
 		} else if readErr != nil {
 			return fmt.Errorf("git %s: read encrypted Git transfer: %w", options.action, readErr)
@@ -173,8 +194,13 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.Status = "confirmation-required"
 			report.Notes = append(report.Notes, "no Git refs or files changed; rerun with 'agentsync git apply --yes <SESSION_ID>' to apply the explicit transfer")
 		} else if source.Mode != gitstate.ModeGit || transfer == nil {
-			report.Status = gitstate.ApplyNoChange
-			report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
+			if report.Status == "transfer-missing" {
+				report.Notes = append(report.Notes, "the explicit Git transfer body is missing; no local Git state changed")
+				applyErr = errors.New("git apply: encrypted Git transfer body is unavailable")
+			} else {
+				report.Status = gitstate.ApplyNoChange
+				report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
+			}
 		} else if gitApplyRetryBlocked(priorApply, report.Status) {
 			report.Status = gitstate.ApplyPartial
 			report.CommitRef = priorApply.CommitRef
@@ -182,6 +208,7 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.WorktreeApplyStarted = priorApply.WorktreeApplyStarted
 			report.WorktreeApplied = priorApply.WorktreeApplied
 			report.ManualCleanupRequired = true
+			report.Conflicts = appendGitConflicts(report.Conflicts, gitstate.ConflictPartialApply)
 			report.Notes = append(report.Notes, "a previous application of this exact Git transfer did not complete; inspect 'git status' and clean up manually before retrying; no new Git state was changed")
 			applyErr = errors.New("git apply: previous application requires manual cleanup")
 		} else if priorApply != nil && priorApply.Status == gitstate.ApplyApplied {
@@ -205,6 +232,7 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.WorktreeApplyStarted = result.WorktreeApplyStarted
 			report.WorktreeApplied = result.WorktreeApplied
 			report.ManualCleanupRequired = result.ManualCleanupRequired
+			report.Conflicts = appendGitConflicts(report.Conflicts, result.Conflicts...)
 			report.CurrentHead = result.CurrentHead
 			report.CurrentBranch = result.CurrentBranch
 			report.Notes = append(report.Notes, result.Notes...)
@@ -369,6 +397,7 @@ func applyGitPreview(report *gitPreviewReport, preview gitstate.ApplyPreview) {
 	report.CurrentClean = preview.CurrentClean
 	report.CommitReady = preview.CommitReady
 	report.WorktreeReady = preview.WorktreeReady
+	report.Conflicts = appendGitConflicts(report.Conflicts, preview.Conflicts...)
 	report.Status = preview.Status
 	report.Notes = append(report.Notes, preview.Notes...)
 }
@@ -483,6 +512,11 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 	}
 	if _, err := fmt.Fprintf(w, "manual cleanup required: %t\n", report.ManualCleanupRequired); err != nil {
 		return err
+	}
+	if len(report.Conflicts) != 0 {
+		if _, err := fmt.Fprintf(w, "conflicts: %s\n", strings.Join(report.Conflicts, ", ")); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintf(w, "status: %s\n", safeListText(report.Status)); err != nil {
 		return err

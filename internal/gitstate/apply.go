@@ -18,7 +18,58 @@ const (
 	ApplyAlreadyApplied = "already-applied"
 	ApplyPartial        = "partial"
 	ApplyNoChange       = "no-changes"
+
+	// Conflict kinds are deliberately descriptive rather than prescriptive.
+	// They tell the caller why AgentSync stopped; they do not authorize an
+	// automatic reset, checkout, merge, or deletion.
+	ConflictTargetDirty     = "target-dirty"
+	ConflictBaseDiverged    = "base-diverged"
+	ConflictPathCollision   = "path-collision"
+	ConflictInvalidTransfer = "invalid-transfer-path"
+	ConflictPartialApply    = "partial-apply"
+	ConflictTransferImport  = "transfer-import-failed"
+	ConflictTransferMissing = "transfer-missing"
 )
+
+type applyConflictError struct {
+	kind string
+	err  error
+}
+
+func (e *applyConflictError) Error() string {
+	return e.err.Error()
+}
+
+func (e *applyConflictError) Unwrap() error {
+	return e.err
+}
+
+func withConflictKind(kind string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &applyConflictError{kind: kind, err: err}
+}
+
+func conflictKind(err error) string {
+	var conflict *applyConflictError
+	if errors.As(err, &conflict) {
+		return conflict.kind
+	}
+	return ""
+}
+
+func appendConflictKind(conflicts []string, kind string) []string {
+	if kind == "" {
+		return conflicts
+	}
+	for _, existing := range conflicts {
+		if existing == kind {
+			return conflicts
+		}
+	}
+	return append(conflicts, kind)
+}
 
 type ApplyPreview struct {
 	CurrentHead       string
@@ -29,6 +80,7 @@ type ApplyPreview struct {
 	WorktreeAvailable bool
 	WorktreeReady     bool
 	Status            string
+	Conflicts         []string
 	Notes             []string
 }
 
@@ -41,6 +93,7 @@ type ApplyResult struct {
 	WorktreeApplyStarted  bool
 	WorktreeApplied       bool
 	ManualCleanupRequired bool
+	Conflicts             []string
 	Notes                 []string
 }
 
@@ -87,9 +140,11 @@ func PreviewTransfer(ctx context.Context, root string, source State, transfer *T
 		switch {
 		case !current.Worktree.Clean:
 			preview.Status = ApplyConflict
+			preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictTargetDirty)
 			preview.Notes = append(preview.Notes, "the target worktree is not clean; no worktree files will be changed")
 		case transfer.WorktreeBase == "" || transfer.WorktreeBase != current.Repository.Head:
 			preview.Status = ApplyConflict
+			preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictBaseDiverged)
 			preview.Notes = append(preview.Notes, "the target HEAD differs from the worktree snapshot base; integrate the source commits first")
 		default:
 			preview.Notes = append(preview.Notes, "the worktree snapshot can be applied on the current HEAD")
@@ -117,18 +172,21 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 		return ApplyResult{}, err
 	}
 	result := ApplyResult{
-		Status:        ApplyNoChange,
+		Status:        preview.Status,
 		CurrentHead:   preview.CurrentHead,
 		CurrentBranch: preview.CurrentBranch,
+		Conflicts:     append([]string(nil), preview.Conflicts...),
 		Notes:         append([]string(nil), preview.Notes...),
 	}
 	if preview.Status == ApplyConflict {
-		return ApplyResult{Status: ApplyConflict, CurrentHead: preview.CurrentHead, CurrentBranch: preview.CurrentBranch, Notes: preview.Notes}, errors.New("gitstate: target is not safe for worktree application")
+		return result, errors.New("gitstate: target is not safe for worktree application")
 	}
 	if len(transfer.CommitBundle) != 0 {
 		ref, importErr := importBundle(ctx, root, transfer.CommitBundle, transfer.CommitTip, "commit")
 		if importErr != nil {
-			return ApplyResult{Status: ApplyConflict, CurrentHead: preview.CurrentHead, CurrentBranch: preview.CurrentBranch, Notes: preview.Notes}, importErr
+			result.Status = ApplyConflict
+			result.Conflicts = appendConflictKind(result.Conflicts, ConflictTransferImport)
+			return result, importErr
 		}
 		result.CommitRef = ref
 		result.Status = ApplyApplied
@@ -138,11 +196,13 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 		ref, importErr := importBundle(ctx, root, transfer.WorktreeBundle, transfer.WorktreeTip, "worktree")
 		if importErr != nil {
 			result.Status = ApplyPartial
+			result.Conflicts = appendConflictKind(result.Conflicts, ConflictTransferImport)
 			return result, importErr
 		}
 		result.WorktreeRef = ref
 		if safetyErr := checkWorktreeApplySafety(ctx, root, ref); safetyErr != nil {
 			result.Status = ApplyConflict
+			result.Conflicts = appendConflictKind(result.Conflicts, conflictKind(safetyErr))
 			result.Notes = append(result.Notes, "the worktree snapshot was imported but not applied; the target was left unchanged")
 			return result, safetyErr
 		}
@@ -150,6 +210,7 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 		if _, applyErr := runGit(ctx, root, "stash", "apply", "--index", ref); applyErr != nil {
 			result.Status = ApplyPartial
 			result.ManualCleanupRequired = true
+			result.Conflicts = appendConflictKind(result.Conflicts, ConflictPartialApply)
 			result.Notes = append(result.Notes,
 				"the worktree apply started but did not complete; inspect 'git status' and clean up manually if needed; AgentSync did not reset or delete files")
 			if current, captureErr := Capture(ctx, root, source.ProjectIdentity); captureErr == nil {
@@ -182,7 +243,7 @@ func stashShowPaths(data []byte) ([]string, error) {
 			continue
 		}
 		if strings.HasPrefix(path, "\"") || strings.ContainsRune(path, 0) {
-			return nil, fmt.Errorf("gitstate: worktree snapshot paths could not be read safely: %w", ErrTransferUnavailable)
+			return nil, withConflictKind(ConflictInvalidTransfer, fmt.Errorf("gitstate: worktree snapshot paths could not be read safely: %w", ErrTransferUnavailable))
 		}
 		paths = append(paths, path)
 	}
@@ -203,7 +264,7 @@ func checkWorktreeApplySafety(ctx context.Context, root, ref string) error {
 	}
 	for _, path := range paths {
 		if err := validateRelativePath(path); err != nil {
-			return fmt.Errorf("gitstate: worktree snapshot contains an invalid path: %w", err)
+			return withConflictKind(ConflictInvalidTransfer, fmt.Errorf("gitstate: worktree snapshot contains an invalid path: %w", err))
 		}
 		absolute := filepath.Join(root, filepath.FromSlash(path))
 		for candidate := absolute; ; candidate = filepath.Dir(candidate) {
@@ -221,7 +282,7 @@ func checkWorktreeApplySafety(ctx context.Context, root, ref string) error {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
-					return fmt.Errorf("gitstate: target contains an untracked or ignored path that would be touched by the worktree snapshot: %s", path)
+					return withConflictKind(ConflictPathCollision, fmt.Errorf("gitstate: target contains an untracked or ignored path that would be touched by the worktree snapshot: %s", path))
 				}
 				if !info.IsDir() {
 					break
@@ -295,12 +356,22 @@ func (r ApplyResult) Validate() error {
 	if r.ManualCleanupRequired && !r.WorktreeApplyStarted {
 		return errors.New("gitstate: manual cleanup result must record that apply started")
 	}
+	for _, conflict := range r.Conflicts {
+		if conflict == "" || strings.ContainsAny(conflict, "\x00\r\n") {
+			return errors.New("gitstate: invalid apply conflict kind")
+		}
+	}
 	return nil
 }
 
 func (p ApplyPreview) Validate() error {
 	if p.Status != ApplyReady && p.Status != ApplyConflict && p.Status != ApplyNoChange {
 		return fmt.Errorf("gitstate: invalid apply preview status %q", p.Status)
+	}
+	for _, conflict := range p.Conflicts {
+		if conflict == "" || strings.ContainsAny(conflict, "\x00\r\n") {
+			return errors.New("gitstate: invalid apply preview conflict kind")
+		}
 	}
 	return nil
 }

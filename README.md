@@ -280,10 +280,14 @@ worktree is clean and its HEAD matches the recorded base. Before applying,
 AgentSync also checks the snapshot paths against existing files and directories.
 An untracked or ignored path at a path the snapshot would write is reported as a
 conflict, even when `git status` is otherwise clean, and the target is left
-unchanged. It does not switch branches, merge, rebase, commit or push. If Git
-fails after worktree application starts, the result is marked partial and the
-command tells you to inspect `git status`; AgentSync does not run an automatic
-reset or delete files.
+unchanged. It does not switch branches, merge, rebase, commit or push. The text
+and `--json` reports include machine-readable conflict values such as
+`target-dirty`, `base-diverged`, `path-collision`, `transfer-import-failed` and
+`partial-apply`. These values explain why AgentSync stopped; they are not
+instructions to overwrite the target. If Git fails after worktree application
+starts, inspect `git status`, clean up manually, and then rerun the same
+`git apply --yes` command after the target passes preflight. AgentSync does not
+run an automatic reset or delete files.
 
 When a commit bundle is imported, the output records the hidden commit ref,
 source base and target branch for manual review. Inspect the ref with

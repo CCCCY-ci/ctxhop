@@ -274,8 +274,12 @@ git preview 只读；git apply 不加 --yes 也只预览。加上 --yes 后，�
 本地 commit 会导入到隐藏的 refs/agentsync/...，工作区快照只有在目标工作区干净且
 HEAD 与来源基线一致时才会应用。应用前还会检查快照涉及的路径；如果目标端已有未跟踪或被
 忽略的同名文件/目录，即使 `git status` 看起来干净，也会报告冲突并保持目标不变。它不会
-切换分支、merge、rebase、commit 或 push。如果 Git 应用已经启动但中途失败，结果会标记为
-partial，并提示检查 `git status`；AgentSync 不会自动 reset 或删除文件。
+切换分支、merge、rebase、commit 或 push。文本输出和 `--json` 输出会列出机器可读的冲突
+值，例如 `target-dirty`（目标工作区有改动）、`base-diverged`（目标 HEAD 与来源基线不一致）、
+`path-collision`（目标路径会被未跟踪或忽略的文件/目录挡住）、`transfer-import-failed`
+（传输正文导入失败）和 `partial-apply`（应用已经开始但没有完成）。这些值只是停止原因，
+不是覆盖目标文件的指令。如果 Git 应用已经启动但中途失败，先检查并手动处理 `git status`，
+目标重新通过 preflight 后再执行同一个 `git apply --yes`；AgentSync 不会自动 reset 或删除文件。
 
 commit bundle 导入后，输出和本地应用记录会保存隐藏 commit ref、来源基线和目标分支，
 方便你手动检查。可以先执行 `git log --oneline --reverse <COMMIT_REF>`，确认后再用
