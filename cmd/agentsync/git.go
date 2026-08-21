@@ -175,7 +175,7 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 		} else if source.Mode != gitstate.ModeGit || transfer == nil {
 			report.Status = gitstate.ApplyNoChange
 			report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
-		} else if priorApply != nil && priorApply.ManualCleanupRequired {
+		} else if gitApplyRetryBlocked(priorApply, report.Status) {
 			report.Status = gitstate.ApplyPartial
 			report.CommitRef = priorApply.CommitRef
 			report.WorktreeRef = priorApply.WorktreeRef
@@ -195,6 +195,9 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 				report.Notes = append(report.Notes, gitManualIntegrationNote(source, priorApply.CommitRef, priorApply.Branch))
 			}
 		} else {
+			if priorApply != nil && priorApply.ManualCleanupRequired {
+				report.Notes = append(report.Notes, "a previous partial apply was recorded; the target now passes Git preflight, retrying the transfer")
+			}
 			result, resultErr := gitstate.ApplyTransfer(ctx, state.CurrentRoot, source, *transfer)
 			report.Status = result.Status
 			report.CommitRef = result.CommitRef
@@ -248,6 +251,10 @@ func gitManualIntegrationNote(source gitstate.State, commitRef, targetBranch str
 		note += "; integrate on the current branch with normal Git operations"
 	}
 	return note + "; AgentSync will not merge, rebase, cherry-pick or push"
+}
+
+func gitApplyRetryBlocked(priorApply *gitstate.ApplyRecord, status string) bool {
+	return priorApply != nil && priorApply.ManualCleanupRequired && status == gitstate.ApplyConflict
 }
 
 func parseGitOptions(args []string) (gitOptions, error) {

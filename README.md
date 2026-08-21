@@ -279,7 +279,9 @@ source base and target branch for manual review. Inspect the ref with
 you decide to integrate it. AgentSync does not run that integration. Re-running
 `git apply --yes` for the same transfer after a successful apply reports
 `already-applied` and does not change the worktree again. A previous partial
-apply that requires cleanup must be resolved manually before retrying.
+apply that requires cleanup must be resolved manually before retrying. After
+the same preflight passes, you can rerun `git apply --yes`; AgentSync still does not
+reset or delete files automatically.
 Restore the session ID printed by `list`:
 
 ~~~bash
