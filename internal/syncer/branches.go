@@ -51,6 +51,7 @@ func AssembleBranch(deviceID string, parts []ShardPart) (Branch, error) {
 		base       uint64
 		digest     = EmptyDigest()
 		records    [][]byte
+		totalBytes uint64
 	)
 	for i, part := range ordered {
 		if part.Number == 0 || part.Number != nextNumber {
@@ -65,12 +66,23 @@ func AssembleBranch(deviceID string, parts []ShardPart) (Branch, error) {
 		if part.Shard.PrefixDigest != digest {
 			return Branch{}, fmt.Errorf("%w: device %q shard %d has a mismatched prefix digest", ErrIncompleteBranch, deviceID, part.Number)
 		}
-		if ^uint64(0)-base < part.Shard.Count() {
+		shardCount := part.Shard.Count()
+		if ^uint64(0)-base < shardCount {
 			return Branch{}, fmt.Errorf("%w: device %q record count overflows", ErrIncompleteBranch, deviceID)
+		}
+		if shardCount > maxSessionRecords || uint64(len(records)) > maxSessionRecords-shardCount {
+			return Branch{}, fmt.Errorf("%w: device %q has more than %d records", ErrSessionTooLarge, deviceID, maxSessionRecords)
+		}
+		for _, record := range part.Shard.Records {
+			recordBytes := uint64(len(record))
+			if recordBytes > maxSessionBytes || totalBytes > maxSessionBytes-recordBytes {
+				return Branch{}, fmt.Errorf("%w: device %q has more than %d record bytes", ErrSessionTooLarge, deviceID, maxSessionBytes)
+			}
+			totalBytes += recordBytes
 		}
 
 		records = append(records, cloneRecords(part.Shard.Records)...)
-		base += part.Shard.Count()
+		base += shardCount
 		digest = part.Shard.Digest()
 		if i == len(ordered)-1 {
 			break

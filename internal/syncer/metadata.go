@@ -62,6 +62,9 @@ func NewMetadata(recordCount uint64, headDigest [32]byte, payload []byte) (Metad
 
 // Validate checks the metadata envelope and its opaque JSON payload.
 func (m Metadata) Validate() error {
+	if m.RecordCount > maxSessionRecords {
+		return fmt.Errorf("%w: record count %d exceeds %d", ErrInvalidMetadata, m.RecordCount, maxSessionRecords)
+	}
 	if m.RecordCount == 0 && m.HeadDigest != EmptyDigest() {
 		return fmt.Errorf("%w: empty prefix has a non-empty digest", ErrInvalidMetadata)
 	}

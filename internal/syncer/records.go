@@ -21,7 +21,13 @@ import (
 const (
 	shardVersion  = 1
 	maxShardBytes = 64 << 20
-	digestDomain  = "agentsync/records/v1\x00"
+
+	// A session is still represented as a record slice at the adapter/core
+	// boundary. Keep the complete stream bounded while allowing substantially
+	// more than a normal interactive session.
+	maxSessionRecords = 4 << 20
+	maxSessionBytes   = 512 << 20
+	digestDomain      = "agentsync/records/v1\x00"
 )
 
 var (
@@ -35,6 +41,10 @@ var (
 	// ErrIncompleteBranch reports a device stream with a missing or unusable
 	// shard. The available prefix must not be treated as a complete session.
 	ErrIncompleteBranch = errors.New("syncer: incomplete device branch")
+
+	// ErrSessionTooLarge reports a complete record stream that would exceed the
+	// bounded memory budget used by planning, assembly, and restore validation.
+	ErrSessionTooLarge = errors.New("syncer: session exceeds size limit")
 )
 
 // Shard is an immutable range of canonical session records.
@@ -180,8 +190,17 @@ func EmptyDigest() [32]byte {
 
 // DigestRecords returns the digest after all records in order.
 func DigestRecords(records [][]byte) ([32]byte, error) {
+	if len(records) > maxSessionRecords {
+		return [32]byte{}, fmt.Errorf("%w: record count %d exceeds %d", ErrSessionTooLarge, len(records), maxSessionRecords)
+	}
+
 	digest := EmptyDigest()
+	totalBytes := 0
 	for i, record := range records {
+		if len(record) > maxSessionBytes-totalBytes {
+			return [32]byte{}, fmt.Errorf("%w: record bytes exceed %d", ErrSessionTooLarge, maxSessionBytes)
+		}
+		totalBytes += len(record)
 		if err := validateRecord(record); err != nil {
 			return [32]byte{}, fmt.Errorf("record %d: %w", i+1, err)
 		}

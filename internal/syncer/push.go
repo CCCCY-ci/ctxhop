@@ -227,13 +227,13 @@ func PutShard(ctx context.Context, store remote.Remote, recipient *ecdh.PublicKe
 
 func planShard(base uint64, prefixDigest [32]byte, records [][]byte, start int, options PlanOptions) (int, Shard, error) {
 	end := start
-	var candidate Shard
+	candidateEnd := start
 	for end < len(records) && end-start < options.MaxRecords {
 		end++
 		shard := Shard{
 			Base:         base,
 			PrefixDigest: prefixDigest,
-			Records:      cloneRecords(records[start:end]),
+			Records:      records[start:end],
 		}
 		encoded, err := shard.MarshalBinary()
 		if err != nil {
@@ -250,7 +250,14 @@ func planShard(base uint64, prefixDigest [32]byte, records [][]byte, start int, 
 			end--
 			break
 		}
-		candidate = shard
+		candidateEnd = end
 	}
-	return end, candidate, nil
+	if candidateEnd == start {
+		return 0, Shard{}, fmt.Errorf("%w: no record fits in a shard", ErrShardTooLarge)
+	}
+	return candidateEnd, Shard{
+		Base:         base,
+		PrefixDigest: prefixDigest,
+		Records:      cloneRecords(records[start:candidateEnd]),
+	}, nil
 }

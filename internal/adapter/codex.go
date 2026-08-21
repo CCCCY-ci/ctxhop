@@ -408,7 +408,7 @@ func readCodexSummary(path string) (codexSummary, bool) {
 
 	var summary codexSummary
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 256*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), MaxSessionRecordBytes)
 	valid := 0
 	for scanner.Scan() {
 		var record codexRecord
