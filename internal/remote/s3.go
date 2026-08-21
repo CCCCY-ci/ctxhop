@@ -412,8 +412,15 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 
 	var out []ObjectInfo
 	token := ""
+	seenTokens := make(map[string]struct{})
 
 	for page := 0; ; page++ {
+		if token != "" {
+			if _, seen := seenTokens[token]; seen {
+				return nil, fmt.Errorf("listing %q repeated a continuation token: the storage provider did not advance pagination", prefix)
+			}
+			seenTokens[token] = struct{}{}
+		}
 		// A provider that keeps handing back a token would otherwise loop
 		// forever, growing the result without bound; the client timeout
 		// applies per request, not to the loop.
