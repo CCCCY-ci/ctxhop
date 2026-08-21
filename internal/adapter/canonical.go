@@ -51,6 +51,13 @@ var pathValueFields = map[string]bool{
 	"realParentDir":   true,
 }
 
+// embeddedPathTextFields contains structured environment fields whose value is
+// a metadata document rather than one JSON path. Only known machine metadata
+// gets this treatment; ordinary conversation text remains untouched.
+var embeddedPathTextFields = map[string]bool{
+	"filesystem": true,
+}
+
 // pathValuePaths contains exact nested paths whose leaf name is too generic
 // to add to pathValueFields. Claude Code 2.1.228 can emit a structured path in
 // message.content.content. The array form, message.content[].content, remains
@@ -183,6 +190,9 @@ func (c *Canonicalizer) text(path, s string) string {
 			return rewritten
 		}
 	}
+	if embeddedPathTextFields[fieldLeaf(path)] {
+		return c.rewriteEmbeddedPathText(s)
+	}
 	if isPathValuePath(path) {
 		if out, ok := c.tokenize(s); ok {
 			return out
@@ -212,6 +222,26 @@ func (c *Canonicalizer) rewriteEmbeddedJSON(path, value string) (string, bool) {
 		return value, false
 	}
 	return string(encoded), true
+}
+
+func (c *Canonicalizer) rewriteEmbeddedPathText(value string) string {
+	type candidate struct {
+		root  string
+		token string
+	}
+	candidates := []candidate{
+		{root: c.space.ProjectRoot, token: TokenProject},
+		{root: c.space.AgentHome, token: TokenAgentHome},
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return len(candidates[i].root) > len(candidates[j].root)
+	})
+	for _, candidate := range candidates {
+		if candidate.root != "" {
+			value = replaceEmbeddedPathRoot(value, candidate.root, candidate.token)
+		}
+	}
+	return strings.ReplaceAll(value, `\`, "/")
 }
 
 func isPathValuePath(path string) bool {
@@ -407,6 +437,9 @@ func (l *localizer) walk(path string, v any) (any, error) {
 // our marker - and refusing there would make any session that discusses
 // AgentSync itself impossible to restore.
 func (l *localizer) text(field, s string, tokenized bool) (string, error) {
+	if embeddedPathTextFields[fieldLeaf(field)] {
+		return l.rewriteEmbeddedPathText(s)
+	}
 	if embeddedJSONPaths[field] {
 		if rewritten, ok, err := l.rewriteEmbeddedJSON(field, s); err != nil {
 			return "", err
@@ -464,6 +497,122 @@ func (l *localizer) rewriteEmbeddedJSON(path, value string) (string, bool, error
 		return "", false, err
 	}
 	return string(encoded), true, nil
+}
+
+func (l *localizer) rewriteEmbeddedPathText(value string) (string, error) {
+	for _, candidate := range []struct {
+		token string
+		root  string
+	}{
+		{token: TokenProject, root: l.space.ProjectRoot},
+		{token: TokenAgentHome, root: l.space.AgentHome},
+	} {
+		if !strings.Contains(value, candidate.token) {
+			continue
+		}
+		if candidate.root == "" {
+			return "", fmt.Errorf("localize: %s present but no target path configured", candidate.token)
+		}
+		value = replaceEmbeddedPathToken(value, candidate.token, candidate.root)
+	}
+	return value, nil
+}
+
+func replaceEmbeddedPathRoot(value, root, replacement string) string {
+	root = strings.TrimRight(root, `/\`)
+	if root == "" {
+		return value
+	}
+	var out strings.Builder
+	cursor := 0
+	for cursor < len(value) {
+		index := indexPathAt(value, root, cursor)
+		if index < 0 {
+			break
+		}
+		end := index + len(root)
+		if !embeddedPathBoundary(value, index, end) {
+			cursor = index + 1
+			continue
+		}
+		out.WriteString(value[cursor:index])
+		out.WriteString(replacement)
+		tailEnd := embeddedPathSegmentEnd(value, end)
+		if tailEnd > end {
+			out.WriteString(strings.ReplaceAll(value[end:tailEnd], `\`, "/"))
+		}
+		cursor = tailEnd
+	}
+	out.WriteString(value[cursor:])
+	return out.String()
+}
+
+func replaceEmbeddedPathToken(value, token, root string) string {
+	var out strings.Builder
+	cursor := 0
+	for cursor < len(value) {
+		relative := strings.Index(value[cursor:], token)
+		if relative < 0 {
+			break
+		}
+		index := cursor + relative
+		end := index + len(token)
+		out.WriteString(value[cursor:index])
+		out.WriteString(root)
+		tailEnd := embeddedPathSegmentEnd(value, end)
+		if tailEnd > end {
+			tail := value[end:tailEnd]
+			if separatorFor(root) == `\` {
+				tail = strings.ReplaceAll(tail, "/", `\`)
+			} else {
+				tail = strings.ReplaceAll(tail, `\`, "/")
+			}
+			out.WriteString(tail)
+		}
+		cursor = tailEnd
+	}
+	out.WriteString(value[cursor:])
+	return out.String()
+}
+
+func indexPathAt(value, root string, from int) int {
+	if separatorFor(root) != `\` {
+		index := strings.Index(value[from:], root)
+		if index < 0 {
+			return -1
+		}
+		return from + index
+	}
+	for index := from; index+len(root) <= len(value); index++ {
+		if strings.EqualFold(value[index:index+len(root)], root) {
+			return index
+		}
+	}
+	return -1
+}
+
+func embeddedPathBoundary(value string, start, end int) bool {
+	if start > 0 && isEmbeddedPathWord(value[start-1]) {
+		return false
+	}
+	return end >= len(value) || !isEmbeddedPathWord(value[end])
+}
+
+func isEmbeddedPathWord(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '-' || value == '.'
+}
+
+func embeddedPathSegmentEnd(value string, start int) int {
+	end := start
+	for end < len(value) {
+		switch value[end] {
+		case '<', '>', '"', '\'', '&', ' ', '\t', '\r', '\n':
+			return end
+		default:
+			end++
+		}
+	}
+	return end
 }
 
 // samePathPrefix compares two path fragments of equal length under the

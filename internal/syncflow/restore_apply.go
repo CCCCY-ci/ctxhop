@@ -153,7 +153,7 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 
 	localized := plan.LocalizedRecords
 	if options.InjectWorkspaceContext && report.Verdict != project.Consistent {
-		contextRecord, err := workspaceContextRecordForAgent(options.Agent, report)
+		contextRecord, err := workspaceContextRecordForAgent(options.Agent, report, plan.LocalizedRecords)
 		if err != nil {
 			return result, fmt.Errorf("%w: %v", ErrWorkspaceContextInjection, err)
 		}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -107,7 +108,8 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 		Dirty:    append([]string(nil), fingerprint.Dirty...),
 		Complete: true,
 	}
-	if fingerprint.Head != "" || fingerprint.Branch != "" {
+	gitBacked := fingerprint.Head != "" || fingerprint.Branch != ""
+	if gitBacked {
 		snapshot.Mode = ModeGit
 	}
 	paths := make([]string, 0, len(fingerprint.Files))
@@ -146,7 +148,7 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 			continue
 		}
 		entry.Kind = KindFile
-		captureFile(ctx, absoluteRoot, expected, &entry)
+		captureFile(ctx, absoluteRoot, expected, gitBacked, &entry)
 		if entry.Available && totalContentBytes+len(entry.Content) > MaxTotalContentBytes {
 			entry.Available = false
 			entry.Content = nil
@@ -170,7 +172,7 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 	return snapshot, nil
 }
 
-func captureFile(ctx context.Context, root, expected string, entry *File) {
+func captureFile(ctx context.Context, root, expected string, gitBacked bool, entry *File) {
 	if entry == nil {
 		return
 	}
@@ -205,7 +207,8 @@ func captureFile(ctx context.Context, root, expected string, entry *File) {
 		entry.Reason = "the source file could not be read safely"
 		return
 	}
-	if blobDigest(content) != expected {
+	fingerprintDigest, digestErr := digestForFingerprint(ctx, root, entry.Path, content, gitBacked)
+	if digestErr != nil || fingerprintDigest != expected {
 		entry.Reason = "the source file changed while the snapshot was captured"
 		return
 	}
@@ -218,9 +221,38 @@ func captureFile(ctx context.Context, root, expected string, entry *File) {
 		return
 	}
 	entry.Available = true
+	entry.Digest = blobDigest(content)
 	entry.Content = append([]byte(nil), content...)
 }
 
+func digestForFingerprint(ctx context.Context, root, relative string, content []byte, gitBacked bool) (string, error) {
+	raw := blobDigest(content)
+	if !gitBacked {
+		return raw, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "git", "hash-object", "--path="+relative, "--stdin")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Stdin = bytes.NewReader(content)
+	output, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		// Synthetic fingerprints may be used with a directory that is not a
+		// Git worktree. In a real Git project, the expected digest check below
+		// still fails closed when Git filters change the content.
+		return raw, nil
+	}
+	digest := strings.TrimSpace(string(output))
+	if !validDigest(digest) || digest == "<absent>" || digest == "<directory>" {
+		return "", errors.New("workspace: Git returned an invalid file digest")
+	}
+	return digest, nil
+}
 func (s Snapshot) Validate() error {
 	if s.Version != SnapshotVersion {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidSnapshot, s.Version)

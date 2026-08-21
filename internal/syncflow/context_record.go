@@ -40,9 +40,13 @@ func workspaceContextRecordFor(report project.Report) ([]byte, error) {
 	return workspaceContextRecordForAgent("", report)
 }
 
-func workspaceContextRecordForAgent(agent string, report project.Report) ([]byte, error) {
+func workspaceContextRecordForAgent(agent string, report project.Report, existing ...[][]byte) ([]byte, error) {
 	if agent == "codex" {
-		return codexWorkspaceContextRecordFor(report)
+		ordinal := 0
+		if len(existing) != 0 {
+			ordinal = nextCodexOrdinal(existing[0])
+		}
+		return codexWorkspaceContextRecordFor(report, ordinal)
 	}
 	return workspaceContextRecordForClaude(report)
 }
@@ -108,7 +112,7 @@ func workspaceContextRecordForClaude(report project.Report) ([]byte, error) {
 	return data, nil
 }
 
-func codexWorkspaceContextRecordFor(report project.Report) ([]byte, error) {
+func codexWorkspaceContextRecordFor(report project.Report, ordinal ...int) ([]byte, error) {
 	claude, err := workspaceContextRecordForClaude(report)
 	if err != nil || claude == nil {
 		return claude, err
@@ -119,7 +123,12 @@ func codexWorkspaceContextRecordFor(report project.Report) ([]byte, error) {
 	if err := json.Unmarshal(claude, &source); err != nil {
 		return nil, fmt.Errorf("decode workspace context: %w", err)
 	}
+	nextOrdinal := 0
+	if len(ordinal) != 0 {
+		nextOrdinal = ordinal[0]
+	}
 	record := codexWorkspaceContextRecord{
+		Ordinal:   nextOrdinal,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Type:      "event_msg",
 		Payload: codexWorkspaceContextPayload{
@@ -136,9 +145,29 @@ func codexWorkspaceContextRecordFor(report project.Report) ([]byte, error) {
 }
 
 type codexWorkspaceContextRecord struct {
+	Ordinal   int                          `json:"ordinal"`
 	Timestamp string                       `json:"timestamp"`
 	Type      string                       `json:"type"`
 	Payload   codexWorkspaceContextPayload `json:"payload"`
+}
+
+func nextCodexOrdinal(records [][]byte) int {
+	maxOrdinal := -1
+	for _, raw := range records {
+		var record struct {
+			Ordinal *int `json:"ordinal"`
+		}
+		if err := json.Unmarshal(raw, &record); err != nil || record.Ordinal == nil {
+			continue
+		}
+		if *record.Ordinal > maxOrdinal {
+			maxOrdinal = *record.Ordinal
+		}
+	}
+	if maxOrdinal < 0 {
+		return len(records)
+	}
+	return maxOrdinal + 1
 }
 
 type codexWorkspaceContextPayload struct {
