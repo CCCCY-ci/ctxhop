@@ -131,7 +131,7 @@ func FetchBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Rem
 		}
 		sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
 
-		shards := make([]ShardPart, 0, len(numbers))
+		builder := newBranchBuilder(device)
 		for _, number := range numbers {
 			if err := ctx.Err(); err != nil {
 				return nil, fmt.Errorf("syncer: read remote session: %w", err)
@@ -145,10 +145,12 @@ func FetchBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Rem
 			if err != nil {
 				return nil, fmt.Errorf("syncer: open remote branch: %w", err)
 			}
-			shards = append(shards, ShardPart{Number: number, Shard: shard})
+			if err := builder.append(number, shard); err != nil {
+				return nil, fmt.Errorf("syncer: assemble remote branch: %w", err)
+			}
 		}
 
-		branch, err := AssembleBranch(device, shards)
+		branch, err := builder.finish()
 		if err != nil {
 			return nil, fmt.Errorf("syncer: assemble remote branch: %w", err)
 		}

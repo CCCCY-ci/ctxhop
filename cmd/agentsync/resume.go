@@ -22,7 +22,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
 
-const resumeTimeout = 60 * time.Second
+const resumeTimeout = 10 * time.Minute
 
 type resumeOptions struct {
 	json               bool
@@ -426,6 +426,10 @@ func saveResumeObservedTips(ctx context.Context, stateRoot, projectID, sessionID
 
 func safeResumePlanError(err error) error {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return errors.New("resume: timed out while downloading the remote session; retry on a stable connection")
+	case errors.Is(err, context.Canceled):
+		return errors.New("resume: remote session download was cancelled")
 	case errors.Is(err, syncer.ErrIncompleteRemoteSession):
 		return errors.New("resume: remote session is incomplete; retry later")
 	case errors.Is(err, syncflow.ErrRestoreCompatibility):

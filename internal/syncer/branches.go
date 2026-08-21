@@ -46,54 +46,73 @@ func AssembleBranch(deviceID string, parts []ShardPart) (Branch, error) {
 		return ordered[i].Number < ordered[j].Number
 	})
 
-	var (
-		nextNumber uint64 = 1
-		base       uint64
-		digest     = EmptyDigest()
-		records    [][]byte
-		totalBytes uint64
-	)
-	for i, part := range ordered {
-		if part.Number == 0 || part.Number != nextNumber {
-			return Branch{}, fmt.Errorf("%w: device %q has a gap near shard %d", ErrIncompleteBranch, deviceID, part.Number)
+	builder := newBranchBuilder(deviceID)
+	for _, part := range ordered {
+		if err := builder.append(part.Number, part.Shard); err != nil {
+			return Branch{}, err
 		}
-		if err := part.Shard.Validate(); err != nil {
-			return Branch{}, fmt.Errorf("%w: device %q shard %d: %v", ErrIncompleteBranch, deviceID, part.Number, err)
-		}
-		if part.Shard.Base != base {
-			return Branch{}, fmt.Errorf("%w: device %q shard %d starts at %d, want %d", ErrIncompleteBranch, deviceID, part.Number, part.Shard.Base, base)
-		}
-		if part.Shard.PrefixDigest != digest {
-			return Branch{}, fmt.Errorf("%w: device %q shard %d has a mismatched prefix digest", ErrIncompleteBranch, deviceID, part.Number)
-		}
-		shardCount := part.Shard.Count()
-		if ^uint64(0)-base < shardCount {
-			return Branch{}, fmt.Errorf("%w: device %q record count overflows", ErrIncompleteBranch, deviceID)
-		}
-		if shardCount > maxSessionRecords || uint64(len(records)) > maxSessionRecords-shardCount {
-			return Branch{}, fmt.Errorf("%w: device %q has more than %d records", ErrSessionTooLarge, deviceID, maxSessionRecords)
-		}
-		for _, record := range part.Shard.Records {
-			recordBytes := uint64(len(record))
-			if recordBytes > maxSessionBytes || totalBytes > maxSessionBytes-recordBytes {
-				return Branch{}, fmt.Errorf("%w: device %q has more than %d record bytes", ErrSessionTooLarge, deviceID, maxSessionBytes)
-			}
-			totalBytes += recordBytes
-		}
-
-		records = append(records, cloneRecords(part.Shard.Records)...)
-		base += shardCount
-		digest = part.Shard.Digest()
-		if i == len(ordered)-1 {
-			break
-		}
-		if nextNumber == ^uint64(0) {
-			return Branch{}, fmt.Errorf("%w: device %q has too many shards", ErrIncompleteBranch, deviceID)
-		}
-		nextNumber++
 	}
 
-	return Branch{DeviceID: deviceID, Records: records, HeadDigest: digest}, nil
+	return builder.finish()
+}
+
+type branchBuilder struct {
+	deviceID   string
+	nextNumber uint64
+	base       uint64
+	digest     [32]byte
+	records    [][]byte
+	totalBytes uint64
+}
+
+func newBranchBuilder(deviceID string) *branchBuilder {
+	return &branchBuilder{deviceID: deviceID, nextNumber: 1, digest: EmptyDigest()}
+}
+
+func (b *branchBuilder) append(number uint64, shard Shard) error {
+	if number == 0 || number != b.nextNumber {
+		return fmt.Errorf("%w: device %q has a gap near shard %d", ErrIncompleteBranch, b.deviceID, number)
+	}
+	if err := shard.Validate(); err != nil {
+		return fmt.Errorf("%w: device %q shard %d: %v", ErrIncompleteBranch, b.deviceID, number, err)
+	}
+	if shard.Base != b.base {
+		return fmt.Errorf("%w: device %q shard %d starts at %d, want %d", ErrIncompleteBranch, b.deviceID, number, shard.Base, b.base)
+	}
+	if shard.PrefixDigest != b.digest {
+		return fmt.Errorf("%w: device %q shard %d has a mismatched prefix digest", ErrIncompleteBranch, b.deviceID, number)
+	}
+	shardCount := shard.Count()
+	if ^uint64(0)-b.base < shardCount {
+		return fmt.Errorf("%w: device %q record count overflows", ErrIncompleteBranch, b.deviceID)
+	}
+	if shardCount > maxSessionRecords || uint64(len(b.records)) > maxSessionRecords-shardCount {
+		return fmt.Errorf("%w: device %q has more than %d records", ErrSessionTooLarge, b.deviceID, maxSessionRecords)
+	}
+	for _, record := range shard.Records {
+		recordBytes := uint64(len(record))
+		if recordBytes > maxSessionBytes || b.totalBytes > maxSessionBytes-recordBytes {
+			return fmt.Errorf("%w: device %q has more than %d record bytes", ErrSessionTooLarge, b.deviceID, maxSessionBytes)
+		}
+		b.totalBytes += recordBytes
+	}
+
+	b.records = append(b.records, cloneRecords(shard.Records)...)
+	b.base += shardCount
+	b.digest = shard.Digest()
+	if b.nextNumber == ^uint64(0) {
+		b.nextNumber = 0
+	} else {
+		b.nextNumber++
+	}
+	return nil
+}
+
+func (b *branchBuilder) finish() (Branch, error) {
+	if len(b.records) == 0 {
+		return Branch{}, fmt.Errorf("%w: device %q has no shards", ErrIncompleteBranch, b.deviceID)
+	}
+	return Branch{DeviceID: b.deviceID, Records: b.records, HeadDigest: b.digest}, nil
 }
 
 // Relation describes the prefix relationship between two record sequences.
@@ -202,6 +221,18 @@ type Resolution struct {
 // ResolveBranches removes only redundant prefix branches and preserves every
 // incomparable maximal version.
 func ResolveBranches(branches []Branch) (Resolution, error) {
+	return resolveBranches(branches, true)
+}
+
+// ResolveBranchesOwned resolves branches by transferring their record
+// buffers into the result. Callers must not mutate or reuse branches after
+// this call; the function is intended for one-shot restore flows that release
+// the input branches after resolution.
+func ResolveBranchesOwned(branches []Branch) (Resolution, error) {
+	return resolveBranches(branches, false)
+}
+
+func resolveBranches(branches []Branch, cloneInput bool) (Resolution, error) {
 	if len(branches) == 0 {
 		return Resolution{}, errors.New("syncer: at least one branch is required")
 	}
@@ -229,8 +260,12 @@ func ResolveBranches(branches []Branch) (Resolution, error) {
 			}
 		}
 		if found < 0 {
+			records := branch.Records
+			if cloneInput {
+				records = cloneRecords(records)
+			}
 			unique = append(unique, Version{
-				Records:    cloneRecords(branch.Records),
+				Records:    records,
 				Devices:    []string{branch.DeviceID},
 				HeadDigest: branch.HeadDigest,
 			})

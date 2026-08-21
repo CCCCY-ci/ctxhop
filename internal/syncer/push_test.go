@@ -189,6 +189,34 @@ func TestPlanAppendRefusesChangedInputAndEnforcesLimits(t *testing.T) {
 	}
 }
 
+func TestShardEncodedSizeMatchesMarshalBinary(t *testing.T) {
+	tests := []struct {
+		base    uint64
+		records [][]byte
+	}{
+		{base: 0, records: [][]byte{[]byte("{\"n\":1}")}},
+		{base: 9, records: [][]byte{[]byte("{\"text\":\"hello\"}"), []byte("{\"n\":2}")}},
+		{base: 999999, records: [][]byte{[]byte("{\"escaped\":\"<>&\"}"), []byte("{\"array\":[1,2,3]}"), []byte("{\"unicode\":\"路径\"}")}},
+	}
+	for _, test := range tests {
+		shard, err := NewShard(test.base, EmptyDigest(), test.records)
+		if err != nil {
+			t.Fatalf("NewShard(base=%d): %v", test.base, err)
+		}
+		encoded, err := shard.MarshalBinary()
+		if err != nil {
+			t.Fatalf("MarshalBinary(base=%d): %v", test.base, err)
+		}
+		recordBytes := 0
+		for _, record := range test.records {
+			recordBytes += len(record)
+		}
+		if got := shardEncodedSize(test.base, uint64(len(test.records)), recordBytes); got != len(encoded) {
+			t.Fatalf("shardEncodedSize(base=%d) = %d, want %d", test.base, got, len(encoded))
+		}
+	}
+}
+
 func TestPutShardPublishesOnlyCiphertextAndReturnsProgress(t *testing.T) {
 	store := &pushRemoteFake{objects: make(map[string][]byte)}
 	dataKey := crypto.NewDataKey()

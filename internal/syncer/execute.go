@@ -73,19 +73,42 @@ func (e AppendExecutor) Execute(ctx context.Context, cursor PushCursor, records 
 		return PushCursor{}, fmt.Errorf("syncer: execute append: %w", err)
 	}
 
-	plan, err := PlanAppend(cursor, records, e.options)
+	prefixEnd, err := prepareAppend(cursor, records, e.options)
 	if err != nil {
 		return PushCursor{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return PushCursor{}, fmt.Errorf("syncer: execute append: %w", err)
+
+	// Preflight every boundary before the first remote write. This preserves
+	// the previous all-or-nothing planning guarantee without retaining cloned
+	// records for every shard at once.
+	sequence := cursor.NextShard
+	base := cursor.RecordCount
+	for start := prefixEnd; start < len(records); {
+		if err := ctx.Err(); err != nil {
+			return PushCursor{}, fmt.Errorf("syncer: execute append: %w", err)
+		}
+		if sequence == 0 || sequence > maxShardNumber {
+			return PushCursor{}, ErrShardSequenceExhausted
+		}
+		end, err := planShardEnd(base, records, start, e.options)
+		if err != nil {
+			return PushCursor{}, err
+		}
+		base += uint64(end - start)
+		sequence++
+		start = end
 	}
 
 	durable := cursor
-	for _, part := range plan.Parts {
+	for start := prefixEnd; start < len(records); {
 		if err := ctx.Err(); err != nil {
 			return durable, fmt.Errorf("syncer: execute append: %w", err)
 		}
+		end, shard, err := planShard(durable.RecordCount, durable.HeadDigest, records, start, e.options)
+		if err != nil {
+			return durable, err
+		}
+		part := ShardPart{Number: durable.NextShard, Shard: shard}
 
 		next, err := PutShard(ctx, e.store, e.recipient, e.layout, durable, part)
 		if err != nil {
@@ -97,6 +120,7 @@ func (e AppendExecutor) Execute(ctx context.Context, cursor PushCursor, records 
 			return durable, fmt.Errorf("syncer: save cursor after shard %d: %w", part.Number, commitErr)
 		}
 		durable = next
+		start = end
 	}
 
 	return durable, nil

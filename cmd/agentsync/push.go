@@ -22,7 +22,7 @@ import (
 	workspacepkg "github.com/CCCCY-ci/agentsync/internal/workspace"
 )
 
-const pushTimeout = 5 * time.Minute
+const pushTimeout = 10 * time.Minute
 
 type pushOptions struct {
 	hook             bool

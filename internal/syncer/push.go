@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 )
@@ -130,28 +131,9 @@ type AppendPlan struct {
 // PlanAppend validates a local canonical stream and plans only its suffix
 // after cursor. It never infers progress from remote storage.
 func PlanAppend(cursor PushCursor, records [][]byte, options PlanOptions) (AppendPlan, error) {
-	if err := cursor.Validate(); err != nil {
+	prefixEnd, err := prepareAppend(cursor, records, options)
+	if err != nil {
 		return AppendPlan{}, err
-	}
-	if err := options.validate(); err != nil {
-		return AppendPlan{}, err
-	}
-
-	if _, err := DigestRecords(records); err != nil {
-		return AppendPlan{}, fmt.Errorf("syncer: validate local records: %w", err)
-	}
-	if cursor.RecordCount > uint64(len(records)) {
-		return AppendPlan{}, fmt.Errorf("%w: local stream is shorter than the durable prefix", ErrLocalHistoryChanged)
-	}
-	prefixEnd := int(cursor.RecordCount)
-	// DigestRecords above validated every record. Reuse the validated bytes for
-	// the prefix digest without performing a second validation pass.
-	prefixDigest := EmptyDigest()
-	for _, record := range records[:prefixEnd] {
-		prefixDigest = nextDigest(prefixDigest, record)
-	}
-	if prefixDigest != cursor.HeadDigest {
-		return AppendPlan{}, fmt.Errorf("%w: local prefix digest does not match the cursor", ErrLocalHistoryChanged)
 	}
 	if cursor.RecordCount == uint64(len(records)) {
 		return AppendPlan{Next: cursor}, nil
@@ -186,6 +168,35 @@ func PlanAppend(cursor PushCursor, records [][]byte, options PlanOptions) (Appen
 			HeadDigest:  digest,
 		},
 	}, nil
+}
+
+// prepareAppend validates the complete local stream and returns the first
+// record not covered by cursor. It deliberately does not allocate shard
+// copies, so callers that execute incrementally can preflight a large session
+// without retaining a second complete copy in memory.
+func prepareAppend(cursor PushCursor, records [][]byte, options PlanOptions) (int, error) {
+	if err := cursor.Validate(); err != nil {
+		return 0, err
+	}
+	if err := options.validate(); err != nil {
+		return 0, err
+	}
+	if _, err := DigestRecords(records); err != nil {
+		return 0, fmt.Errorf("syncer: validate local records: %w", err)
+	}
+	if cursor.RecordCount > uint64(len(records)) {
+		return 0, fmt.Errorf("%w: local stream is shorter than the durable prefix", ErrLocalHistoryChanged)
+	}
+
+	prefixEnd := int(cursor.RecordCount)
+	prefixDigest := EmptyDigest()
+	for _, record := range records[:prefixEnd] {
+		prefixDigest = nextDigest(prefixDigest, record)
+	}
+	if prefixDigest != cursor.HeadDigest {
+		return 0, fmt.Errorf("%w: local prefix digest does not match the cursor", ErrLocalHistoryChanged)
+	}
+	return prefixEnd, nil
 }
 
 // PutShard encrypts and publishes one cursor-checked shard. The returned
@@ -226,38 +237,60 @@ func PutShard(ctx context.Context, store remote.Remote, recipient *ecdh.PublicKe
 }
 
 func planShard(base uint64, prefixDigest [32]byte, records [][]byte, start int, options PlanOptions) (int, Shard, error) {
-	end := start
+	end, err := planShardEnd(base, records, start, options)
+	if err != nil {
+		return 0, Shard{}, err
+	}
+	return end, Shard{
+		Base:         base,
+		PrefixDigest: prefixDigest,
+		Records:      cloneRecords(records[start:end]),
+	}, nil
+}
+
+// planShardEnd computes the exact deterministic JSON envelope size without
+// repeatedly encoding the whole growing candidate. The old implementation
+// encoded records[start:end] after every appended record, making planning
+// quadratic within each shard for long sessions.
+func planShardEnd(base uint64, records [][]byte, start int, options PlanOptions) (int, error) {
+	if start < 0 || start >= len(records) {
+		return 0, fmt.Errorf("%w: no record fits in a shard", ErrShardTooLarge)
+	}
+
+	recordBytes := 0
 	candidateEnd := start
-	for end < len(records) && end-start < options.MaxRecords {
-		end++
-		shard := Shard{
-			Base:         base,
-			PrefixDigest: prefixDigest,
-			Records:      records[start:end],
-		}
-		encoded, err := shard.MarshalBinary()
-		if err != nil {
+	for end := start + 1; end <= len(records) && end-start <= options.MaxRecords; end++ {
+		recordBytes += len(records[end-1])
+		count := uint64(end - start)
+		if shardEncodedSize(base, count, recordBytes) > options.MaxEncodedBytes {
 			if end == start+1 {
-				return 0, Shard{}, fmt.Errorf("%w: one record cannot fit in a shard", ErrShardTooLarge)
+				return 0, fmt.Errorf("%w: one record exceeds the configured envelope limit", ErrShardTooLarge)
 			}
-			end--
-			break
-		}
-		if len(encoded) > options.MaxEncodedBytes {
-			if end == start+1 {
-				return 0, Shard{}, fmt.Errorf("%w: one record exceeds the configured envelope limit", ErrShardTooLarge)
-			}
-			end--
 			break
 		}
 		candidateEnd = end
 	}
 	if candidateEnd == start {
-		return 0, Shard{}, fmt.Errorf("%w: no record fits in a shard", ErrShardTooLarge)
+		return 0, fmt.Errorf("%w: no record fits in a shard", ErrShardTooLarge)
 	}
-	return candidateEnd, Shard{
-		Base:         base,
-		PrefixDigest: prefixDigest,
-		Records:      cloneRecords(records[start:candidateEnd]),
-	}, nil
+	return candidateEnd, nil
+}
+
+func shardEncodedSize(base, count uint64, recordBytes int) int {
+	const (
+		beforeBase    = "{\"version\":1,\"base\":"
+		beforeCount   = ",\"count\":"
+		beforeDigest  = ",\"prefixDigest\":\""
+		beforeRecords = "\",\"records\":["
+		afterRecords  = "]}"
+		digestBytes   = 64
+	)
+	separators := 0
+	if count > 0 {
+		separators = int(count - 1)
+	}
+	return len(beforeBase) + len(strconv.FormatUint(base, 10)) +
+		len(beforeCount) + len(strconv.FormatUint(count, 10)) +
+		len(beforeDigest) + digestBytes +
+		len(beforeRecords) + recordBytes + separators + len(afterRecords)
 }

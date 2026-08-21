@@ -18,7 +18,7 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
 
-const historyTimeout = 60 * time.Second
+const historyTimeout = 10 * time.Minute
 
 type historyOptions struct {
 	json    bool

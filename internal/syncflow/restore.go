@@ -98,16 +98,21 @@ func FetchRestorePlanWithIdentitiesAndDevices(ctx context.Context, store remote.
 		return RestorePlan{}, fmt.Errorf("syncflow: resolve restore branches: %w", err)
 	}
 
-	resolution, err := syncer.ResolveBranches(branches)
+	resolution, err := syncer.ResolveBranchesOwned(branches)
 	if err != nil {
 		return RestorePlan{}, fmt.Errorf("syncflow: resolve restore branches: %w", err)
 	}
-	return PlanRestore(resolution, space, installation, options)
+	branches = nil
+	return planRestore(resolution, space, installation, options, false)
 }
 
 // PlanRestore validates a resolved session and localises its selected version
 // without performing any filesystem or remote operation.
 func PlanRestore(resolution syncer.Resolution, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions) (RestorePlan, error) {
+	return planRestore(resolution, space, installation, options, true)
+}
+
+func planRestore(resolution syncer.Resolution, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions, cloneCanonical bool) (RestorePlan, error) {
 	if err := validateRestoreRequest(space, installation, options); err != nil {
 		return RestorePlan{}, err
 	}
@@ -120,7 +125,10 @@ func PlanRestore(resolution syncer.Resolution, space adapter.PathSpace, installa
 		return RestorePlan{}, err
 	}
 
-	canonical := cloneRestoreRecords(version.Records)
+	canonical := version.Records
+	if cloneCanonical {
+		canonical = cloneRestoreRecords(canonical)
+	}
 	localized := make([][]byte, len(canonical))
 	for i, record := range canonical {
 		local, err := adapter.Localize(record, space)

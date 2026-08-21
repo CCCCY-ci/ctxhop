@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,17 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
 )
+
+func TestSafeResumePlanErrorPrioritizesContextFailure(t *testing.T) {
+	timeout := safeResumePlanError(errors.Join(syncer.ErrIncompleteRemoteSession, context.DeadlineExceeded))
+	if got, want := timeout.Error(), "resume: timed out while downloading the remote session; retry on a stable connection"; got != want {
+		t.Fatalf("timeout error = %q, want %q", got, want)
+	}
+	cancelled := safeResumePlanError(errors.Join(syncer.ErrIncompleteRemoteSession, context.Canceled))
+	if got, want := cancelled.Error(), "resume: remote session download was cancelled"; got != want {
+		t.Fatalf("cancelled error = %q, want %q", got, want)
+	}
+}
 
 func TestSelectResumeAgentUsesRemoteCodexMetadata(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), "codex")
