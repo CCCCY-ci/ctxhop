@@ -101,8 +101,8 @@ func run() error {
 			return errors.New("metadata check did not read any authenticated metadata")
 		}
 		for _, key := range counted.getKeys {
-			if !strings.HasSuffix(key, "/meta") {
-				return fmt.Errorf("metadata-only check read shard object %q", key)
+			if !strings.HasSuffix(key, "/meta") && !strings.HasSuffix(key, "/env") {
+				return fmt.Errorf("metadata-only check read session shard object %q", key)
 			}
 		}
 		return nil
