@@ -40,6 +40,11 @@ const (
 	KindDirectory = "directory"
 )
 
+const (
+	CoverageFingerprint = "fingerprint"
+	CoverageDirectory   = "directory"
+)
+
 var ErrInvalidSnapshot = errors.New("workspace: invalid snapshot")
 
 // Snapshot contains Git state and bounded file bodies for one session tip.
@@ -51,8 +56,10 @@ type Snapshot struct {
 	HeadDigest  string   `json:"headDigest,omitempty"`
 	Head        string   `json:"head,omitempty"`
 	Branch      string   `json:"branch,omitempty"`
+	Coverage    string   `json:"coverage,omitempty"`
 	Dirty       []string `json:"dirty,omitempty"`
 	Files       []File   `json:"files,omitempty"`
+	Omitted     []string `json:"omitted,omitempty"`
 	Complete    bool     `json:"complete"`
 	Warnings    []string `json:"warnings,omitempty"`
 }
@@ -94,6 +101,7 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 	snapshot := Snapshot{
 		Version:  SnapshotVersion,
 		Mode:     ModeDirectory,
+		Coverage: CoverageFingerprint,
 		Head:     fingerprint.Head,
 		Branch:   fingerprint.Branch,
 		Dirty:    append([]string(nil), fingerprint.Dirty...),
@@ -220,6 +228,9 @@ func (s Snapshot) Validate() error {
 	if s.Mode != ModeGit && s.Mode != ModeDirectory {
 		return fmt.Errorf("%w: unsupported mode", ErrInvalidSnapshot)
 	}
+	if s.Coverage != "" && s.Coverage != CoverageFingerprint && s.Coverage != CoverageDirectory {
+		return fmt.Errorf("%w: unsupported coverage", ErrInvalidSnapshot)
+	}
 	if s.RecordCount == 0 {
 		if s.HeadDigest != "" {
 			return fmt.Errorf("%w: empty record count has a head digest", ErrInvalidSnapshot)
@@ -230,11 +241,14 @@ func (s Snapshot) Validate() error {
 	if !validText(s.Head, 128) || !validText(s.Branch, 256) {
 		return fmt.Errorf("%w: Git state is invalid", ErrInvalidSnapshot)
 	}
-	if len(s.Dirty) > MaxFiles || len(s.Files) > MaxFiles {
+	if len(s.Dirty) > MaxFiles || len(s.Files) > MaxFiles || len(s.Omitted) > MaxFiles {
 		return fmt.Errorf("%w: too many workspace entries", ErrInvalidSnapshot)
 	}
 	if !sortedUniquePaths(s.Dirty) {
 		return fmt.Errorf("%w: dirty paths are not sorted and unique", ErrInvalidSnapshot)
+	}
+	if !sortedUniquePaths(s.Omitted) {
+		return fmt.Errorf("%w: omitted paths are not sorted and unique", ErrInvalidSnapshot)
 	}
 	if !sort.SliceIsSorted(s.Files, func(i, j int) bool { return s.Files[i].Path < s.Files[j].Path }) {
 		return fmt.Errorf("%w: files are not sorted", ErrInvalidSnapshot)
@@ -333,6 +347,8 @@ func normalizeSnapshot(snapshot *Snapshot) error {
 	}
 	sort.Strings(snapshot.Dirty)
 	snapshot.Dirty = unique(snapshot.Dirty)
+	sort.Strings(snapshot.Omitted)
+	snapshot.Omitted = unique(snapshot.Omitted)
 	sort.Slice(snapshot.Files, func(i, j int) bool { return snapshot.Files[i].Path < snapshot.Files[j].Path })
 	return snapshot.Validate()
 }

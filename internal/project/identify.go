@@ -35,9 +35,10 @@ func (i Identity) Stable() bool {
 
 // Project is the result of identifying one local directory.
 type Project struct {
-	Root     string   `json:"root"`
-	Identity Identity `json:"identity"`
-	Reason   string   `json:"reason"`
+	Root      string   `json:"root"`
+	GitBacked bool     `json:"-"`
+	Identity  Identity `json:"identity"`
+	Reason    string   `json:"reason"`
 }
 
 // Identify finds the repository root and, when possible, derives a stable
@@ -83,12 +84,12 @@ func Identify(ctx context.Context, dir string) (Project, error) {
 		}, nil
 	}
 	if len(remotes) == 0 {
-		return Project{Root: repoRoot, Reason: "the repository has no remote; bind the project manually"}, nil
+		return Project{Root: repoRoot, GitBacked: true, Reason: "the repository has no remote; bind the project manually"}, nil
 	}
 
 	name := remotes[0]
 	if !containsString(remotes, "origin") && len(remotes) != 1 {
-		return Project{Root: repoRoot, Reason: "the repository has multiple remotes and no unambiguous project identity"}, nil
+		return Project{Root: repoRoot, GitBacked: true, Reason: "the repository has multiple remotes and no unambiguous project identity"}, nil
 	}
 	if containsString(remotes, "origin") {
 		name = "origin"
@@ -99,16 +100,17 @@ func Identify(ctx context.Context, dir string) (Project, error) {
 		if ctx.Err() != nil {
 			return Project{}, ctx.Err()
 		}
-		return Project{Root: repoRoot, Reason: "the selected Git remote could not be read; bind the project manually"}, nil
+		return Project{Root: repoRoot, GitBacked: true, Reason: "the selected Git remote could not be read; bind the project manually"}, nil
 	}
 	canonical, err := CanonicalizeRemote(raw)
 	if err != nil {
-		return Project{Root: repoRoot, Reason: "the selected Git remote has no cross-device identity; bind the project manually"}, nil
+		return Project{Root: repoRoot, GitBacked: true, Reason: "the selected Git remote has no cross-device identity; bind the project manually"}, nil
 	}
 
 	return Project{
-		Root:     repoRoot,
-		Identity: Identity{Kind: KindRemote, Value: canonical},
+		Root:      repoRoot,
+		GitBacked: true,
+		Identity:  Identity{Kind: KindRemote, Value: canonical},
 	}, nil
 }
 

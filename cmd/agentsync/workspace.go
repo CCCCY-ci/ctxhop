@@ -51,6 +51,7 @@ type workspacePreviewReport struct {
 	Agent       string            `json:"agent,omitempty"`
 	NativeID    string            `json:"nativeId,omitempty"`
 	Mode        string            `json:"mode"`
+	Coverage    string            `json:"coverage,omitempty"`
 	Head        string            `json:"head,omitempty"`
 	Branch      string            `json:"branch,omitempty"`
 	RecordCount uint64            `json:"recordCount"`
@@ -120,7 +121,7 @@ func runWorkspaceWithStreams(args []string, input io.Reader, output, prompt io.W
 	if err != nil {
 		return err
 	}
-	report := buildWorkspacePreviewReport(state, session, snapshot)
+	report := buildWorkspacePreviewReport(ctx, state, session, snapshot)
 	var applyErr error
 	if options.action == "apply" {
 		if !options.yes {
@@ -227,13 +228,18 @@ func workspaceSnapshotMatchesMetadata(snapshot workspacepkg.Snapshot, metadata s
 	return strings.EqualFold(snapshot.HeadDigest, fmt.Sprintf("%x", metadata.HeadDigest))
 }
 
-func buildWorkspacePreviewReport(state environmentContext, session *listSession, snapshot workspacepkg.Snapshot) workspacePreviewReport {
+func buildWorkspacePreviewReport(ctx context.Context, state environmentContext, session *listSession, snapshot workspacepkg.Snapshot) workspacePreviewReport {
+	coverage := snapshot.Coverage
+	if coverage == "" {
+		coverage = workspacepkg.CoverageFingerprint
+	}
 	report := workspacePreviewReport{
 		Scope:       state.List.Scope,
 		Session:     session.RemoteID,
 		Agent:       session.Agent,
 		NativeID:    session.NativeID,
 		Mode:        snapshot.Mode,
+		Coverage:    coverage,
 		Head:        snapshot.Head,
 		Branch:      snapshot.Branch,
 		RecordCount: snapshot.RecordCount,
@@ -246,6 +252,9 @@ func buildWorkspacePreviewReport(state environmentContext, session *listSession,
 			"only files selected by the session fingerprint are included; file bodies are never shown in this report",
 			"no local files or Git state were changed",
 		},
+	}
+	if coverage == workspacepkg.CoverageDirectory {
+		report.Notes[0] = "the source is a filtered directory snapshot; file bodies are never shown in this report"
 	}
 	for _, source := range snapshot.Files {
 		local := workspacepkg.InspectFile(source, state.CurrentRoot)
@@ -263,11 +272,50 @@ func buildWorkspacePreviewReport(state environmentContext, session *listSession,
 			Reason: local.Reason,
 		})
 	}
+	if coverage == workspacepkg.CoverageDirectory {
+		scanCtx, cancel := context.WithTimeout(ctx, workspacePreviewTimeout)
+		scan, scanErr := workspacepkg.ScanDirectory(scanCtx, state.CurrentRoot)
+		cancel()
+		if scanErr != nil {
+			report.Complete = false
+			report.Warnings = append(report.Warnings, "the target directory could not be fully inspected")
+		} else {
+			if !scan.Complete {
+				report.Complete = false
+			}
+			report.Warnings = append(report.Warnings, scan.Warnings...)
+			known := make(map[string]bool, len(snapshot.Files)+len(snapshot.Omitted))
+			for _, source := range snapshot.Files {
+				known[source.Path] = true
+			}
+			for _, path := range snapshot.Omitted {
+				known[path] = true
+			}
+			for _, path := range scan.Paths {
+				if known[path] {
+					continue
+				}
+				source := workspacepkg.File{Path: path, Digest: "<absent>", Kind: workspacepkg.KindAbsent}
+				local := workspacepkg.InspectFile(source, state.CurrentRoot)
+				report.Changes = append(report.Changes, workspaceChange{
+					File: workspaceFileDescriptor{Path: path, Digest: "<absent>", Kind: workspacepkg.KindAbsent},
+					Path: local.Path, State: local.State, Reason: local.Reason,
+				})
+			}
+			if len(report.Changes) != len(snapshot.Files) {
+				report.Notes = append(report.Notes, "local-only files are deletion candidates; apply will not delete them automatically")
+			}
+		}
+	}
 	if !snapshot.Complete {
 		report.Notes = append(report.Notes, "some file bodies were omitted by the safety or size limits and require manual handling")
 	}
 	if len(report.Changes) == 0 {
-		report.Notes = append(report.Notes, "the snapshot contains no fingerprinted workspace entries")
+		if coverage == workspacepkg.CoverageDirectory {
+			report.Notes = append(report.Notes, "the directory snapshot contains no eligible files")
+		} else {
+			report.Notes = append(report.Notes, "the snapshot contains no fingerprinted workspace entries")
+		}
 	}
 	return report
 }
@@ -349,6 +397,11 @@ func writeWorkspacePreviewText(w io.Writer, report workspacePreviewReport) error
 	}
 	if _, err := fmt.Fprintf(w, "mode: %s\n", safeListText(report.Mode)); err != nil {
 		return err
+	}
+	if report.Coverage != "" {
+		if _, err := fmt.Fprintf(w, "coverage: %s\n", safeListText(report.Coverage)); err != nil {
+			return err
+		}
 	}
 	if report.Head != "" {
 		if _, err := fmt.Fprintf(w, "source head: %s\n", safeListText(report.Head)); err != nil {

@@ -14,7 +14,7 @@ body. For an observed Codex MCP server, it may include an allowlisted non-secret
 intent record with a command basename, safe arguments and startup timeout. Project
 files are not included in normal `push`, Hook or `watch` runs. An explicit
 `push --include-workspace` can add a bounded, filtered snapshot containing only
-files already selected by that session fingerprint. It never includes credentials,
+files selected by the session fingerprint for Git projects, or a filtered directory scan for projects without Git. It never includes credentials,
 tokens, key material, `.env` files or `.git` data. For a Codex session, it may include
 an allowlisted summary of the model, provider and effort recorded in structured session
 metadata. The target device must already have the relevant agent and project checkout.
@@ -129,7 +129,7 @@ cd /path/to/project
 ./agentsync project bind --path .
 ./agentsync push
 
-# Optional: explicitly include a bounded workspace snapshot for this session.
+# Optional: explicitly include a bounded workspace snapshot. Git projects use the session fingerprint; no-Git projects scan the safe project directory.
 ./agentsync push --include-workspace
 ~~~
 
@@ -235,8 +235,8 @@ available file bodies and backs up an existing file before replacement:
 ./agentsync workspace apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-The snapshot is limited to files selected by the session fingerprint. Unavailable,
-sensitive, binary or oversized bodies remain manual items. It never deletes local files,
+Git projects use files selected by the session fingerprint; no-Git projects use a filtered directory scan. Unavailable,
+sensitive, binary or oversized bodies remain manual items. A no-Git snapshot may show local-only files as deletion candidates. It never deletes local files,
 switches branches, commits, stashes or runs Git commands.
 
 Before restoring, inspect the Git state that was recorded with the session:
@@ -411,7 +411,7 @@ Environment credentials are not written to disk.
   restore operation.
 - Project file bodies are not uploaded by default: normal push, Hook and watch runs only
   synchronize session, environment and small Git-state metadata. push --include-workspace
-  adds a bounded snapshot only for files already selected by that session fingerprint.
+  adds a bounded snapshot: Git projects use fingerprint-selected files, while no-Git projects scan the safe project directory.
   push --include-git-state is a separate explicit operation for Git-native commit and
   worktree transfer bundles. It runs a sensitive-content preflight and fails closed when
   the content cannot be safely inspected. No whole .git directory, token, credential,
@@ -419,8 +419,8 @@ Environment credentials are not written to disk.
   imports commits into a hidden ref and applies a worktree snapshot only on a clean matching
   base. It never switches branches, commits, merges, rebases or pushes.
 - The target device must already have Claude Code and the project prepared.
-- Git projects provide stronger workspace checks. No-Git projects use a
-  touched-file fallback.
+- Git projects provide stronger workspace checks. No-Git projects use a manual identity;
+  normal workspace context uses a touched-file fallback, while explicit --include-workspace uses a bounded directory scan.
 - A server without Claude Code can store data and run administrative checks, but
   it cannot push or natively restore Claude sessions.
 - If both the encryption password and Recovery Key are lost, encrypted data is

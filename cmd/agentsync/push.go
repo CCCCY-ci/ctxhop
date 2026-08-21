@@ -143,7 +143,7 @@ func parsePushOptions(args []string) (pushOptions, error) {
 	var options pushOptions
 	flags.BoolVar(&options.hook, "agentsync-hook", false, "mark an automatic hook invocation")
 	flags.StringVar(&options.session, "session", "", "push one native session ID")
-	flags.BoolVar(&options.includeWorkspace, "include-workspace", false, "upload a filtered workspace snapshot for explicit user-requested sync")
+	flags.BoolVar(&options.includeWorkspace, "include-workspace", false, "upload a filtered workspace snapshot; no-Git projects scan the safe project directory")
 	flags.BoolVar(&options.includeGitState, "include-git-state", false, "upload explicit Git commit and worktree transfer data")
 	if err := flags.Parse(args); err != nil {
 		return pushOptions{}, fmt.Errorf("push: %w", err)
@@ -239,7 +239,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.includeWorkspace, includeGitTransfer: options.includeGitState})
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.includeWorkspace, includeDirectoryWorkspace: options.includeWorkspace && !current.GitBacked, includeGitTransfer: options.includeGitState})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -286,9 +286,10 @@ func publishProjectAnnouncement(ctx context.Context, c *config.Config, identity 
 }
 
 type pushSessionOptions struct {
-	includeWorkspace   bool
-	includeGitTransfer bool
-	projectIdentity    string
+	includeWorkspace          bool
+	includeDirectoryWorkspace bool
+	includeGitTransfer        bool
+	projectIdentity           string
 }
 
 func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, includeWorkspace ...bool) pushSummary {
@@ -377,7 +378,13 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 			continue
 		}
 		if options.includeWorkspace {
-			snapshot, captureErr := workspacepkg.Capture(ctx, projectRoot, fingerprint)
+			var snapshot workspacepkg.Snapshot
+			var captureErr error
+			if options.includeDirectoryWorkspace {
+				snapshot, captureErr = workspacepkg.CaptureDirectory(ctx, projectRoot)
+			} else {
+				snapshot, captureErr = workspacepkg.Capture(ctx, projectRoot, fingerprint)
+			}
 			if captureErr != nil {
 				summary.fail("workspace-record", captureErr)
 				continue

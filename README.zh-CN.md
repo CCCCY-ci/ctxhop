@@ -11,7 +11,7 @@ AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工
 经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传；对于实际调用到的
 Codex MCP server，只保留命令 basename、安全参数和启动超时这类非敏感意图。普通的
 `push`、Hook 和 `watch` 不会上传项目文件正文。只有明确执行 `push --include-workspace`
-时，才会为该 session 已经记录在 workspace fingerprint 中的文件生成有限快照；凭据、
+时，Git 项目会根据 session fingerprint 选择文件；完全没有 Git 的项目会扫描安全过滤后的项目目录；凭据、
 token、密钥材料、`.env`、`.git` 数据都不会进入快照。
 如果 Codex session 的结构化元数据中明确记录了 model、model_provider 或 effort，
 AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍需要提前安装相应的 Agent，
@@ -120,7 +120,7 @@ cd /path/to/project
 ./agentsync project bind --path .
 ./agentsync push
 
-# 可选：明确上传这个 session 的有限工作区快照。
+# 可选：明确上传有限工作区快照。Git 项目使用 session fingerprint；无 Git 项目扫描安全过滤后的项目目录。
 ./agentsync push --include-workspace
 ~~~
 
@@ -216,8 +216,8 @@ MCP 和 session 设置组件目前只做预览，不会修改原始配置、安�
 ./agentsync workspace apply --yes <NATIVE_SESSION_ID>
 ~~~
 
-快照只包含该 session fingerprint 已选中的文件。不可用、敏感、二进制或超出大小限制的正文
-会保留为需要手动处理的项目。它不会删除本地文件、切换分支、提交、stash 或执行 Git 命令。
+Git 项目快照只包含该 session fingerprint 已选中的文件；无 Git 项目快照来自安全过滤后的目录扫描。不可用、敏感、二进制或超出大小限制的正文
+会保留为需要手动处理的项目。无 Git 快照中的本地多余文件会显示为删除候选，但不会自动删除本地文件，也不会切换分支、提交、stash 或执行 Git 命令。
 
 使用 `list` 打印出的会话 ID 进行恢复：
 
@@ -373,14 +373,14 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
 - `push` 写入当前设备的分支，不会把该分支再拉回本机。
 - `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
 - 默认不会上传项目文件正文：普通 push、Hook 和 watch 只同步会话、环境和小型 Git
-  状态摘要。push --include-workspace 才会为 session fingerprint 已选中的文件生成有限
-  快照；push --include-git-state 是另一条明确的 Git 原生 commit/worktree bundle 传输
+  状态摘要。push --include-workspace 会生成有限快照：Git 项目使用 session fingerprint，
+  无 Git 项目扫描安全过滤后的项目目录。push --include-git-state 是另一条明确的 Git 原生 commit/worktree bundle 传输
   路径。传输前会做敏感内容预检，无法安全检查时直接失败；整个 .git、token、凭据、
   密钥材料和 .env 文件永不上传。git preview 只读；git apply --yes 只会把 commit
   导入隐藏 ref，并在目标工作区干净且基线匹配时应用工作区快照，不会切换分支、提交、
   merge、rebase 或 push。
 - 目标设备必须提前准备好 Claude Code 和项目。
-- Git 项目有更强的工作区检查；没有 Git 的项目使用 touched 文件回退检查。
+- Git 项目有更强的工作区检查；没有 Git 的项目使用 manual identity。普通工作区上下文使用 touched 文件回退检查，显式 --include-workspace 时使用有限目录扫描。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复
   Claude 会话。
 - 加密密码和 Recovery Key 同时丢失后，加密数据无法恢复。
