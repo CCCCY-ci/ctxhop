@@ -77,6 +77,23 @@ func inspectCodexSettingsComponent(component Component, agentHome, projectRoot s
 	} else {
 		result.State = ComponentStateChanged
 	}
+	if result.State == ComponentStateUnchanged && component.Scope == "global" {
+		projectValues, projectFound, projectSafe := readCodexProjectSettings(projectRoot)
+		if !projectSafe {
+			result.State = ComponentStateUnavailable
+			result.Reason = "project Codex settings could not be inspected safely"
+			return result
+		}
+		if projectFound {
+			for key, value := range projectValues {
+				if values[key] != value {
+					result.State = ComponentStateChanged
+					result.Reason = "project Codex settings override the global component"
+					return result
+				}
+			}
+		}
+	}
 	return result
 }
 

@@ -59,6 +59,22 @@ func inspectMCPComponent(component Component, agentHome, projectRoot string) Loc
 	} else {
 		result.State = ComponentStateChanged
 	}
+	if result.State == ComponentStateUnchanged && component.Scope == "global" && strings.TrimSpace(projectRoot) != "" {
+		projectServers := readMCPConfig(filepath.Join(projectRoot, ".codex", "config.toml"))
+		projectServer, projectFound := projectServers[component.Name]
+		if projectFound {
+			projectLocal, safe := newMCPComponent(reference, "global", "", projectServer)
+			if !safe {
+				result.State = ComponentStateUnavailable
+				result.Reason = "project MCP configuration overrides the global component with an unsafe intent"
+				return result
+			}
+			if !strings.EqualFold(projectLocal.Component.Fingerprint, local.Component.Fingerprint) {
+				result.State = ComponentStateChanged
+				result.Reason = "project MCP configuration overrides the global component"
+			}
+		}
+	}
 	return result
 }
 
