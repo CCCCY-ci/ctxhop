@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,13 +32,15 @@ type ApplyPreview struct {
 }
 
 type ApplyResult struct {
-	Status          string
-	CurrentHead     string
-	CurrentBranch   string
-	CommitRef       string
-	WorktreeRef     string
-	WorktreeApplied bool
-	Notes           []string
+	Status                string
+	CurrentHead           string
+	CurrentBranch         string
+	CommitRef             string
+	WorktreeRef           string
+	WorktreeApplyStarted  bool
+	WorktreeApplied       bool
+	ManualCleanupRequired bool
+	Notes                 []string
 }
 
 // PreviewTransfer checks the target repository without importing objects or
@@ -137,9 +140,27 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 			return result, importErr
 		}
 		result.WorktreeRef = ref
+		if safetyErr := checkWorktreeApplySafety(ctx, root, ref); safetyErr != nil {
+			result.Status = ApplyConflict
+			result.Notes = append(result.Notes, "the worktree snapshot was imported but not applied; the target was left unchanged")
+			return result, safetyErr
+		}
+		result.WorktreeApplyStarted = true
 		if _, applyErr := runGit(ctx, root, "stash", "apply", "--index", ref); applyErr != nil {
 			result.Status = ApplyPartial
-			return result, errors.New("gitstate: apply worktree snapshot failed")
+			result.ManualCleanupRequired = true
+			result.Notes = append(result.Notes,
+				"the worktree apply started but did not complete; inspect 'git status' and clean up manually if needed; AgentSync did not reset or delete files")
+			if current, captureErr := Capture(ctx, root, source.ProjectIdentity); captureErr == nil {
+				result.CurrentHead = current.Repository.Head
+				result.CurrentBranch = current.Repository.Branch
+				if !current.Worktree.Clean {
+					result.Notes = append(result.Notes, "the target worktree is currently not clean after the failed apply")
+				}
+			} else {
+				result.Notes = append(result.Notes, "the target worktree status could not be re-read after the failed apply")
+			}
+			return result, errors.New("gitstate: apply worktree snapshot failed; inspect git status; no automatic rollback was attempted")
 		}
 		result.WorktreeApplied = true
 		result.Status = ApplyApplied
@@ -149,6 +170,71 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 		result.Notes = append(result.Notes, "no Git object was changed")
 	}
 	return result, nil
+}
+
+func stashShowPaths(data []byte) ([]string, error) {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	var paths []string
+	for _, path := range strings.Split(text, "\n") {
+		path = strings.TrimSuffix(path, "\r")
+		if path == "" {
+			continue
+		}
+		if strings.HasPrefix(path, "\"") || strings.ContainsRune(path, 0) {
+			return nil, fmt.Errorf("gitstate: worktree snapshot paths could not be read safely: %w", ErrTransferUnavailable)
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+func checkWorktreeApplySafety(ctx context.Context, root, ref string) error {
+	data, err := runGitRaw(ctx, root, "stash", "show", "--name-only", "--include-untracked", ref)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("gitstate: inspect worktree snapshot paths: %w", ErrTransferUnavailable)
+	}
+	paths, pathsErr := stashShowPaths(data)
+	if pathsErr != nil {
+		return pathsErr
+	}
+	for _, path := range paths {
+		if err := validateRelativePath(path); err != nil {
+			return fmt.Errorf("gitstate: worktree snapshot contains an invalid path: %w", err)
+		}
+		absolute := filepath.Join(root, filepath.FromSlash(path))
+		for candidate := absolute; ; candidate = filepath.Dir(candidate) {
+			info, statErr := os.Lstat(candidate)
+			if statErr == nil {
+				relative, relativeErr := filepath.Rel(root, candidate)
+				if relativeErr != nil {
+					return fmt.Errorf("gitstate: inspect target path: %w", ErrTransferUnavailable)
+				}
+				relative = filepath.ToSlash(relative)
+				if relative == "." {
+					break
+				}
+				if _, trackedErr := runGit(ctx, root, "ls-files", "--error-unmatch", "--", relative); trackedErr != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					return fmt.Errorf("gitstate: target contains an untracked or ignored path that would be touched by the worktree snapshot: %s", path)
+				}
+				if !info.IsDir() {
+					break
+				}
+			} else if !os.IsNotExist(statErr) {
+				return fmt.Errorf("gitstate: inspect target path: %w", ErrTransferUnavailable)
+			}
+			parent := filepath.Dir(candidate)
+			if parent == candidate {
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func importBundle(ctx context.Context, root string, bundle []byte, tip, kind string) (string, error) {
@@ -201,6 +287,12 @@ func (r ApplyResult) Validate() error {
 	}
 	if strings.ContainsAny(r.CurrentBranch, "\x00\r\n") {
 		return errors.New("gitstate: invalid current branch")
+	}
+	if r.WorktreeApplied && !r.WorktreeApplyStarted {
+		return errors.New("gitstate: applied worktree result must record that apply started")
+	}
+	if r.ManualCleanupRequired && !r.WorktreeApplyStarted {
+		return errors.New("gitstate: manual cleanup result must record that apply started")
 	}
 	return nil
 }

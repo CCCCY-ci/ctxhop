@@ -252,8 +252,10 @@ claude --resume
 
 git preview 只读；git apply 不加 --yes 也只预览。加上 --yes 后，显式上传的
 本地 commit 会导入到隐藏的 refs/agentsync/...，工作区快照只有在目标工作区干净且
-HEAD 与来源基线一致时才会应用。它不会切换分支、merge、rebase、commit 或 push；
-基线不一致时会报告冲突并保持目标工作区不变。
+HEAD 与来源基线一致时才会应用。应用前还会检查快照涉及的路径；如果目标端已有未跟踪或被
+忽略的同名文件/目录，即使 `git status` 看起来干净，也会报告冲突并保持目标不变。它不会
+切换分支、merge、rebase、commit 或 push。如果 Git 应用已经启动但中途失败，结果会标记为
+partial，并提示检查 `git status`；AgentSync 不会自动 reset 或删除文件。
 恢复 session 时：
 
 - AgentSync 会先检查相关的项目文件。这里检查的是项目文件，不是 session 内容；如果这些

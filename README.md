@@ -250,9 +250,14 @@ Before restoring, inspect the Git state that was recorded with the session:
 git preview is read-only. git apply without --yes is also a preview. With
 --yes, an explicit transfer can import unpushed commits into a hidden
 refs/agentsync/... ref and apply the worktree snapshot only when the target
-worktree is clean and its HEAD matches the recorded base. It does not switch
-branches, merge, rebase, commit or push. If the target is not at the same base,
-it reports a conflict and leaves the worktree unchanged.
+worktree is clean and its HEAD matches the recorded base. Before applying,
+AgentSync also checks the snapshot paths against existing files and directories.
+An untracked or ignored path at a path the snapshot would write is reported as a
+conflict, even when `git status` is otherwise clean, and the target is left
+unchanged. It does not switch branches, merge, rebase, commit or push. If Git
+fails after worktree application starts, the result is marked partial and the
+command tells you to inspect `git status`; AgentSync does not run an automatic
+reset or delete files.
 Restore the session ID printed by `list`:
 
 ~~~bash

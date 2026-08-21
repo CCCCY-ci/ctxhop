@@ -12,18 +12,20 @@ import (
 )
 
 type ApplyRecord struct {
-	Version         int       `json:"version"`
-	AppliedAt       time.Time `json:"appliedAt"`
-	ProjectID       string    `json:"projectId"`
-	SessionID       string    `json:"sessionId"`
-	ProjectIdentity string    `json:"projectIdentity,omitempty"`
-	SourceHead      string    `json:"sourceHead,omitempty"`
-	CurrentHead     string    `json:"currentHead,omitempty"`
-	Branch          string    `json:"branch,omitempty"`
-	CommitRef       string    `json:"commitRef,omitempty"`
-	WorktreeRef     string    `json:"worktreeRef,omitempty"`
-	WorktreeApplied bool      `json:"worktreeApplied,omitempty"`
-	Status          string    `json:"status"`
+	Version               int       `json:"version"`
+	AppliedAt             time.Time `json:"appliedAt"`
+	ProjectID             string    `json:"projectId"`
+	SessionID             string    `json:"sessionId"`
+	ProjectIdentity       string    `json:"projectIdentity,omitempty"`
+	SourceHead            string    `json:"sourceHead,omitempty"`
+	CurrentHead           string    `json:"currentHead,omitempty"`
+	Branch                string    `json:"branch,omitempty"`
+	CommitRef             string    `json:"commitRef,omitempty"`
+	WorktreeRef           string    `json:"worktreeRef,omitempty"`
+	WorktreeApplyStarted  bool      `json:"worktreeApplyStarted,omitempty"`
+	WorktreeApplied       bool      `json:"worktreeApplied,omitempty"`
+	ManualCleanupRequired bool      `json:"manualCleanupRequired,omitempty"`
+	Status                string    `json:"status"`
 }
 
 func (r ApplyRecord) Validate() error {
@@ -56,6 +58,12 @@ func (r ApplyRecord) Validate() error {
 	}
 	if err := validateRef(r.WorktreeRef, "worktree ref"); err != nil {
 		return err
+	}
+	if r.WorktreeApplied && !r.WorktreeApplyStarted {
+		return errors.New("gitstate: applied worktree record must record that apply started")
+	}
+	if r.ManualCleanupRequired && !r.WorktreeApplyStarted {
+		return errors.New("gitstate: manual cleanup record must record that apply started")
 	}
 	if r.Status != ApplyNoChange && r.Status != ApplyApplied && r.Status != ApplyPartial && r.Status != ApplyConflict {
 		return errors.New("gitstate: invalid apply record status")

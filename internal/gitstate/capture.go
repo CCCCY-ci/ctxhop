@@ -197,18 +197,13 @@ func CaptureTransfer(ctx context.Context, root string, state State) (State, Tran
 		if state.Repository.Head == "" {
 			state.Transfer.Reason = "the repository has no base commit for a worktree snapshot"
 		} else {
-			stashTip, stashErr := runGit(ctx, absolute, "stash", "create", "--include-untracked", "AgentSync workspace transfer")
-			if stashErr != nil {
-				return State{}, Transfer{}, fmt.Errorf("gitstate: create worktree snapshot: %w", ErrTransferUnavailable)
+			stashTip, bundle, transferErr := createWorktreeTransfer(ctx, absolute, state)
+			if transferErr != nil {
+				return State{}, Transfer{}, transferErr
 			}
-			stashTip = strings.TrimSpace(stashTip)
 			if stashTip != "" {
 				transfer.WorktreeBase = state.Repository.Head
 				transfer.WorktreeTip = stashTip
-				bundle, bundleErr := createBundle(ctx, absolute, stashTip)
-				if bundleErr != nil {
-					return State{}, Transfer{}, bundleErr
-				}
 				transfer.WorktreeBundle = bundle
 			}
 		}
@@ -218,6 +213,73 @@ func CaptureTransfer(ctx context.Context, root string, state State) (State, Tran
 		state.Transfer.Reason = "no unpushed commits or uncommitted changes were found"
 	}
 	return state, transfer, nil
+}
+
+// Git stash create does not include ordinary untracked files on supported Git
+// versions. When one is present, use a temporary stash and restore it before returning.
+func createWorktreeTransfer(ctx context.Context, root string, state State) (string, []byte, error) {
+	if hasUntrackedWorktreeChanges(state.Worktree.Entries) {
+		return createTemporaryStashTransfer(ctx, root)
+	}
+	stashTip, stashErr := runGit(ctx, root, "stash", "create", "AgentSync workspace transfer")
+	if stashErr != nil {
+		return "", nil, fmt.Errorf("gitstate: create worktree snapshot: %w", ErrTransferUnavailable)
+	}
+	stashTip = strings.TrimSpace(stashTip)
+	if stashTip == "" {
+		return "", nil, nil
+	}
+	bundle, bundleErr := createBundle(ctx, root, stashTip)
+	if bundleErr != nil {
+		return "", nil, bundleErr
+	}
+	return stashTip, bundle, nil
+}
+
+func hasUntrackedWorktreeChanges(entries []StatusEntry) bool {
+	for _, entry := range entries {
+		if entry.XY == "??" {
+			return true
+		}
+	}
+	return false
+}
+
+func createTemporaryStashTransfer(ctx context.Context, root string) (string, []byte, error) {
+	previousTip := ""
+	if value, err := runGit(ctx, root, "rev-parse", "--verify", "refs/stash"); err == nil {
+		previousTip = strings.TrimSpace(value)
+	} else if ctx.Err() != nil {
+		return "", nil, ctx.Err()
+	}
+	if _, err := runGit(ctx, root, "stash", "push", "--include-untracked", "--message", "AgentSync temporary workspace transfer"); err != nil {
+		return "", nil, fmt.Errorf("gitstate: create temporary worktree snapshot: %w", ErrTransferUnavailable)
+	}
+	stashTip, err := runGit(ctx, root, "rev-parse", "--verify", "refs/stash")
+	if err != nil {
+		return "", nil, fmt.Errorf("gitstate: locate temporary worktree snapshot failed; the saved changes remain in stash: %w", ErrTransferUnavailable)
+	}
+	stashTip = strings.TrimSpace(stashTip)
+	if stashTip == "" || stashTip == previousTip {
+		return "", nil, fmt.Errorf("gitstate: temporary worktree snapshot was not created: %w", ErrTransferUnavailable)
+	}
+	bundle, bundleErr := createBundle(ctx, root, stashTip)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, restoreErr := runGit(cleanupCtx, root, "stash", "apply", "--index", stashTip); restoreErr != nil {
+		return "", nil, fmt.Errorf("gitstate: restore temporary worktree snapshot failed; the saved changes remain in stash: %w", ErrTransferUnavailable)
+	}
+	currentTip, currentErr := runGit(cleanupCtx, root, "rev-parse", "--verify", "refs/stash")
+	if currentErr != nil || strings.TrimSpace(currentTip) != stashTip {
+		return "", nil, fmt.Errorf("gitstate: temporary stash changed before cleanup; the saved changes remain in stash: %w", ErrTransferUnavailable)
+	}
+	if _, dropErr := runGit(cleanupCtx, root, "stash", "drop", "stash@{0}"); dropErr != nil {
+		return "", nil, fmt.Errorf("gitstate: remove temporary worktree snapshot failed; the saved changes remain in stash: %w", ErrTransferUnavailable)
+	}
+	if bundleErr != nil {
+		return "", nil, bundleErr
+	}
+	return stashTip, bundle, nil
 }
 
 func captureStatus(ctx context.Context, root string) (WorktreeState, error) {

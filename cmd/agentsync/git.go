@@ -57,33 +57,35 @@ type gitTransferReport struct {
 }
 
 type gitPreviewReport struct {
-	Scope              string            `json:"scope"`
-	Session            string            `json:"session"`
-	Agent              string            `json:"agent,omitempty"`
-	NativeID           string            `json:"nativeId,omitempty"`
-	SourceDevice       string            `json:"sourceDevice,omitempty"`
-	Mode               string            `json:"mode"`
-	SourceHead         string            `json:"sourceHead,omitempty"`
-	SourceBranch       string            `json:"sourceBranch,omitempty"`
-	SourceUpstream     string            `json:"sourceUpstream,omitempty"`
-	SourceUpstreamHead string            `json:"sourceUpstreamHead,omitempty"`
-	Ahead              uint64            `json:"ahead"`
-	Behind             uint64            `json:"behind"`
-	SourceClean        bool              `json:"sourceClean"`
-	SensitiveOmitted   bool              `json:"sensitiveOmitted,omitempty"`
-	Dirty              []gitEntryReport  `json:"dirty,omitempty"`
-	Stashes            []gitStashReport  `json:"stashes,omitempty"`
-	Transfer           gitTransferReport `json:"transfer"`
-	CurrentHead        string            `json:"currentHead,omitempty"`
-	CurrentBranch      string            `json:"currentBranch,omitempty"`
-	CurrentClean       bool              `json:"currentClean"`
-	CommitReady        bool              `json:"commitReady"`
-	WorktreeReady      bool              `json:"worktreeReady"`
-	CommitRef          string            `json:"commitRef,omitempty"`
-	WorktreeRef        string            `json:"worktreeRef,omitempty"`
-	WorktreeApplied    bool              `json:"worktreeApplied"`
-	Status             string            `json:"status"`
-	Notes              []string          `json:"notes"`
+	Scope                 string            `json:"scope"`
+	Session               string            `json:"session"`
+	Agent                 string            `json:"agent,omitempty"`
+	NativeID              string            `json:"nativeId,omitempty"`
+	SourceDevice          string            `json:"sourceDevice,omitempty"`
+	Mode                  string            `json:"mode"`
+	SourceHead            string            `json:"sourceHead,omitempty"`
+	SourceBranch          string            `json:"sourceBranch,omitempty"`
+	SourceUpstream        string            `json:"sourceUpstream,omitempty"`
+	SourceUpstreamHead    string            `json:"sourceUpstreamHead,omitempty"`
+	Ahead                 uint64            `json:"ahead"`
+	Behind                uint64            `json:"behind"`
+	SourceClean           bool              `json:"sourceClean"`
+	SensitiveOmitted      bool              `json:"sensitiveOmitted,omitempty"`
+	Dirty                 []gitEntryReport  `json:"dirty,omitempty"`
+	Stashes               []gitStashReport  `json:"stashes,omitempty"`
+	Transfer              gitTransferReport `json:"transfer"`
+	CurrentHead           string            `json:"currentHead,omitempty"`
+	CurrentBranch         string            `json:"currentBranch,omitempty"`
+	CurrentClean          bool              `json:"currentClean"`
+	CommitReady           bool              `json:"commitReady"`
+	WorktreeReady         bool              `json:"worktreeReady"`
+	CommitRef             string            `json:"commitRef,omitempty"`
+	WorktreeRef           string            `json:"worktreeRef,omitempty"`
+	WorktreeApplyStarted  bool              `json:"worktreeApplyStarted"`
+	WorktreeApplied       bool              `json:"worktreeApplied"`
+	ManualCleanupRequired bool              `json:"manualCleanupRequired"`
+	Status                string            `json:"status"`
+	Notes                 []string          `json:"notes"`
 }
 
 func init() {
@@ -167,7 +169,9 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			report.Status = result.Status
 			report.CommitRef = result.CommitRef
 			report.WorktreeRef = result.WorktreeRef
+			report.WorktreeApplyStarted = result.WorktreeApplyStarted
 			report.WorktreeApplied = result.WorktreeApplied
+			report.ManualCleanupRequired = result.ManualCleanupRequired
 			report.CurrentHead = result.CurrentHead
 			report.CurrentBranch = result.CurrentBranch
 			report.Notes = append(report.Notes, result.Notes...)
@@ -178,8 +182,9 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 				Version: gitstate.Version, AppliedAt: time.Now().UTC(), ProjectID: state.ProjectID,
 				SessionID: session.RemoteID, ProjectIdentity: state.ProjectIdentity,
 				SourceHead: source.Repository.Head, CurrentHead: result.CurrentHead, Branch: result.CurrentBranch,
-				CommitRef: result.CommitRef, WorktreeRef: result.WorktreeRef, WorktreeApplied: result.WorktreeApplied,
-				Status: result.Status,
+				CommitRef: result.CommitRef, WorktreeRef: result.WorktreeRef,
+				WorktreeApplyStarted: result.WorktreeApplyStarted, WorktreeApplied: result.WorktreeApplied,
+				ManualCleanupRequired: result.ManualCleanupRequired, Status: result.Status,
 			})
 			if recordErr != nil {
 				applyErr = errors.Join(resultErr, fmt.Errorf("git apply: write local recovery record: %w", recordErr))
@@ -412,6 +417,12 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 		}
 	}
 	if _, err := fmt.Fprintf(w, "worktree applied: %t\n", report.WorktreeApplied); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "worktree apply started: %t\n", report.WorktreeApplyStarted); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "manual cleanup required: %t\n", report.ManualCleanupRequired); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "status: %s\n", safeListText(report.Status)); err != nil {
