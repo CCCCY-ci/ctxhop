@@ -19,6 +19,12 @@ tokens, key material, `.env` files or `.git` data. For a Codex session, it may i
 an allowlisted summary of the model, provider and effort recorded in structured session
 metadata. The target device must already have the relevant agent and project checkout.
 
+Session and environment payloads, workspace snapshots, and Git transfer bodies are
+normalized and compressed when beneficial before encryption. The versioned wrapper
+has bounded decompression and expansion checks; small or incompressible bodies stay
+uncompressed, and older uncompressed remote objects remain readable. Credentials,
+tokens and key material never enter this pipeline.
+
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
 restore safety checks, read-only environment previews, explicit application of filtered
@@ -439,7 +445,11 @@ Environment credentials are not written to disk.
 
 ## Limitations and safety
 
-- Session data and metadata are encrypted before upload.
+- Session and environment payloads, workspace snapshots, and Git transfer bodies are
+  compressed when beneficial before encryption. The versioned wrapper has bounded
+  decompression and expansion checks; small or incompressible bodies stay uncompressed,
+  and older uncompressed remote objects remain readable. Credentials, tokens and key
+  material never enter this pipeline.
 - Each device has its own device ID and remote branch.
 - `push` writes the current device's branch; it does not pull that branch back.
 - `pull --check` reads metadata. `resume` is the explicit body download and

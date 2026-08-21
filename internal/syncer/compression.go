@@ -14,6 +14,10 @@ const (
 	compressionVersion    = byte(1)
 	compressionCodecZlib  = byte(1)
 	compressionHeaderSize = len(compressionMagic) + 1 + 1 + 8 + 8
+	// Keep the ratio limit deliberately generous so normal highly repetitive
+	// session data remains valid while tiny compressed bombs are rejected
+	// before zlib allocates the full output.
+	compressionMaxExpansionRatio = 1 << 15
 )
 
 var (
@@ -108,6 +112,9 @@ func decompressPayload(payload []byte, maxSize int) ([]byte, error) {
 	}
 	if compressedLen != uint64(len(payload)-compressionHeaderSize) {
 		return nil, fmt.Errorf("%w: compressed length does not match payload", ErrInvalidCompressedPayload)
+	}
+	if uncompressedLen > compressedLen*compressionMaxExpansionRatio {
+		return nil, fmt.Errorf("%w: expansion ratio exceeds %d", ErrCompressedPayloadTooLarge, compressionMaxExpansionRatio)
 	}
 
 	compressed := bytes.NewReader(payload[compressionHeaderSize:])

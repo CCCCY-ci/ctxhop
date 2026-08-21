@@ -146,7 +146,8 @@ type metadataWire struct {
 	Payload     json.RawMessage `json:"payload"`
 }
 
-// SealMetadata encodes and encrypts metadata for its exact object key.
+// SealMetadata encodes, compresses and encrypts metadata for its exact object
+// key. The compression wrapper is optional for small metadata payloads.
 func SealMetadata(recipient *ecdh.PublicKey, objectKey string, metadata Metadata) ([]byte, error) {
 	if err := remote.ValidateKey(objectKey); err != nil {
 		return nil, fmt.Errorf("syncer: seal metadata: %w", err)
@@ -155,21 +156,30 @@ func SealMetadata(recipient *ecdh.PublicKey, objectKey string, metadata Metadata
 	if err != nil {
 		return nil, fmt.Errorf("syncer: encode metadata: %w", err)
 	}
-	sealed, err := crypto.Encrypt(recipient, objectKey, plaintext)
+	compressed, err := compressPayload(plaintext, maxMetadataBytes)
+	if err != nil {
+		return nil, fmt.Errorf("syncer: compress metadata: %w", err)
+	}
+	sealed, err := crypto.Encrypt(recipient, objectKey, compressed)
 	if err != nil {
 		return nil, fmt.Errorf("syncer: encrypt metadata: %w", err)
 	}
 	return sealed, nil
 }
 
-// OpenMetadata decrypts and validates metadata read from its exact object key.
+// OpenMetadata decrypts, decompresses and validates metadata read from its
+// exact object key. Payloads written before compression are accepted as-is.
 func OpenMetadata(identity *ecdh.PrivateKey, objectKey string, sealed []byte) (Metadata, error) {
 	if err := remote.ValidateKey(objectKey); err != nil {
 		return Metadata{}, fmt.Errorf("syncer: open metadata: %w", err)
 	}
-	plaintext, err := crypto.Decrypt(identity, objectKey, sealed)
+	compressed, err := crypto.Decrypt(identity, objectKey, sealed)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("syncer: decrypt metadata: %w", err)
+	}
+	plaintext, err := decompressPayload(compressed, maxMetadataBytes)
+	if err != nil {
+		return Metadata{}, fmt.Errorf("syncer: decompress metadata: %w", err)
 	}
 	metadata, err := ParseMetadata(plaintext)
 	if err != nil {
