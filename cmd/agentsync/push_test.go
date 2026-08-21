@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/CCCCY-ci/agentsync/internal/adapter"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/agentsync/internal/gitstate"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
@@ -85,8 +87,8 @@ func TestPushDiscoveredSessionPublishesShardsAndSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(objects) != 3 {
-		t.Fatalf("remote objects = %+v, want one shard, one environment object and one metadata object", objects)
+	if len(objects) != 4 {
+		t.Fatalf("remote objects = %+v, want one shard, one environment object, one Git state object and one metadata object", objects)
 	}
 	identity, err := dataKey.IdentityPrivate()
 	if err != nil {
@@ -102,6 +104,10 @@ func TestPushDiscoveredSessionPublishesShardsAndSummary(t *testing.T) {
 	}
 	if strings.Contains(string(metadata[0].Metadata.Payload), "\"dependencies\"") {
 		t.Fatal("environment references must stay outside the legacy session summary")
+	}
+	gitState, err := syncer.ReadGitState(context.Background(), store, objectLayout, []*ecdh.PrivateKey{identity})
+	if err != nil || gitState.Mode != gitstate.ModeGit || gitState.SessionRecordCount != 1 || gitState.SessionHeadDigest == "" {
+		t.Fatalf("Git state = %+v, error = %v", gitState, err)
 	}
 	cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
 	if err != nil {

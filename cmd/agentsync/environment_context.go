@@ -17,12 +17,13 @@ import (
 )
 
 type environmentContext struct {
-	List           listReport
-	CurrentRoot    string
-	ProjectID      string
-	ConfigDir      string
-	RemoteSessions []syncer.ProjectMetadataRef
-	Access         *domainAccess
+	List            listReport
+	CurrentRoot     string
+	ProjectID       string
+	ProjectIdentity string
+	ConfigDir       string
+	RemoteSessions  []syncer.ProjectMetadataRef
+	Access          *domainAccess
 }
 
 type environmentComponentChange struct {
@@ -94,12 +95,13 @@ func collectEnvironmentContext(ctx context.Context, c *config.Config, configDir,
 	}
 	closeOnError = false
 	return environmentContext{
-		List:           mergeListSessions(c.Device.ID, secrets.IdentifierKey, projectID, localSessions, remoteSessions),
-		CurrentRoot:    current.Root,
-		ProjectID:      projectID,
-		ConfigDir:      configDir,
-		RemoteSessions: remoteSessions,
-		Access:         access,
+		List:            mergeListSessions(c.Device.ID, secrets.IdentifierKey, projectID, localSessions, remoteSessions),
+		CurrentRoot:     current.Root,
+		ProjectID:       projectID,
+		ProjectIdentity: current.Identity.Value,
+		ConfigDir:       configDir,
+		RemoteSessions:  remoteSessions,
+		Access:          access,
 	}, nil
 }
 

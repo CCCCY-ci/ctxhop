@@ -9,15 +9,18 @@ AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Co
 AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工具依赖时，
 保存一份很小的加密依赖清单。对于 session 结构化引用到的 Codex skill，如果本地存在
 经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传；对于实际调用到的
-Codex MCP server，只保留命令 basename、安全参数和启动超时这类非敏感意图。它不会复制
-项目文件、未提交的修改、完整 skills 目录、完整配置正文、原始 MCP TOML、凭据或环境变量的实际值。
+Codex MCP server，只保留命令 basename、安全参数和启动超时这类非敏感意图。普通的
+`push`、Hook 和 `watch` 不会上传项目文件正文。只有明确执行 `push --include-workspace`
+时，才会为该 session 已经记录在 workspace fingerprint 中的文件生成有限快照；凭据、
+token、密钥材料、`.env`、`.git` 数据都不会进入快照。
 如果 Codex session 的结构化元数据中明确记录了 model、model_provider 或 effort，
 AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍需要提前安装相应的 Agent，
 并准备好对应项目的 checkout。
 
 当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
-Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查，以及只读环境预览和
-经过明确确认后按需应用的 Codex Skill 组件；MCP 意图和 session 设置组件仍只做预览。
+Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查，以及只读环境预览、
+经过明确确认后按需应用的 Codex Skill 组件和有限工作区快照；MCP 意图和 session 设置
+组件仍只做预览。
 
 ## 快速开始
 
@@ -116,7 +119,21 @@ Claude Code 使用 --agent claude-code；不传 --agent 会配置检测到的所
 cd /path/to/project
 ./agentsync project bind --path .
 ./agentsync push
+
+# 可选：明确上传这个 session 的有限工作区快照。
+./agentsync push --include-workspace
 ~~~
+
+普通 push 还会记录一份很小的加密 Git 状态摘要，包括仓库 HEAD、分支、upstream
+和 dirty 路径，但不会上传 Git 对象或项目文件。如果需要明确携带本地 commit 或
+tracked/untracked 的未提交修改到另一份 checkout，执行：
+
+~~~bash
+./agentsync push --include-git-state
+~~~
+
+这个选项会先做敏感内容预检，再生成 Git 原生 bundle。它不会上传整个 .git 目录。
+设备 B 需要明确执行应用；commit 会先导入隐藏的 AgentSync ref，当前分支不会自动改变。
 
 没有可用 Git 身份的项目使用手动名称：
 
@@ -190,6 +207,17 @@ Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作�
 ~~~
 
 MCP 和 session 设置组件目前只做预览，不会修改原始配置、安装工具或执行命令。
+如果设备 A 使用了 `push --include-workspace`，设备 B 可以先查看并明确应用这个有限工作区快照。
+预览不会写入文件；加上 `--yes` 后才会写入可用的文件正文，替换已有文件前会先备份：
+
+~~~bash
+./agentsync workspace preview <NATIVE_SESSION_ID>
+./agentsync workspace apply <NATIVE_SESSION_ID>
+./agentsync workspace apply --yes <NATIVE_SESSION_ID>
+~~~
+
+快照只包含该 session fingerprint 已选中的文件。不可用、敏感、二进制或超出大小限制的正文
+会保留为需要手动处理的项目。它不会删除本地文件、切换分支、提交、stash 或执行 Git 命令。
 
 使用 `list` 打印出的会话 ID 进行恢复：
 
@@ -208,10 +236,24 @@ claude --resume
 ~~~
 
 `pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的结构化依赖和本地
-组件差异。`resume` 才会下载选中的加密会话并恢复到 Claude Code。`env apply` 不加 `--yes`
-只显示差异；加上 `--yes` 后才会备份并写入过滤后的 Codex Skill 文件，不会安装工具、修改
-原始 MCP 配置或执行命令。
+组件差异。只有源设备使用了 `push --include-workspace` 时，`workspace preview` 才会显示
+有限工作区快照。`resume` 才会下载选中的加密会话并恢复到 Claude Code。`env apply` 不加
+`--yes` 只显示差异；`env apply --yes` 会备份后写入过滤后的 Codex Skill 文件，
+`workspace apply --yes` 会用同样的方式写入可用的有限工作区正文。它们都不会安装工具、
+修改原始 MCP 配置或执行命令。
 
+恢复前可以先查看 session 记录的 Git 状态：
+
+~~~bash
+./agentsync git preview <NATIVE_SESSION_ID>
+./agentsync git apply <NATIVE_SESSION_ID>
+./agentsync git apply --yes <NATIVE_SESSION_ID>
+~~~
+
+git preview 只读；git apply 不加 --yes 也只预览。加上 --yes 后，显式上传的
+本地 commit 会导入到隐藏的 refs/agentsync/...，工作区快照只有在目标工作区干净且
+HEAD 与来源基线一致时才会应用。它不会切换分支、merge、rebase、commit 或 push；
+基线不一致时会报告冲突并保持目标工作区不变。
 恢复 session 时：
 
 - AgentSync 会先检查相关的项目文件。这里检查的是项目文件，不是 session 内容；如果这些
@@ -263,12 +305,15 @@ cd /path/to/another/project
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | 设置项目同步策略。 |
 | `agentsync project list [--json]` | 列出已绑定项目及其策略。 |
 | `agentsync project discover [--json]` | 列出已授权设备发布的项目；不会自动绑定或 clone 项目。 |
-| `agentsync push [SESSION_ID] [--session SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录。 |
+| `agentsync push [--include-workspace] [--include-git-state] [--session SESSION_ID 或 SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录和加密 Git 状态；--include-git-state 明确上传 Git 原生 commit/worktree 传输内容，--include-workspace 是另一条有限文件快照路径。 |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
 | `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
 | `agentsync list [--json]` | 列出当前项目可用的会话。 |
-| `agentsync env preview SESSION_ID [--json]` | 查看 session 记录到的结构化依赖和本地组件差异；只读。 |
-| `agentsync env apply SESSION_ID [--yes] [--json]` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Codex Skill 文件，MCP/settings 仍只做预览。 |
+| `agentsync env preview [--json] SESSION_ID` | 查看 session 记录到的结构化依赖和本地组件差异；只读。 |
+| `agentsync env apply [--yes] [--json] SESSION_ID` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Codex Skill 文件，MCP/settings 仍只做预览。 |
+| `agentsync workspace preview [--json] SESSION_ID` | 对比明确上传的有限工作区快照和当前项目；只读，不显示文件正文。 |
+| `agentsync workspace apply [--yes] [--json] SESSION_ID` | 显示工作区差异；只有加上 `--yes` 才会先备份再写入可用的过滤后文件正文，不会删除文件或执行 Git 命令。 |
+| `agentsync git preview/apply [--yes] [--json] SESSION_ID` | 查看或明确应用 session 的 Git 状态；preview 和不加 --yes 的 apply 只读，apply --yes 只导入隐藏 ref 并在匹配的干净基线上应用工作区。 |
 | `agentsync resume [restore options] [SESSION_ID]` | 下载并恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`，选项要放在会话 ID 前面。 |
 | `agentsync history SESSION_ID [--json]` | 查看会话可恢复版本和 fork。 |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | 删除一个会话，是 `remote delete-session` 的别名。 |
@@ -327,10 +372,13 @@ Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指�
 - 每台设备都有独立的 device ID 和远端分支。
 - `push` 写入当前设备的分支，不会把该分支再拉回本机。
 - `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
-- 不同步项目文件、未提交的 Git 修改、分支、完整配置正文、原始 MCP 配置、插件、凭据和环境内容。
-  session 只有在结构化观察到 Codex skill、MCP 调用或白名单设置时，才可能带上过滤后的
-  Skill 正文、MCP 非敏感意图或 session 设置摘要。`env preview` 只读；`env apply --yes`
-  只会在备份后写入过滤后的 Skill 正文，不会安装工具、修改原始 MCP 配置或执行命令。
+- 默认不会上传项目文件正文：普通 push、Hook 和 watch 只同步会话、环境和小型 Git
+  状态摘要。push --include-workspace 才会为 session fingerprint 已选中的文件生成有限
+  快照；push --include-git-state 是另一条明确的 Git 原生 commit/worktree bundle 传输
+  路径。传输前会做敏感内容预检，无法安全检查时直接失败；整个 .git、token、凭据、
+  密钥材料和 .env 文件永不上传。git preview 只读；git apply --yes 只会把 commit
+  导入隐藏 ref，并在目标工作区干净且基线匹配时应用工作区快照，不会切换分支、提交、
+  merge、rebase 或 push。
 - 目标设备必须提前准备好 Claude Code 和项目。
 - Git 项目有更强的工作区检查；没有 Git 的项目使用 touched 文件回退检查。
 - 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复

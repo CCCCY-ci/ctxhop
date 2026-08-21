@@ -1,0 +1,426 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/CCCCY-ci/agentsync/internal/config"
+	"github.com/CCCCY-ci/agentsync/internal/gitstate"
+	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/agentsync/internal/syncflow"
+)
+
+const gitPreviewTimeout = 2 * time.Minute
+
+type gitOptions struct {
+	action  string
+	session string
+	json    bool
+	yes     bool
+}
+
+type gitSource struct {
+	device  syncer.MetadataRef
+	updated time.Time
+}
+
+type gitEntryReport struct {
+	XY           string `json:"xy"`
+	Path         string `json:"path"`
+	OriginalPath string `json:"originalPath,omitempty"`
+}
+
+type gitStashReport struct {
+	Ref     string `json:"ref"`
+	Subject string `json:"subject,omitempty"`
+}
+
+type gitTransferReport struct {
+	Requested      bool   `json:"requested"`
+	CommitRange    string `json:"commitRange,omitempty"`
+	CommitBytes    int64  `json:"commitBytes,omitempty"`
+	CommitDigest   string `json:"commitDigest,omitempty"`
+	WorktreeBase   string `json:"worktreeBase,omitempty"`
+	WorktreeBytes  int64  `json:"worktreeBytes,omitempty"`
+	WorktreeDigest string `json:"worktreeDigest,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	BodyAvailable  bool   `json:"bodyAvailable"`
+}
+
+type gitPreviewReport struct {
+	Scope              string            `json:"scope"`
+	Session            string            `json:"session"`
+	Agent              string            `json:"agent,omitempty"`
+	NativeID           string            `json:"nativeId,omitempty"`
+	SourceDevice       string            `json:"sourceDevice,omitempty"`
+	Mode               string            `json:"mode"`
+	SourceHead         string            `json:"sourceHead,omitempty"`
+	SourceBranch       string            `json:"sourceBranch,omitempty"`
+	SourceUpstream     string            `json:"sourceUpstream,omitempty"`
+	SourceUpstreamHead string            `json:"sourceUpstreamHead,omitempty"`
+	Ahead              uint64            `json:"ahead"`
+	Behind             uint64            `json:"behind"`
+	SourceClean        bool              `json:"sourceClean"`
+	SensitiveOmitted   bool              `json:"sensitiveOmitted,omitempty"`
+	Dirty              []gitEntryReport  `json:"dirty,omitempty"`
+	Stashes            []gitStashReport  `json:"stashes,omitempty"`
+	Transfer           gitTransferReport `json:"transfer"`
+	CurrentHead        string            `json:"currentHead,omitempty"`
+	CurrentBranch      string            `json:"currentBranch,omitempty"`
+	CurrentClean       bool              `json:"currentClean"`
+	CommitReady        bool              `json:"commitReady"`
+	WorktreeReady      bool              `json:"worktreeReady"`
+	CommitRef          string            `json:"commitRef,omitempty"`
+	WorktreeRef        string            `json:"worktreeRef,omitempty"`
+	WorktreeApplied    bool              `json:"worktreeApplied"`
+	Status             string            `json:"status"`
+	Notes              []string          `json:"notes"`
+}
+
+func init() {
+	for i := range commands {
+		if commands[i].name == "git" {
+			commands[i].run = runGit
+		}
+	}
+}
+
+func runGit(args []string) error {
+	return runGitWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
+	options, err := parseGitOptions(args)
+	if err != nil {
+		return err
+	}
+	if input == nil || output == nil || prompt == nil {
+		return errors.New("git: input, output and prompt are required")
+	}
+	configDir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	c, err := config.Load(configDir)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitPreviewTimeout)
+	defer cancel()
+	state, err := collectEnvironmentContext(ctx, c, configDir, ".", input, prompt)
+	if err != nil {
+		return err
+	}
+	defer state.Access.close()
+	session := findEnvironmentSession(state.List.Sessions, options.session)
+	if session == nil {
+		return fmt.Errorf("git %s: session %q was not found in the current project", options.action, options.session)
+	}
+	source, device, err := readGitStateForSession(ctx, state, session)
+	if err != nil {
+		return err
+	}
+	report := buildGitPreviewReport(state, session, source, device)
+	var transfer *gitstate.Transfer
+	if source.Transfer.CommitBytes != 0 || source.Transfer.WorktreeBytes != 0 {
+		layout, layoutErr := syncer.NewObjectLayout(state.ProjectID, session.RemoteID, device.DeviceID)
+		if layoutErr != nil {
+			return fmt.Errorf("git %s: %w", options.action, layoutErr)
+		}
+		loaded, readErr := syncer.ReadGitTransfer(ctx, state.Access.Store, layout, state.Access.Identities)
+		if errors.Is(readErr, remote.ErrNotFound) {
+			report.Status = "transfer-missing"
+			report.Notes = append(report.Notes, "the source recorded a Git transfer but its encrypted body is not available")
+		} else if readErr != nil {
+			return fmt.Errorf("git %s: read encrypted Git transfer: %w", options.action, readErr)
+		} else {
+			transfer = &loaded
+			report.Transfer.BodyAvailable = true
+		}
+	}
+	if source.Mode == gitstate.ModeGit && report.Status != "transfer-missing" {
+		preview, previewErr := gitstate.PreviewTransfer(ctx, state.CurrentRoot, source, transfer)
+		if previewErr != nil {
+			return fmt.Errorf("git %s: inspect target Git state: %w", options.action, previewErr)
+		}
+		applyGitPreview(&report, preview)
+	}
+	var applyErr error
+	if options.action == "apply" {
+		if !options.yes {
+			report.Status = "confirmation-required"
+			report.Notes = append(report.Notes, "no Git refs or files changed; rerun with 'agentsync git apply --yes <SESSION_ID>' to apply the explicit transfer")
+		} else if source.Mode != gitstate.ModeGit || transfer == nil {
+			report.Status = gitstate.ApplyNoChange
+			report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
+		} else {
+			result, resultErr := gitstate.ApplyTransfer(ctx, state.CurrentRoot, source, *transfer)
+			report.Status = result.Status
+			report.CommitRef = result.CommitRef
+			report.WorktreeRef = result.WorktreeRef
+			report.WorktreeApplied = result.WorktreeApplied
+			report.CurrentHead = result.CurrentHead
+			report.CurrentBranch = result.CurrentBranch
+			report.Notes = append(report.Notes, result.Notes...)
+			if result.CommitRef != "" {
+				report.Notes = append(report.Notes, fmt.Sprintf("inspect %s with 'git log --oneline %s', then integrate it manually with normal Git operations; the current branch was not changed", result.CommitRef, result.CommitRef))
+			}
+			recordErr := gitstate.WriteApplyRecord(configDir, gitstate.ApplyRecord{
+				Version: gitstate.Version, AppliedAt: time.Now().UTC(), ProjectID: state.ProjectID,
+				SessionID: session.RemoteID, ProjectIdentity: state.ProjectIdentity,
+				SourceHead: source.Repository.Head, CurrentHead: result.CurrentHead, Branch: result.CurrentBranch,
+				CommitRef: result.CommitRef, WorktreeRef: result.WorktreeRef, WorktreeApplied: result.WorktreeApplied,
+				Status: result.Status,
+			})
+			if recordErr != nil {
+				applyErr = errors.Join(resultErr, fmt.Errorf("git apply: write local recovery record: %w", recordErr))
+			} else {
+				applyErr = resultErr
+			}
+		}
+	}
+	if options.json {
+		err = writeGitPreviewJSON(output, report)
+	} else {
+		err = writeGitPreviewText(output, report)
+	}
+	if err != nil {
+		return err
+	}
+	return applyErr
+}
+
+func parseGitOptions(args []string) (gitOptions, error) {
+	if len(args) == 0 {
+		return gitOptions{}, errors.New("git: expected 'preview|apply <SESSION_ID>'")
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	if action != "preview" && action != "apply" {
+		return gitOptions{}, fmt.Errorf("git: unknown action %q; expected preview or apply", action)
+	}
+	flags := flag.NewFlagSet("git "+action, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jsonOutput := flags.Bool("json", false, "write machine-readable JSON")
+	yes := flags.Bool("yes", false, "confirm importing Git refs and applying the matching worktree snapshot")
+	if err := flags.Parse(args[1:]); err != nil {
+		return gitOptions{}, fmt.Errorf("git %s: %w", action, err)
+	}
+	if action == "preview" && *yes {
+		return gitOptions{}, errors.New("git preview: --yes is only valid with apply")
+	}
+	if flags.NArg() != 1 {
+		return gitOptions{}, fmt.Errorf("git %s: expected one session ID", action)
+	}
+	session := strings.TrimSpace(flags.Arg(0))
+	if session == "" || strings.ContainsRune(session, 0) {
+		return gitOptions{}, errors.New("git: session ID is invalid")
+	}
+	return gitOptions{action: action, session: session, json: *jsonOutput, yes: *yes}, nil
+}
+
+func readGitStateForSession(ctx context.Context, state environmentContext, session *listSession) (gitstate.State, syncer.MetadataRef, error) {
+	group, ok := findEnvironmentGroup(state.RemoteSessions, session)
+	if !ok {
+		return gitstate.State{}, syncer.MetadataRef{}, errors.New("git: remote session metadata was not found")
+	}
+	candidates := make([]gitSource, 0, len(group.Devices))
+	for _, device := range group.Devices {
+		updated := time.Time{}
+		if summary, err := syncflow.DecodeSessionSummary(device.Metadata.Payload); err == nil {
+			updated = summary.UpdatedAt
+		}
+		candidates = append(candidates, gitSource{device: device, updated: updated})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].updated.Equal(candidates[j].updated) {
+			return candidates[i].device.DeviceID < candidates[j].device.DeviceID
+		}
+		return candidates[i].updated.After(candidates[j].updated)
+	})
+	var lastErr error
+	for _, candidate := range candidates {
+		layout, err := syncer.NewObjectLayout(state.ProjectID, group.SessionID, candidate.device.DeviceID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		gitState, readErr := syncer.ReadGitState(ctx, state.Access.Store, layout, state.Access.Identities)
+		if errors.Is(readErr, remote.ErrNotFound) {
+			continue
+		}
+		if readErr != nil {
+			lastErr = fmt.Errorf("git: read encrypted Git state: %w", readErr)
+			continue
+		}
+		if gitState.ProjectIdentity != "" && gitState.ProjectIdentity != state.ProjectIdentity {
+			lastErr = errors.New("git: remote Git state belongs to a different project identity")
+			continue
+		}
+		if gitState.SessionRecordCount != 0 && gitState.SessionRecordCount != candidate.device.Metadata.RecordCount {
+			lastErr = errors.New("git: remote Git state is older than session metadata")
+			continue
+		}
+		if gitState.SessionHeadDigest != "" && gitState.SessionHeadDigest != fmt.Sprintf("%x", candidate.device.Metadata.HeadDigest) {
+			lastErr = errors.New("git: remote Git state does not match session metadata")
+			continue
+		}
+		return gitState, candidate.device, nil
+	}
+	if lastErr != nil {
+		return gitstate.State{}, syncer.MetadataRef{}, lastErr
+	}
+	return gitstate.State{}, syncer.MetadataRef{}, errors.New("git: no Git state is available; run 'agentsync push' on the source device")
+}
+
+func buildGitPreviewReport(state environmentContext, session *listSession, source gitstate.State, device syncer.MetadataRef) gitPreviewReport {
+	report := gitPreviewReport{
+		Scope: state.List.Scope, Session: session.RemoteID, Agent: session.Agent, NativeID: session.NativeID,
+		SourceDevice: device.DeviceID, Mode: string(source.Mode), SourceHead: source.Repository.Head,
+		SourceBranch: source.Repository.Branch, SourceUpstream: source.Repository.Upstream,
+		SourceUpstreamHead: source.Repository.UpstreamHead, Ahead: source.Repository.Ahead, Behind: source.Repository.Behind,
+		SourceClean: source.Worktree.Clean, SensitiveOmitted: source.Worktree.SensitiveOmitted,
+		Transfer: gitTransferReport{Requested: source.Transfer.Requested, CommitRange: source.Transfer.CommitRange,
+			CommitBytes: source.Transfer.CommitBytes, CommitDigest: source.Transfer.CommitDigest,
+			WorktreeBase: source.Transfer.WorktreeBase, WorktreeBytes: source.Transfer.WorktreeBytes,
+			WorktreeDigest: source.Transfer.WorktreeDigest, Reason: source.Transfer.Reason},
+		Status: "metadata-only",
+		Notes:  []string{"Git metadata is read from the encrypted source-device object; no local Git state has changed"},
+	}
+	for _, entry := range source.Worktree.Entries {
+		report.Dirty = append(report.Dirty, gitEntryReport{XY: entry.XY, Path: entry.Path, OriginalPath: entry.OriginalPath})
+	}
+	for _, stash := range source.Stashes {
+		report.Stashes = append(report.Stashes, gitStashReport{Ref: stash.Ref, Subject: stash.Subject})
+	}
+	return report
+}
+
+func applyGitPreview(report *gitPreviewReport, preview gitstate.ApplyPreview) {
+	report.CurrentHead = preview.CurrentHead
+	report.CurrentBranch = preview.CurrentBranch
+	report.CurrentClean = preview.CurrentClean
+	report.CommitReady = preview.CommitReady
+	report.WorktreeReady = preview.WorktreeReady
+	report.Status = preview.Status
+	report.Notes = append(report.Notes, preview.Notes...)
+}
+
+func writeGitPreviewJSON(w io.Writer, report gitPreviewReport) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
+func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
+	if _, err := fmt.Fprintf(w, "scope: %s\n", safeListText(report.Scope)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "session: %s\n", safeListText(report.Session)); err != nil {
+		return err
+	}
+	if report.Agent != "" {
+		if _, err := fmt.Fprintf(w, "agent: %s\n", safeListText(report.Agent)); err != nil {
+			return err
+		}
+	}
+	if report.NativeID != "" {
+		if _, err := fmt.Fprintf(w, "native session: %s\n", safeListText(report.NativeID)); err != nil {
+			return err
+		}
+	}
+	if report.SourceDevice != "" {
+		if _, err := fmt.Fprintf(w, "source device: %s\n", safeListText(report.SourceDevice)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "mode: %s\n", safeListText(report.Mode)); err != nil {
+		return err
+	}
+	if report.SourceHead != "" {
+		if _, err := fmt.Fprintf(w, "source head: %s\n", safeListText(report.SourceHead)); err != nil {
+			return err
+		}
+	}
+	if report.SourceBranch != "" {
+		if _, err := fmt.Fprintf(w, "source branch: %s\n", safeListText(report.SourceBranch)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "source ahead/behind: %d/%d\n", report.Ahead, report.Behind); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "source clean: %t\n", report.SourceClean); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "dirty paths: %d\n", len(report.Dirty)); err != nil {
+		return err
+	}
+	for _, entry := range report.Dirty {
+		if _, err := fmt.Fprintf(w, "- %s %s", safeListText(entry.XY), safeListText(entry.Path)); err != nil {
+			return err
+		}
+		if entry.OriginalPath != "" {
+			if _, err := fmt.Fprintf(w, " from=%s", safeListText(entry.OriginalPath)); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "stashes: %d\n", len(report.Stashes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "transfer requested: %t\n", report.Transfer.Requested); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "transfer body: %t\n", report.Transfer.BodyAvailable); err != nil {
+		return err
+	}
+	if report.Transfer.CommitBytes != 0 || report.Transfer.WorktreeBytes != 0 {
+		if _, err := fmt.Fprintf(w, "transfer bytes: commits=%d worktree=%d\n", report.Transfer.CommitBytes, report.Transfer.WorktreeBytes); err != nil {
+			return err
+		}
+	}
+	if report.CurrentHead != "" {
+		if _, err := fmt.Fprintf(w, "current head: %s\n", safeListText(report.CurrentHead)); err != nil {
+			return err
+		}
+	}
+	if report.CurrentBranch != "" {
+		if _, err := fmt.Fprintf(w, "current branch: %s\n", safeListText(report.CurrentBranch)); err != nil {
+			return err
+		}
+	}
+	if report.CommitRef != "" {
+		if _, err := fmt.Fprintf(w, "commit ref: %s\n", safeListText(report.CommitRef)); err != nil {
+			return err
+		}
+	}
+	if report.WorktreeRef != "" {
+		if _, err := fmt.Fprintf(w, "worktree ref: %s\n", safeListText(report.WorktreeRef)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "worktree applied: %t\n", report.WorktreeApplied); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "status: %s\n", safeListText(report.Status)); err != nil {
+		return err
+	}
+	for _, note := range report.Notes {
+		if _, err := fmt.Fprintf(w, "note: %s\n", safeListText(note)); err != nil {
+			return err
+		}
+	}
+	return nil
+}

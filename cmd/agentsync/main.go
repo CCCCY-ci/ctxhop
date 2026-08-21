@@ -51,6 +51,8 @@ var commands = []command{
 	{name: "remote", summary: "delete scoped or all remote data"},
 	{name: "project", summary: "bind projects and manage synchronization policy"},
 	{name: "env", summary: "preview or apply session environment components"},
+	{name: "workspace", summary: "preview or apply explicit project workspace changes"},
+	{name: "git", summary: "preview or apply explicit Git state transfer"},
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},

@@ -16,6 +16,9 @@ const (
 	maxShardNumber        = 999999
 	metaObjectName        = "meta"
 	environmentObjectName = "env"
+	workspaceObjectName   = "workspace"
+	gitStateObjectName    = "git"
+	gitTransferObjectName = "git-transfer"
 )
 
 // ObjectLayout identifies the remote namespace for one session and one device.
@@ -76,7 +79,31 @@ func (l ObjectLayout) EnvironmentKey() (string, error) {
 	return checkedKey(prefix + "/" + environmentObjectName)
 }
 
+// WorkspaceKey returns the optional Git/workspace snapshot for this device branch.
+func (l ObjectLayout) WorkspaceKey() (string, error) {
+	prefix, err := l.DevicePrefix()
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + workspaceObjectName)
+}
+
 // ShardKey returns the immutable key for one device-local shard sequence.
+func (l ObjectLayout) GitStateKey() (string, error) {
+	prefix, err := l.DevicePrefix()
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + gitStateObjectName)
+}
+
+func (l ObjectLayout) GitTransferKey() (string, error) {
+	prefix, err := l.DevicePrefix()
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + gitTransferObjectName)
+}
 func (l ObjectLayout) ShardKey(number uint64) (string, error) {
 	if number == 0 || number > maxShardNumber {
 		return "", fmt.Errorf("syncer: shard sequence must be between 1 and %d", maxShardNumber)

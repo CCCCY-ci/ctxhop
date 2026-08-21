@@ -15,17 +15,21 @@ import (
 	"github.com/CCCCY-ci/agentsync/internal/config"
 	"github.com/CCCCY-ci/agentsync/internal/crypto"
 	"github.com/CCCCY-ci/agentsync/internal/environment"
+	"github.com/CCCCY-ci/agentsync/internal/gitstate"
 	"github.com/CCCCY-ci/agentsync/internal/project"
 	"github.com/CCCCY-ci/agentsync/internal/remote"
 	"github.com/CCCCY-ci/agentsync/internal/syncer"
 	"github.com/CCCCY-ci/agentsync/internal/syncflow"
+	workspacepkg "github.com/CCCCY-ci/agentsync/internal/workspace"
 )
 
 const pushTimeout = 5 * time.Minute
 
 type pushOptions struct {
-	hook    bool
-	session string
+	hook             bool
+	session          string
+	includeWorkspace bool
+	includeGitState  bool
 }
 
 type pushSummary struct {
@@ -45,7 +49,7 @@ func (s *pushSummary) fail(stage string, err error) {
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
 	switch stage {
-	case "remote-push", "environment-record", "device-record", "project-record":
+	case "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-record", "device-record", "project-record":
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
@@ -139,6 +143,8 @@ func parsePushOptions(args []string) (pushOptions, error) {
 	var options pushOptions
 	flags.BoolVar(&options.hook, "agentsync-hook", false, "mark an automatic hook invocation")
 	flags.StringVar(&options.session, "session", "", "push one native session ID")
+	flags.BoolVar(&options.includeWorkspace, "include-workspace", false, "upload a filtered workspace snapshot for explicit user-requested sync")
+	flags.BoolVar(&options.includeGitState, "include-git-state", false, "upload explicit Git commit and worktree transfer data")
 	if err := flags.Parse(args); err != nil {
 		return pushOptions{}, fmt.Errorf("push: %w", err)
 	}
@@ -233,7 +239,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs)
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.includeWorkspace, includeGitTransfer: options.includeGitState})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -279,8 +285,23 @@ func publishProjectAnnouncement(ctx context.Context, c *config.Config, identity 
 	return syncer.PutProjectAnnouncement(ctx, store, public, record)
 }
 
-func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef) pushSummary {
+type pushSessionOptions struct {
+	includeWorkspace   bool
+	includeGitTransfer bool
+	projectIdentity    string
+}
+
+func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, includeWorkspace ...bool) pushSummary {
+	options := pushSessionOptions{}
+	if len(includeWorkspace) != 0 {
+		options.includeWorkspace = includeWorkspace[0]
+	}
+	return pushDiscoveredSessionsWithOptions(ctx, deviceID, identifierKey, projectID, "", layout, installation, space, store, public, pusher, stateRoot, projectRoot, refs, options)
+}
+
+func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, identifierKey []byte, projectID, projectIdentity string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, options pushSessionOptions) pushSummary {
 	var summary pushSummary
+	options.projectIdentity = projectIdentity
 	for _, ref := range refs {
 		if err := ctx.Err(); err != nil {
 			summary.fail("context", err)
@@ -337,7 +358,8 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 			summary.fail("metadata", err)
 			continue
 		}
-		if _, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload); err != nil {
+		nextCursor, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload)
+		if err != nil {
 			summary.fail("remote-push", err)
 			continue
 		}
@@ -353,6 +375,49 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, dependencies, components); err != nil {
 			summary.fail("environment-record", err)
 			continue
+		}
+		if options.includeWorkspace {
+			snapshot, captureErr := workspacepkg.Capture(ctx, projectRoot, fingerprint)
+			if captureErr != nil {
+				summary.fail("workspace-record", captureErr)
+				continue
+			}
+			snapshot.RecordCount = nextCursor.RecordCount
+			if nextCursor.RecordCount != 0 {
+				snapshot.HeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
+			}
+			if publishErr := syncer.PutWorkspaceSnapshot(ctx, store, public, objectLayout, snapshot); publishErr != nil {
+				summary.fail("workspace-record", publishErr)
+				continue
+			}
+		}
+		gitState, gitErr := gitstate.Capture(ctx, projectRoot, options.projectIdentity)
+		if gitErr != nil {
+			summary.fail("git-state-record", gitErr)
+			continue
+		}
+		gitState.SessionRecordCount = nextCursor.RecordCount
+		if nextCursor.RecordCount != 0 {
+			gitState.SessionHeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
+		}
+		var transfer gitstate.Transfer
+		if options.includeGitTransfer {
+			var transferErr error
+			gitState, transfer, transferErr = gitstate.CaptureTransfer(ctx, projectRoot, gitState)
+			if transferErr != nil {
+				summary.fail("git-transfer-record", transferErr)
+				continue
+			}
+		}
+		if publishErr := syncer.PutGitState(ctx, store, public, objectLayout, gitState); publishErr != nil {
+			summary.fail("git-state-record", publishErr)
+			continue
+		}
+		if options.includeGitTransfer && (len(transfer.CommitBundle) != 0 || len(transfer.WorktreeBundle) != 0) {
+			if publishErr := syncer.PutGitTransfer(ctx, store, public, objectLayout, transfer); publishErr != nil {
+				summary.fail("git-transfer-record", publishErr)
+				continue
+			}
 		}
 		summary.Pushed++
 	}

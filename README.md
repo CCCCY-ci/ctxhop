@@ -10,17 +10,20 @@ session on another device.
 AgentSync syncs session records and a small encrypted manifest of structured
 agent/tool dependencies observed in those sessions. For a Codex skill actually
 referenced by a session, it may also include a filtered, non-sensitive `SKILL.md`
-body. For an observed Codex MCP server, it may include an allowlisted non-secret intent
-record with a command basename, safe arguments and startup timeout. It does not copy
-project files, uncommitted changes, full skill directories, full settings, raw MCP configuration,
-credentials or environment variable values. For a Codex session, it may include an allowlisted
-summary of the model, provider and effort recorded in structured session metadata. The target
-device must already have the relevant agent and project checkout.
+body. For an observed Codex MCP server, it may include an allowlisted non-secret
+intent record with a command basename, safe arguments and startup timeout. Project
+files are not included in normal `push`, Hook or `watch` runs. An explicit
+`push --include-workspace` can add a bounded, filtered snapshot containing only
+files already selected by that session fingerprint. It never includes credentials,
+tokens, key material, `.env` files or `.git` data. For a Codex session, it may include
+an allowlisted summary of the model, provider and effort recorded in structured session
+metadata. The target device must already have the relevant agent and project checkout.
 
 Status: pre-alpha. The current implementation covers directory and S3 storage,
 project binding, device pairing, key rotation, Claude Code and Codex adapters, SessionEnd hooks,
-restore safety checks, read-only environment previews and explicit application of filtered
-Codex Skill files; MCP intent and session-setting components remain preview-only.
+restore safety checks, read-only environment previews, explicit application of filtered
+Codex Skill files and bounded workspace snapshots with explicit upload/apply steps; MCP
+intent and session-setting components remain preview-only.
 
 ## Quick start
 
@@ -125,7 +128,24 @@ On device A:
 cd /path/to/project
 ./agentsync project bind --path .
 ./agentsync push
+
+# Optional: explicitly include a bounded workspace snapshot for this session.
+./agentsync push --include-workspace
 ~~~
+
+Normal push also records a small encrypted Git state summary (repository HEAD,
+branch, upstream and dirty paths). It does not upload Git objects or project
+files. If you explicitly need to carry local-only commits or uncommitted
+tracked/untracked work to another checkout, run:
+
+~~~bash
+./agentsync push --include-git-state
+~~~
+
+This creates Git-native bundles after a sensitive-content preflight. It never
+uploads the whole .git directory. The target device must apply the transfer
+explicitly; commits are imported into a hidden AgentSync ref and the current
+branch is left unchanged.
 
 For a project without a usable Git identity:
 
@@ -205,6 +225,34 @@ creates a backup before replacing an existing file:
 MCP and session-setting components remain preview-only. AgentSync does not install tools,
 change raw MCP configuration or execute commands.
 
+If device A used `push --include-workspace`, device B can inspect and explicitly apply
+that filtered workspace snapshot. Preview does not write files; `--yes` writes only
+available file bodies and backs up an existing file before replacement:
+
+~~~bash
+./agentsync workspace preview <NATIVE_SESSION_ID>
+./agentsync workspace apply <NATIVE_SESSION_ID>
+./agentsync workspace apply --yes <NATIVE_SESSION_ID>
+~~~
+
+The snapshot is limited to files selected by the session fingerprint. Unavailable,
+sensitive, binary or oversized bodies remain manual items. It never deletes local files,
+switches branches, commits, stashes or runs Git commands.
+
+Before restoring, inspect the Git state that was recorded with the session:
+
+~~~bash
+./agentsync git preview <NATIVE_SESSION_ID>
+./agentsync git apply <NATIVE_SESSION_ID>
+./agentsync git apply --yes <NATIVE_SESSION_ID>
+~~~
+
+git preview is read-only. git apply without --yes is also a preview. With
+--yes, an explicit transfer can import unpushed commits into a hidden
+refs/agentsync/... ref and apply the worktree snapshot only when the target
+worktree is clean and its HEAD matches the recorded base. It does not switch
+branches, merge, rebase, commit or push. If the target is not at the same base,
+it reports a conflict and leaves the worktree unchanged.
 Restore the session ID printed by `list`:
 
 ~~~bash
@@ -225,10 +273,13 @@ Claude Code will show its session list, including the session restored by
 AgentSync.
 
 `pull --check` reads remote metadata only. `env preview` shows structured dependency
-references and local component differences when the session recorded them. `resume` downloads
-the selected encrypted session and restores it to Claude Code. `env apply` without `--yes`
-only reports changes; `env apply --yes` writes filtered Codex Skill files with a backup.
-It never installs tools, changes raw MCP configuration or executes commands.
+references and local component differences when the session recorded them. `workspace preview`
+shows the bounded workspace snapshot only when the source used `push --include-workspace`.
+`resume` downloads the selected encrypted session and restores it to Claude Code. `env apply`
+without `--yes` only reports changes; `env apply --yes` writes filtered Codex Skill files
+with a backup. `workspace apply --yes` similarly writes only available, filtered workspace
+bodies after a backup. Neither command installs tools, changes raw MCP configuration or
+executes commands.
 
 When restoring a session:
 
@@ -287,12 +338,15 @@ ask for confirmation unless `--yes` is supplied.
 | `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | Set a project's synchronization policy. |
 | `agentsync project list [--json]` | List bound projects and their policies. |
 | `agentsync project discover [--json]` | List projects announced by authorized devices. It does not bind or clone them. |
-| `agentsync push [SESSION_ID] [--session SESSION_ID] [--agentsync-hook]` | Upload new records for the current project. |
+| `agentsync push [--include-workspace] [--include-git-state] [--session SESSION_ID or SESSION_ID] [--agentsync-hook]` | Upload new records and encrypted Git metadata for the current project. --include-git-state explicitly uploads Git-native commit/worktree transfer data; --include-workspace is the separate bounded file snapshot. |
 | `agentsync watch [--interval DURATION] [--once] [--json]` | Repeatedly scan and push the current project; `--once` performs one scan. |
 | `agentsync pull --check [--json]` | Check encrypted remote metadata without downloading session bodies. |
 | `agentsync list [--json]` | List sessions available for the current project. |
-| `agentsync env preview SESSION_ID [--json]` | Show structured dependency references and local component differences. This is read-only. |
-| `agentsync env apply SESSION_ID [--yes] [--json]` | Show component changes; only with `--yes` write filtered Codex Skill files, with a backup before replacement. MCP/settings remain preview-only. |
+| `agentsync env preview [--json] SESSION_ID` | Show structured dependency references and local component differences. This is read-only. |
+| `agentsync env apply [--yes] [--json] SESSION_ID` | Show component changes; only with `--yes` write filtered Codex Skill files, with a backup before replacement. MCP/settings remain preview-only. |
+| `agentsync workspace preview [--json] SESSION_ID` | Compare the explicit, bounded workspace snapshot with the current project; read-only and never prints file bodies. |
+| `agentsync workspace apply [--yes] [--json] SESSION_ID` | Show workspace changes; only with `--yes` write available filtered file bodies, backing up existing files first. It never deletes files or runs Git commands. |
+| `agentsync git preview/apply [--yes] [--json] SESSION_ID` | Inspect or explicitly apply the recorded Git state. preview and apply without --yes are read-only; apply --yes only imports hidden refs and applies a matching clean worktree. |
 | `agentsync resume [restore options] [SESSION_ID]` | Download and restore one session. Options include `--version`, `--allow-limited`, `--allow-divergent`, `--no-workspace-context` and `--replace-existing`; put options before the session ID. |
 | `agentsync history SESSION_ID [--json]` | Show recoverable versions and forks for a session. |
 | `agentsync history cleanup SESSION_ID [cleanup options]` | Delete one session; an alias for `remote delete-session`. |
@@ -355,12 +409,15 @@ Environment credentials are not written to disk.
 - `push` writes the current device's branch; it does not pull that branch back.
 - `pull --check` reads metadata. `resume` is the explicit body download and
   restore operation.
-- Project files, uncommitted Git changes, branches, full settings, raw MCP configuration,
-  plugins, credentials and environment contents are not synchronized. A session may carry
-  filtered, non-sensitive Codex `SKILL.md` content, an allowlisted MCP intent and a small
-  session-setting summary only when they were structurally observed. `env preview` is read-only;
-  `env apply --yes` may write only the filtered Skill body after creating a backup. It never
-  installs, changes raw MCP configuration or runs commands.
+- Project file bodies are not uploaded by default: normal push, Hook and watch runs only
+  synchronize session, environment and small Git-state metadata. push --include-workspace
+  adds a bounded snapshot only for files already selected by that session fingerprint.
+  push --include-git-state is a separate explicit operation for Git-native commit and
+  worktree transfer bundles. It runs a sensitive-content preflight and fails closed when
+  the content cannot be safely inspected. No whole .git directory, token, credential,
+  key material or .env file is uploaded. git preview is read-only; git apply --yes
+  imports commits into a hidden ref and applies a worktree snapshot only on a clean matching
+  base. It never switches branches, commits, merges, rebases or pushes.
 - The target device must already have Claude Code and the project prepared.
 - Git projects provide stronger workspace checks. No-Git projects use a
   touched-file fallback.
