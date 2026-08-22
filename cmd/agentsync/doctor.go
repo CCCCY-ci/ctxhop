@@ -37,6 +37,7 @@ type doctorAgent struct {
 	Name          string `json:"name"`
 	Installed     bool   `json:"installed"`
 	Version       string `json:"version,omitempty"`
+	VersionSource string `json:"versionSource,omitempty"`
 	Compatibility string `json:"compatibility,omitempty"`
 	Hook          string `json:"hook"`
 	Reason        string `json:"reason,omitempty"`
@@ -198,6 +199,7 @@ func detectAgents(ctx context.Context) []doctorAgent {
 		}
 		result.Installed = true
 		result.Version = safeAgentVersion(installation.Version)
+		result.VersionSource = safeListText(installation.VersionSource)
 		result.Compatibility = compatibilityName(installation.Compatibility)
 		result.Reason = installation.CompatibilityReason
 		if hookLayout, ok := layout.(adapter.HookInstaller); ok {
@@ -241,6 +243,7 @@ func detectAgent(ctx context.Context) doctorAgent {
 
 	result.Installed = true
 	result.Version = safeAgentVersion(installation.Version)
+	result.VersionSource = safeListText(installation.VersionSource)
 	result.Compatibility = compatibilityName(installation.Compatibility)
 	result.Reason = installation.CompatibilityReason
 	installed, err := layout.HookInstalled()
@@ -391,5 +394,5 @@ func agentState(agent doctorAgent) string {
 	if !agent.Installed {
 		return "not-installed"
 	}
-	return fmt.Sprintf("installed, version=%s, compatibility=%s, hook=%s", agent.Version, agent.Compatibility, agent.Hook)
+	return fmt.Sprintf("installed, observed-version=%s, version-source=%s, compatibility=%s, hook=%s", agent.Version, agent.VersionSource, agent.Compatibility, agent.Hook)
 }

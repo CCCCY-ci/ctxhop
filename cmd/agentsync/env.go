@@ -214,6 +214,9 @@ func writeEnvironmentPreviewText(w io.Writer, report environmentPreviewReport) e
 		if requirement.LocalVersion != "" {
 			line += " local-version=" + safeListText(requirement.LocalVersion)
 		}
+		if requirement.LocalVersionSource != "" {
+			line += " local-version-source=" + safeListText(requirement.LocalVersionSource)
+		}
 		if requirement.Reason != "" {
 			line += " reason=" + safeListText(requirement.Reason)
 		}

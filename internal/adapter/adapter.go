@@ -52,8 +52,15 @@ const (
 
 // Installation describes a detected agent on the local machine.
 type Installation struct {
-	// Version is the agent's reported version, empty if it could not be read.
+	// Version is the agent version observed in its local session records, empty
+	// if no record exposed one. It is diagnostic metadata only; it never decides
+	// compatibility.
 	Version string
+
+	// VersionSource explains where Version came from. Adapters must not run an
+	// agent executable just to obtain a version, so the built-in adapters use
+	// "session-record" or "unavailable" here.
+	VersionSource string
 
 	// DataDir is the root directory holding the agent's local state.
 	DataDir string

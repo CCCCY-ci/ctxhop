@@ -66,8 +66,16 @@ func (l Layout) Detect(ctx context.Context) (Installation, error) {
 
 	inst := Installation{DataDir: l.Home}
 	inst.Version = lookup(ctx)
+	inst.VersionSource = observedVersionSource(inst.Version)
 	inst.Compatibility, inst.CompatibilityReason = compatibilityBaseline()
 	return inst, nil
+}
+
+func observedVersionSource(version string) string {
+	if version == "" {
+		return "unavailable"
+	}
+	return "session-record"
 }
 
 // versionFromNewestSession reads the agent version recorded in the most

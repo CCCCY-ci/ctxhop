@@ -35,10 +35,11 @@ type environmentComponentChange struct {
 }
 
 type environmentRequirementChange struct {
-	Dependency   environment.Reference `json:"dependency"`
-	State        string                `json:"state"`
-	LocalVersion string                `json:"localVersion,omitempty"`
-	Reason       string                `json:"reason,omitempty"`
+	Dependency         environment.Reference `json:"dependency"`
+	State              string                `json:"state"`
+	LocalVersion       string                `json:"localVersion,omitempty"`
+	LocalVersionSource string                `json:"localVersionSource,omitempty"`
+	Reason             string                `json:"reason,omitempty"`
 }
 
 func collectEnvironmentContext(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer) (environmentContext, error) {
@@ -173,6 +174,7 @@ func inspectEnvironmentRequirements(ctx context.Context, dependencies []environm
 		case err == nil:
 			change.State = "available"
 			change.LocalVersion = safeAgentVersion(installed.Installation.Version)
+			change.LocalVersionSource = safeListText(installed.Installation.VersionSource)
 			if dependency.Version != "" && installed.Installation.Version != "" && dependency.Version != installed.Installation.Version {
 				change.Reason = "observed and local versions differ; compatibility is determined from session fields, not version number"
 			}

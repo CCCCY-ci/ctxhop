@@ -87,8 +87,10 @@ func (l CodexLayout) Detect(ctx context.Context) (Installation, error) {
 		lookup = l.versionFromNewestSession
 	}
 	level, reason := compatibilityBaseline()
+	version := lookup(ctx)
 	return Installation{
-		Version:             lookup(ctx),
+		Version:             version,
+		VersionSource:       observedVersionSource(version),
 		DataDir:             l.Home,
 		Compatibility:       level,
 		CompatibilityReason: reason,
