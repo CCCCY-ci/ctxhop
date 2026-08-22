@@ -80,7 +80,7 @@ func run(args []string) error {
 		return runHelp(nil)
 	}
 	if args[0] == "/" {
-		return writeCommandDiscovery(os.Stdout, args[1:])
+		return runCommandDiscovery(args[1:])
 	}
 
 	name := args[0]
