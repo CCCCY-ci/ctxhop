@@ -44,6 +44,15 @@ type gitStashReport struct {
 	Subject string `json:"subject,omitempty"`
 }
 
+type gitSubmoduleReport struct {
+	Path        string `json:"path"`
+	Recorded    string `json:"recorded,omitempty"`
+	Head        string `json:"head,omitempty"`
+	Initialized bool   `json:"initialized"`
+	Clean       bool   `json:"clean"`
+	Status      string `json:"status,omitempty"`
+}
+
 type gitTransferReport struct {
 	Requested        bool   `json:"requested"`
 	CommitRange      string `json:"commitRange,omitempty"`
@@ -58,36 +67,43 @@ type gitTransferReport struct {
 }
 
 type gitPreviewReport struct {
-	Scope                 string            `json:"scope"`
-	Session               string            `json:"session"`
-	Agent                 string            `json:"agent,omitempty"`
-	NativeID              string            `json:"nativeId,omitempty"`
-	SourceDevice          string            `json:"sourceDevice,omitempty"`
-	Mode                  string            `json:"mode"`
-	SourceHead            string            `json:"sourceHead,omitempty"`
-	SourceBranch          string            `json:"sourceBranch,omitempty"`
-	SourceUpstream        string            `json:"sourceUpstream,omitempty"`
-	SourceUpstreamHead    string            `json:"sourceUpstreamHead,omitempty"`
-	Ahead                 uint64            `json:"ahead"`
-	Behind                uint64            `json:"behind"`
-	SourceClean           bool              `json:"sourceClean"`
-	SensitiveOmitted      bool              `json:"sensitiveOmitted,omitempty"`
-	Dirty                 []gitEntryReport  `json:"dirty,omitempty"`
-	Stashes               []gitStashReport  `json:"stashes,omitempty"`
-	Transfer              gitTransferReport `json:"transfer"`
-	CurrentHead           string            `json:"currentHead,omitempty"`
-	CurrentBranch         string            `json:"currentBranch,omitempty"`
-	CurrentClean          bool              `json:"currentClean"`
-	CommitReady           bool              `json:"commitReady"`
-	WorktreeReady         bool              `json:"worktreeReady"`
-	CommitRef             string            `json:"commitRef,omitempty"`
-	WorktreeRef           string            `json:"worktreeRef,omitempty"`
-	WorktreeApplyStarted  bool              `json:"worktreeApplyStarted"`
-	WorktreeApplied       bool              `json:"worktreeApplied"`
-	ManualCleanupRequired bool              `json:"manualCleanupRequired"`
-	Conflicts             []string          `json:"conflicts,omitempty"`
-	Status                string            `json:"status"`
-	Notes                 []string          `json:"notes"`
+	Scope                 string               `json:"scope"`
+	Session               string               `json:"session"`
+	Agent                 string               `json:"agent,omitempty"`
+	NativeID              string               `json:"nativeId,omitempty"`
+	SourceDevice          string               `json:"sourceDevice,omitempty"`
+	Mode                  string               `json:"mode"`
+	SourceHead            string               `json:"sourceHead,omitempty"`
+	SourceBranch          string               `json:"sourceBranch,omitempty"`
+	SourceDetached        bool                 `json:"sourceDetached"`
+	SourceRebase          bool                 `json:"sourceRebase"`
+	SourceRebaseKind      string               `json:"sourceRebaseKind,omitempty"`
+	SourceUpstream        string               `json:"sourceUpstream,omitempty"`
+	SourceUpstreamHead    string               `json:"sourceUpstreamHead,omitempty"`
+	Ahead                 uint64               `json:"ahead"`
+	Behind                uint64               `json:"behind"`
+	SourceClean           bool                 `json:"sourceClean"`
+	SensitiveOmitted      bool                 `json:"sensitiveOmitted,omitempty"`
+	Dirty                 []gitEntryReport     `json:"dirty,omitempty"`
+	Stashes               []gitStashReport     `json:"stashes,omitempty"`
+	Submodules            []gitSubmoduleReport `json:"submodules,omitempty"`
+	Transfer              gitTransferReport    `json:"transfer"`
+	CurrentHead           string               `json:"currentHead,omitempty"`
+	CurrentBranch         string               `json:"currentBranch,omitempty"`
+	CurrentDetached       bool                 `json:"currentDetached"`
+	CurrentRebase         bool                 `json:"currentRebase"`
+	CurrentRebaseKind     string               `json:"currentRebaseKind,omitempty"`
+	CurrentClean          bool                 `json:"currentClean"`
+	CommitReady           bool                 `json:"commitReady"`
+	WorktreeReady         bool                 `json:"worktreeReady"`
+	CommitRef             string               `json:"commitRef,omitempty"`
+	WorktreeRef           string               `json:"worktreeRef,omitempty"`
+	WorktreeApplyStarted  bool                 `json:"worktreeApplyStarted"`
+	WorktreeApplied       bool                 `json:"worktreeApplied"`
+	ManualCleanupRequired bool                 `json:"manualCleanupRequired"`
+	Conflicts             []string             `json:"conflicts,omitempty"`
+	Status                string               `json:"status"`
+	Notes                 []string             `json:"notes"`
 }
 
 func appendGitConflicts(conflicts []string, kinds ...string) []string {
@@ -197,6 +213,9 @@ func runGitWithStreams(args []string, input io.Reader, output, prompt io.Writer)
 			if report.Status == "transfer-missing" {
 				report.Notes = append(report.Notes, "the explicit Git transfer body is missing; no local Git state changed")
 				applyErr = errors.New("git apply: encrypted Git transfer body is unavailable")
+			} else if report.Status == gitstate.ApplyConflict {
+				report.Notes = append(report.Notes, "Git apply was blocked by the preflight conflict; no local Git state changed")
+				applyErr = errors.New("git apply: Git transfer is not safe for the current repository state")
 			} else {
 				report.Status = gitstate.ApplyNoChange
 				report.Notes = append(report.Notes, "no explicit Git transfer body is available; no local Git state changed")
@@ -371,7 +390,9 @@ func buildGitPreviewReport(state environmentContext, session *listSession, sourc
 	report := gitPreviewReport{
 		Scope: state.List.Scope, Session: session.RemoteID, Agent: session.Agent, NativeID: session.NativeID,
 		SourceDevice: device.DeviceID, Mode: string(source.Mode), SourceHead: source.Repository.Head,
-		SourceBranch: source.Repository.Branch, SourceUpstream: source.Repository.Upstream,
+		SourceBranch: source.Repository.Branch, SourceDetached: source.Repository.Detached,
+		SourceRebase: source.Repository.RebaseInProgress, SourceRebaseKind: source.Repository.RebaseKind,
+		SourceUpstream:     source.Repository.Upstream,
 		SourceUpstreamHead: source.Repository.UpstreamHead, Ahead: source.Repository.Ahead, Behind: source.Repository.Behind,
 		SourceClean: source.Worktree.Clean, SensitiveOmitted: source.Worktree.SensitiveOmitted,
 		Transfer: gitTransferReport{Requested: source.Transfer.Requested, CommitRange: source.Transfer.CommitRange,
@@ -388,12 +409,21 @@ func buildGitPreviewReport(state environmentContext, session *listSession, sourc
 	for _, stash := range source.Stashes {
 		report.Stashes = append(report.Stashes, gitStashReport{Ref: stash.Ref, Subject: stash.Subject})
 	}
+	for _, submodule := range source.Repository.Submodules {
+		report.Submodules = append(report.Submodules, gitSubmoduleReport{
+			Path: submodule.Path, Recorded: submodule.Recorded, Head: submodule.Head,
+			Initialized: submodule.Initialized, Clean: submodule.Clean, Status: submodule.Status,
+		})
+	}
 	return report
 }
 
 func applyGitPreview(report *gitPreviewReport, preview gitstate.ApplyPreview) {
 	report.CurrentHead = preview.CurrentHead
 	report.CurrentBranch = preview.CurrentBranch
+	report.CurrentDetached = preview.CurrentDetached
+	report.CurrentRebase = preview.CurrentRebaseInProgress
+	report.CurrentRebaseKind = preview.CurrentRebaseKind
 	report.CurrentClean = preview.CurrentClean
 	report.CommitReady = preview.CommitReady
 	report.WorktreeReady = preview.WorktreeReady
@@ -443,6 +473,16 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 			return err
 		}
 	}
+	if report.SourceDetached {
+		if _, err := fmt.Fprintln(w, "source HEAD: detached"); err != nil {
+			return err
+		}
+	}
+	if report.SourceRebase {
+		if _, err := fmt.Fprintf(w, "source rebase: %s\n", safeListText(report.SourceRebaseKind)); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "source ahead/behind: %d/%d\n", report.Ahead, report.Behind); err != nil {
 		return err
 	}
@@ -468,6 +508,14 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 	if _, err := fmt.Fprintf(w, "stashes: %d\n", len(report.Stashes)); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "submodules: %d\n", len(report.Submodules)); err != nil {
+		return err
+	}
+	for _, submodule := range report.Submodules {
+		if _, err := fmt.Fprintf(w, "- submodule %s status=%s initialized=%t clean=%t\n", safeListText(submodule.Path), safeListText(submodule.Status), submodule.Initialized, submodule.Clean); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "transfer requested: %t\n", report.Transfer.Requested); err != nil {
 		return err
 	}
@@ -491,6 +539,16 @@ func writeGitPreviewText(w io.Writer, report gitPreviewReport) error {
 	}
 	if report.CurrentBranch != "" {
 		if _, err := fmt.Fprintf(w, "current branch: %s\n", safeListText(report.CurrentBranch)); err != nil {
+			return err
+		}
+	}
+	if report.CurrentDetached {
+		if _, err := fmt.Fprintln(w, "current HEAD: detached"); err != nil {
+			return err
+		}
+	}
+	if report.CurrentRebase {
+		if _, err := fmt.Fprintf(w, "current rebase: %s\n", safeListText(report.CurrentRebaseKind)); err != nil {
 			return err
 		}
 	}

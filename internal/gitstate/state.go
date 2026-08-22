@@ -19,6 +19,7 @@ const (
 	MaxTransferBytes = 64 << 20
 	MaxStatusEntries = 4096
 	MaxStashes       = 128
+	MaxSubmodules    = 256
 	MaxPathBytes     = 4096
 	MaxTextBytes     = 512
 )
@@ -44,13 +45,28 @@ type State struct {
 }
 
 type RepositoryState struct {
-	Head         string `json:"head,omitempty"`
-	Branch       string `json:"branch,omitempty"`
-	Detached     bool   `json:"detached,omitempty"`
-	Upstream     string `json:"upstream,omitempty"`
-	UpstreamHead string `json:"upstreamHead,omitempty"`
-	Ahead        uint64 `json:"ahead,omitempty"`
-	Behind       uint64 `json:"behind,omitempty"`
+	Head             string           `json:"head,omitempty"`
+	Branch           string           `json:"branch,omitempty"`
+	Detached         bool             `json:"detached,omitempty"`
+	RebaseInProgress bool             `json:"rebaseInProgress,omitempty"`
+	RebaseKind       string           `json:"rebaseKind,omitempty"`
+	Upstream         string           `json:"upstream,omitempty"`
+	UpstreamHead     string           `json:"upstreamHead,omitempty"`
+	Ahead            uint64           `json:"ahead,omitempty"`
+	Behind           uint64           `json:"behind,omitempty"`
+	Submodules       []SubmoduleState `json:"submodules,omitempty"`
+}
+
+// SubmoduleState records only the superproject gitlink and the local
+// submodule worktree condition. AgentSync never transports a submodule's
+// .git directory or object database as part of a parent Git transfer.
+type SubmoduleState struct {
+	Path        string `json:"path"`
+	Recorded    string `json:"recorded,omitempty"`
+	Head        string `json:"head,omitempty"`
+	Initialized bool   `json:"initialized"`
+	Clean       bool   `json:"clean"`
+	Status      string `json:"status,omitempty"`
 }
 
 type WorktreeState struct {
@@ -154,6 +170,34 @@ func (s State) Validate() error {
 		}
 		if err := validateRef(s.Repository.Upstream, "upstream"); err != nil {
 			return err
+		}
+		if len(s.Repository.Submodules) > MaxSubmodules {
+			return errors.New("gitstate: too many submodules")
+		}
+		seenSubmodules := make(map[string]struct{}, len(s.Repository.Submodules))
+		for _, submodule := range s.Repository.Submodules {
+			if err := validateRelativePath(submodule.Path); err != nil {
+				return err
+			}
+			if _, exists := seenSubmodules[submodule.Path]; exists {
+				return errors.New("gitstate: duplicate submodule path")
+			}
+			seenSubmodules[submodule.Path] = struct{}{}
+			if err := validateHexOptional(submodule.Recorded, "submodule recorded commit"); err != nil {
+				return err
+			}
+			if err := validateHexOptional(submodule.Head, "submodule head"); err != nil {
+				return err
+			}
+			if err := validateText(submodule.Status, MaxTextBytes, "submodule status"); err != nil {
+				return err
+			}
+		}
+		if s.Repository.RebaseKind != "merge" && s.Repository.RebaseKind != "apply" && s.Repository.RebaseKind != "" {
+			return errors.New("gitstate: invalid rebase kind")
+		}
+		if !s.Repository.RebaseInProgress && s.Repository.RebaseKind != "" {
+			return errors.New("gitstate: rebase kind is set without an active rebase")
 		}
 	}
 	if len(s.Worktree.Entries) > MaxStatusEntries {

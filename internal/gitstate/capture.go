@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -127,6 +128,12 @@ func Capture(ctx context.Context, root, projectIdentity string) (State, error) {
 	} else {
 		state.Repository.Detached = true
 	}
+	rebaseInProgress, rebaseKind, rebaseErr := captureRebaseState(ctx, absolute)
+	if rebaseErr != nil {
+		return State{}, rebaseErr
+	}
+	state.Repository.RebaseInProgress = rebaseInProgress
+	state.Repository.RebaseKind = rebaseKind
 	if upstream, upstreamErr := runGit(ctx, absolute, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); upstreamErr == nil {
 		state.Repository.Upstream = strings.TrimSpace(upstream)
 		if upstreamHead, err := runGit(ctx, absolute, "rev-parse", state.Repository.Upstream); err == nil {
@@ -142,6 +149,11 @@ func Capture(ctx context.Context, root, projectIdentity string) (State, error) {
 	} else if ctx.Err() != nil {
 		return State{}, ctx.Err()
 	}
+	submodules, submoduleErr := captureSubmodules(ctx, absolute)
+	if submoduleErr != nil {
+		return State{}, submoduleErr
+	}
+	state.Repository.Submodules = submodules
 	status, err := captureStatus(ctx, absolute)
 	if err != nil {
 		return State{}, err
@@ -175,6 +187,14 @@ func CaptureTransferWithOptions(ctx context.Context, root string, state State, o
 			return State{}, Transfer{}, errors.New("gitstate: selected stash requires a Git project")
 		}
 		state.Transfer.Reason = "Git is not available for this project"
+		return state, transfer, nil
+	}
+	if state.Repository.RebaseInProgress {
+		state.Transfer.Reason = fmt.Sprintf("Git %s rebase is in progress; finish or abort the rebase before uploading Git transfer data", state.Repository.RebaseKind)
+		return state, transfer, nil
+	}
+	if len(state.Repository.Submodules) != 0 {
+		state.Transfer.Reason = "the project contains submodules; AgentSync records their gitlinks but does not transport submodule objects or worktree changes"
 		return state, transfer, nil
 	}
 	absolute, err := filepath.Abs(root)
@@ -244,6 +264,105 @@ func CaptureTransferWithOptions(ctx context.Context, root string, state State, o
 		state.Transfer.Reason = "no unpushed commits or uncommitted changes were found"
 	}
 	return state, transfer, nil
+}
+
+func captureRebaseState(ctx context.Context, root string) (bool, string, error) {
+	for _, kind := range []string{"merge", "apply"} {
+		path, err := runGit(ctx, root, "rev-parse", "--git-path", "rebase-"+kind)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false, "", ctx.Err()
+			}
+			return false, "", fmt.Errorf("gitstate: inspect rebase state: %w", ErrTransferUnavailable)
+		}
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, filepath.FromSlash(path))
+		}
+		if _, statErr := os.Stat(path); statErr == nil {
+			return true, kind, nil
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return false, "", fmt.Errorf("gitstate: inspect rebase state: %w", ErrTransferUnavailable)
+		}
+	}
+	return false, "", nil
+}
+
+func captureSubmodules(ctx context.Context, root string) ([]SubmoduleState, error) {
+	var result []SubmoduleState
+	if err := captureSubmodulesAt(ctx, root, root, "", &result, 0); err != nil {
+		return nil, err
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	return result, nil
+}
+
+func captureSubmodulesAt(ctx context.Context, projectRoot, repositoryRoot, prefix string, result *[]SubmoduleState, depth int) error {
+	if depth > 32 {
+		return errors.New("gitstate: submodule nesting is too deep")
+	}
+	data, err := runGitRaw(ctx, repositoryRoot, "ls-files", "--stage", "-z", "--")
+	if err != nil {
+		return fmt.Errorf("gitstate: inspect submodules: %w", ErrTransferUnavailable)
+	}
+	for _, record := range splitNUL(data) {
+		separator := strings.IndexByte(record, '\t')
+		if separator <= 0 || separator+1 >= len(record) {
+			continue
+		}
+		header := strings.Fields(record[:separator])
+		if len(header) < 2 || header[0] != "160000" {
+			continue
+		}
+		path := record[separator+1:]
+		fullPath := filepath.ToSlash(filepath.Join(filepath.FromSlash(prefix), filepath.FromSlash(path)))
+		if err := validateRelativePath(fullPath); err != nil {
+			return fmt.Errorf("gitstate: inspect submodule path: %w", err)
+		}
+		submodule := SubmoduleState{Path: fullPath, Recorded: header[1]}
+		submoduleRoot := filepath.Join(repositoryRoot, filepath.FromSlash(path))
+		if info, statErr := os.Stat(submoduleRoot); statErr == nil && info.IsDir() {
+			head, headErr := runGit(ctx, submoduleRoot, "rev-parse", "--verify", "HEAD")
+			if headErr == nil {
+				submodule.Initialized = true
+				submodule.Head = strings.TrimSpace(head)
+				status, statusErr := runGitRaw(ctx, submoduleRoot, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+				if statusErr != nil {
+					return fmt.Errorf("gitstate: inspect submodule worktree: %w", ErrTransferUnavailable)
+				}
+				submodule.Clean = len(splitNUL(status)) == 0
+				submodule.Status = "clean"
+				for _, statusRecord := range splitNUL(status) {
+					if len(statusRecord) >= 2 && (statusRecord[0] == 'U' || statusRecord[1] == 'U') {
+						submodule.Status = "conflict"
+						break
+					}
+					if statusRecord != "" {
+						submodule.Status = "dirty"
+					}
+				}
+				if err := captureSubmodulesAt(ctx, projectRoot, submoduleRoot, fullPath, result, depth+1); err != nil {
+					return err
+				}
+			} else if ctx.Err() != nil {
+				return ctx.Err()
+			} else {
+				submodule.Status = "uninitialized"
+			}
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("gitstate: inspect submodule path: %w", ErrTransferUnavailable)
+		} else {
+			submodule.Status = "uninitialized"
+		}
+		if len(*result) >= MaxSubmodules {
+			return errors.New("gitstate: too many submodules")
+		}
+		*result = append(*result, submodule)
+	}
+	return nil
 }
 
 func resolveSelectedStash(ctx context.Context, root, ref string) (string, error) {

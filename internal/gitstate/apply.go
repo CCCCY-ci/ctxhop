@@ -22,13 +22,15 @@ const (
 	// Conflict kinds are deliberately descriptive rather than prescriptive.
 	// They tell the caller why AgentSync stopped; they do not authorize an
 	// automatic reset, checkout, merge, or deletion.
-	ConflictTargetDirty     = "target-dirty"
-	ConflictBaseDiverged    = "base-diverged"
-	ConflictPathCollision   = "path-collision"
-	ConflictInvalidTransfer = "invalid-transfer-path"
-	ConflictPartialApply    = "partial-apply"
-	ConflictTransferImport  = "transfer-import-failed"
-	ConflictTransferMissing = "transfer-missing"
+	ConflictTargetDirty      = "target-dirty"
+	ConflictBaseDiverged     = "base-diverged"
+	ConflictRebaseInProgress = "rebase-in-progress"
+	ConflictSubmodule        = "submodule-boundary"
+	ConflictPathCollision    = "path-collision"
+	ConflictInvalidTransfer  = "invalid-transfer-path"
+	ConflictPartialApply     = "partial-apply"
+	ConflictTransferImport   = "transfer-import-failed"
+	ConflictTransferMissing  = "transfer-missing"
 )
 
 type applyConflictError struct {
@@ -72,16 +74,19 @@ func appendConflictKind(conflicts []string, kind string) []string {
 }
 
 type ApplyPreview struct {
-	CurrentHead       string
-	CurrentBranch     string
-	CurrentClean      bool
-	CommitAvailable   bool
-	CommitReady       bool
-	WorktreeAvailable bool
-	WorktreeReady     bool
-	Status            string
-	Conflicts         []string
-	Notes             []string
+	CurrentHead             string
+	CurrentBranch           string
+	CurrentDetached         bool
+	CurrentRebaseInProgress bool
+	CurrentRebaseKind       string
+	CurrentClean            bool
+	CommitAvailable         bool
+	CommitReady             bool
+	WorktreeAvailable       bool
+	WorktreeReady           bool
+	Status                  string
+	Conflicts               []string
+	Notes                   []string
 }
 
 type ApplyResult struct {
@@ -119,10 +124,13 @@ func PreviewTransfer(ctx context.Context, root string, source State, transfer *T
 		return ApplyPreview{}, errors.New("gitstate: target is not a Git worktree")
 	}
 	preview := ApplyPreview{
-		CurrentHead:   current.Repository.Head,
-		CurrentBranch: current.Repository.Branch,
-		CurrentClean:  current.Worktree.Clean,
-		Status:        ApplyReady,
+		CurrentHead:             current.Repository.Head,
+		CurrentBranch:           current.Repository.Branch,
+		CurrentDetached:         current.Repository.Detached,
+		CurrentRebaseInProgress: current.Repository.RebaseInProgress,
+		CurrentRebaseKind:       current.Repository.RebaseKind,
+		CurrentClean:            current.Worktree.Clean,
+		Status:                  ApplyReady,
 	}
 	if transfer != nil {
 		if err := transfer.Validate(); err != nil {
@@ -131,11 +139,26 @@ func PreviewTransfer(ctx context.Context, root string, source State, transfer *T
 		preview.CommitAvailable = len(transfer.CommitBundle) != 0
 		preview.WorktreeAvailable = len(transfer.WorktreeBundle) != 0
 	}
+	if source.Repository.RebaseInProgress {
+		preview.Status = ApplyConflict
+		preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictRebaseInProgress)
+		preview.Notes = append(preview.Notes, fmt.Sprintf("the source repository has an active %s rebase; finish or abort it before applying Git state", source.Repository.RebaseKind))
+	}
+	if current.Repository.RebaseInProgress {
+		preview.Status = ApplyConflict
+		preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictRebaseInProgress)
+		preview.Notes = append(preview.Notes, fmt.Sprintf("the target repository has an active %s rebase; finish or abort it before applying Git state", current.Repository.RebaseKind))
+	}
+	if len(source.Repository.Submodules) != 0 || len(current.Repository.Submodules) != 0 {
+		preview.Status = ApplyConflict
+		preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictSubmodule)
+		preview.Notes = append(preview.Notes, "the source or target contains submodules; AgentSync will not transport or rewrite submodule objects; handle submodules with normal Git commands")
+	}
 	if preview.CommitAvailable {
 		preview.CommitReady = true
 		preview.Notes = append(preview.Notes, "the commit bundle will be imported into a hidden refs/agentsync reference")
 	}
-	if preview.WorktreeAvailable {
+	if preview.WorktreeAvailable && preview.Status != ApplyConflict {
 		preview.WorktreeReady = current.Worktree.Clean && transfer.WorktreeBase != "" && transfer.WorktreeBase == current.Repository.Head
 		switch {
 		case !current.Worktree.Clean:
@@ -150,7 +173,7 @@ func PreviewTransfer(ctx context.Context, root string, source State, transfer *T
 			preview.Notes = append(preview.Notes, "the worktree snapshot can be applied on the current HEAD")
 		}
 	}
-	if !preview.CommitAvailable && !preview.WorktreeAvailable {
+	if !preview.CommitAvailable && !preview.WorktreeAvailable && preview.Status != ApplyConflict {
 		preview.Status = ApplyNoChange
 		preview.Notes = append(preview.Notes, "the source contains no explicit Git transfer body")
 	}
