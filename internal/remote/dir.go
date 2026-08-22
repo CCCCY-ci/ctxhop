@@ -233,10 +233,47 @@ func (d *Dir) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
-	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(p); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return fmt.Errorf("delete object: %w", err)
 	}
+	// A directory-backed store creates one directory for every key segment.
+	// Remove only empty parents inside Root after a successful delete. This
+	// keeps dir mode from accumulating an unbounded tree of empty directories,
+	// while a concurrent writer or an adjacent object naturally stops the
+	// cleanup at the first non-empty parent.
+	d.removeEmptyParents(filepath.Dir(p))
 	return nil
+}
+
+func (d *Dir) removeEmptyParents(start string) {
+	root := filepath.Clean(d.Root)
+	current := filepath.Clean(start)
+	for current != root {
+		rel, err := filepath.Rel(root, current)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return
+		}
+
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			current = filepath.Dir(current)
+			continue
+		}
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil || len(entries) != 0 {
+			return
+		}
+		if err := os.Remove(current); err != nil {
+			return
+		}
+		current = filepath.Dir(current)
+	}
 }
 
 // Stat returns metadata without transferring the object.
