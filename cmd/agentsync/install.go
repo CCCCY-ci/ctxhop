@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 )
 
 type installOptions struct {
@@ -148,14 +150,75 @@ func installExecutableFile(sourcePath, targetPath string) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+
+	// Windows cannot rename a file over an existing target. Move the old
+	// executable aside first so a failed replacement can restore it. The
+	// backup lives next to the target, which keeps the rollback on one volume.
+	backupPath := ""
+	targetMoved := false
+	if _, err := os.Lstat(targetPath); err == nil {
+		backup, createErr := os.CreateTemp(filepath.Dir(targetPath), ".agentsync-install-backup-*")
+		if createErr != nil {
+			return createErr
+		}
+		backupPath = backup.Name()
+		if closeErr := backup.Close(); closeErr != nil {
+			_ = os.Remove(backupPath)
+			return closeErr
+		}
+		if removeErr := retryInstallFile(func() error { return os.Remove(backupPath) }); removeErr != nil {
+			return removeErr
+		}
+		if renameErr := retryInstallFile(func() error { return os.Rename(targetPath, backupPath) }); renameErr != nil {
+			return renameErr
+		}
+		targetMoved = true
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Rename(temporaryPath, targetPath); err != nil {
+	if err := retryInstallFile(func() error { return os.Rename(temporaryPath, targetPath) }); err != nil {
+		if targetMoved {
+			if restoreErr := retryInstallFile(func() error { return os.Rename(backupPath, targetPath) }); restoreErr != nil {
+				return fmt.Errorf("replace executable: %w; rollback failed: %v", err, restoreErr)
+			}
+		}
 		return err
 	}
 	removeTemporary = false
+	if targetMoved {
+		if err := retryInstallFile(func() error { return os.Remove(backupPath) }); err != nil {
+			// The new file is already in place. Try to restore the old version so
+			// callers never receive a failed install with the old version lost.
+			rollbackErr := retryInstallFile(func() error { return os.Remove(targetPath) })
+			if rollbackErr == nil || os.IsNotExist(rollbackErr) {
+				rollbackErr = retryInstallFile(func() error { return os.Rename(backupPath, targetPath) })
+			}
+			if rollbackErr != nil {
+				return fmt.Errorf("remove install backup: %w; rollback failed: %v", err, rollbackErr)
+			}
+			return fmt.Errorf("remove install backup: %w; installation rolled back", err)
+		}
+	}
 	return nil
+}
+
+// retryInstallFile absorbs short Windows Defender/antivirus file locks while
+// replacing an executable. It is deliberately bounded and only applies to
+// install-time file operations; a persistent error is still returned to the
+// caller and never turns into a silent partial upgrade.
+func retryInstallFile(operation func() error) error {
+	err := operation()
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	for _, delay := range []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 1600 * time.Millisecond} {
+		time.Sleep(delay)
+		err = operation()
+		if err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func sameInstallPath(first, second string) bool {
