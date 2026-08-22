@@ -48,8 +48,7 @@ func (s *pushSummary) fail(stage string, err error) {
 	s.Failed++
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
-	switch stage {
-	case "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
+	if pushFailureStageHasClass(stage) {
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
@@ -67,6 +66,15 @@ func (s *pushSummary) fail(stage string, err error) {
 		s.failureDetails += "\n"
 	}
 	s.failureDetails += detail
+}
+
+func pushFailureStageHasClass(stage string) bool {
+	switch stage {
+	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
+		return true
+	default:
+		return false
+	}
 }
 
 func writePushFailureDetails(output io.Writer, details string) error {
@@ -494,6 +502,6 @@ func classifyPushFailure(err error) syncer.FailureClass {
 	case errors.Is(err, remote.ErrNetwork), errors.Is(err, remote.ErrTransient):
 		return syncer.FailureNetwork
 	default:
-		return syncer.FailureNetwork
+		return syncer.FailureUnknown
 	}
 }
