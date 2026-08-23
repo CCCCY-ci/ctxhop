@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
-	workspacepkg "github.com/CCCCY-ci/agentsync/internal/workspace"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	workspacepkg "github.com/CCCCY-ci/ctxhop/internal/workspace"
 )
 
 const maxEncryptedWorkspaceBytes = workspacepkg.MaxSnapshotBytes + 1024

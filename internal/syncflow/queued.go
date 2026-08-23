@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 var (

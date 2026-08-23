@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 )
 
 func TestPushRejectsInvalidCursorBeforeInspectingThePart(t *testing.T) {

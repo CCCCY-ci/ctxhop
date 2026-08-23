@@ -9,7 +9,7 @@ import (
 
 const (
 	domainFingerprintBytes = 16
-	domainFingerprintLabel = "agentsync/domain-fingerprint/v1"
+	domainFingerprintLabel = "ctxhop/domain-fingerprint/v1"
 )
 
 // DomainFingerprint derives a short, non-secret identifier for one configured

@@ -71,7 +71,7 @@ func unwrap(kek []byte, label string, sealed []byte) ([]byte, error) {
 	// call for different remedies (spec §9).
 	switch v := sealed[len(wrapMagic)]; {
 	case v > wrapVersion:
-		return nil, fmt.Errorf("%w: keyfile version %d, upgrade agentsync to read it", ErrUnsupportedVersion, v)
+		return nil, fmt.Errorf("%w: keyfile version %d, upgrade ctxhop to read it", ErrUnsupportedVersion, v)
 	case v != wrapVersion:
 		return nil, fmt.Errorf("%w: unknown wrapping version %d", ErrDamagedKeyfile, v)
 	}

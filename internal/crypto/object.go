@@ -1,4 +1,4 @@
-// Package crypto turns the bytes AgentSync stores into ciphertext nothing
+// Package crypto turns the bytes CtxHop stores into ciphertext nothing
 // outside the user's machines can read.
 //
 // Its failure mode is the opposite of the adapter's. There, a wrong guess
@@ -123,7 +123,7 @@ func Decrypt(identity *ecdh.PrivateKey, path string, sealed []byte) ([]byte, err
 		return nil, fmt.Errorf("%w: too short to be an object", ErrCorrupt)
 	}
 	if string(sealed[:len(objectMagic)]) != objectMagic {
-		return nil, fmt.Errorf("%w: not an AgentSync object", ErrCorrupt)
+		return nil, fmt.Errorf("%w: not a CtxHop object", ErrCorrupt)
 	}
 
 	// Only a *higher* version is "too new to read"; the two directions call for
@@ -132,7 +132,7 @@ func Decrypt(identity *ecdh.PrivateKey, path string, sealed []byte) ([]byte, err
 	// room for a future version 2 that still reads version 1 (spec §9).
 	switch v := sealed[len(objectMagic)]; {
 	case v > objectVersion:
-		return nil, fmt.Errorf("%w: version %d, upgrade agentsync to read it", ErrUnsupportedVersion, v)
+		return nil, fmt.Errorf("%w: version %d, upgrade ctxhop to read it", ErrUnsupportedVersion, v)
 	case v != objectVersion:
 		return nil, fmt.Errorf("%w: unknown object version %d", ErrCorrupt, v)
 	}
@@ -194,7 +194,7 @@ func contentKey(shared []byte, ephemeral, identity *ecdh.PublicKey, path string)
 	}
 	defer zero(prk)
 
-	key, err := hkdf.Expand(sha256.New, prk, "agentsync/object\x00"+path, keyLen)
+	key, err := hkdf.Expand(sha256.New, prk, "ctxhop/object\x00"+path, keyLen)
 	if err != nil {
 		return nil, fmt.Errorf("derive object key: %w", err)
 	}

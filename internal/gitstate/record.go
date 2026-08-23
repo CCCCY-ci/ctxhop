@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 type ApplyRecord struct {

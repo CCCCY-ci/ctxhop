@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 // Dir stores objects as files under a directory.
@@ -309,7 +309,7 @@ func (d *Dir) Stat(ctx context.Context, key string) (ObjectInfo, error) {
 // sync (§9.1).
 // A single segment, so probing never creates a directory it would then have to
 // remove.
-const probeKey = ".agentsync-probe"
+const probeKey = ".ctxhop-probe"
 
 func (d *Dir) Probe(ctx context.Context) (err error) {
 	const body = "probe"

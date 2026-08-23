@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 
 	// secretsLabel is authenticated, so one sealed file cannot be presented as
 	// another.
-	secretsLabel = "agentsync/secrets"
+	secretsLabel = "ctxhop/secrets"
 
 	deviceKeyLen = 32
 )
@@ -32,13 +32,13 @@ var readRandom = rand.Read
 // Provided for CI and for anyone who would rather not have credentials on disk
 // at all (PRD §9.1). What they supply is never written down.
 const (
-	envAccessKeyID     = "AGENTSYNC_ACCESS_KEY_ID"
-	envSecretAccessKey = "AGENTSYNC_SECRET_ACCESS_KEY"
-	envSessionToken    = "AGENTSYNC_SESSION_TOKEN"
+	envAccessKeyID     = "CTXHOP_ACCESS_KEY_ID"
+	envSecretAccessKey = "CTXHOP_SECRET_ACCESS_KEY"
+	envSessionToken    = "CTXHOP_SESSION_TOKEN"
 )
 
 // ErrNoSecrets reports that this machine has no stored credentials.
-var ErrNoSecrets = errors.New("config: no stored credentials; run 'agentsync init' or set " + envAccessKeyID)
+var ErrNoSecrets = errors.New("config: no stored credentials; run 'ctxhop init' or set " + envAccessKeyID)
 
 // ErrPartialEnvironment reports credentials supplied half by environment.
 var ErrPartialEnvironment = fmt.Errorf("config: %s and %s must be set together", envAccessKeyID, envSecretAccessKey)
@@ -131,13 +131,13 @@ func readSecrets(dir string) (*Secrets, error) {
 
 	data, err := crypto.OpenLocal(key, secretsLabel, sealed)
 	if err != nil {
-		return nil, fmt.Errorf("the stored credentials cannot be opened with this machine's key; re-enter them with 'agentsync init': %w", err)
+		return nil, fmt.Errorf("the stored credentials cannot be opened with this machine's key; re-enter them with 'ctxhop init': %w", err)
 	}
 	defer zero(data)
 
 	var s Secrets
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("the stored credentials are damaged; re-enter them with 'agentsync init': %w", err)
+		return nil, fmt.Errorf("the stored credentials are damaged; re-enter them with 'ctxhop init': %w", err)
 	}
 	return &s, nil
 }

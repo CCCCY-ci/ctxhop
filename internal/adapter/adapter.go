@@ -18,7 +18,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/environment"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 )
 
 // ErrNotInstalled is returned by Detect when the agent is absent from this
@@ -69,7 +69,7 @@ type Installation struct {
 	Compatibility Compatibility
 
 	// CompatibilityReason explains the classification in user-facing terms and
-	// is surfaced by `agentsync doctor`. It must never contain paths, project
+	// is surfaced by `ctxhop doctor`. It must never contain paths, project
 	// names or session content, so that users can paste diagnostics into public
 	// issues (§9.9, BR-09).
 	CompatibilityReason string
@@ -112,7 +112,7 @@ type SessionRef struct {
 // Adapter is the contract every supported agent implementation satisfies.
 //
 // Implementations must never lock, move or modify files the agent is using, and
-// must leave the agent fully functional if AgentSync is removed (§4 P2, P5,
+// must leave the agent fully functional if CtxHop is removed (§4 P2, P5,
 // BR-06, BR-13).
 type Adapter interface {
 	// Name returns a short, stable identifier such as "claude-code".
@@ -209,9 +209,9 @@ type ProjectPaths struct {
 //
 // Where available, a hook is preferred over filesystem watching: it fires at a
 // well-defined moment, needs no resident process, and the user can remove it to
-// uninstall AgentSync completely (spec §8.5, §4 P5).
+// uninstall CtxHop completely (spec §8.5, §4 P5).
 type HookInstaller interface {
-	// InstallHook registers a hook that runs `agentsync push` when a session
+	// InstallHook registers a hook that runs `ctxhop push` when a session
 	// ends. It must be idempotent and must not disturb hooks installed by
 	// anyone else.
 	InstallHook(executable string) error

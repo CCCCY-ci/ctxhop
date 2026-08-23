@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/CCCCY-ci/agentsync/internal/config"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/config"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 var (

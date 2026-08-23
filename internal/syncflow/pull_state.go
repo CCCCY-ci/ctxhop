@@ -3,7 +3,7 @@ package syncflow
 import (
 	"context"
 
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 // LoadObservedTips adapts the syncer pull-tip state to PullOptions. The state

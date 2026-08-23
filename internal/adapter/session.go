@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/CCCCY-ci/agentsync/internal/environment"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 )
 
 // The session reader keeps one complete record and the accumulated snapshot

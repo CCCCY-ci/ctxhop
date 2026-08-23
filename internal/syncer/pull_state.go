@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 const (

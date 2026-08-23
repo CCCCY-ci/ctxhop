@@ -1,458 +1,312 @@
-# AgentSync
+# CtxHop
 
 [English](README.md) | 简体中文
 
-AgentSync 是一个命令行工具，用于在不同电脑之间同步 Claude Code 和 Codex CLI 会话历史。
-它会在本地加密会话数据，把加密后的数据保存到本地目录或 S3 兼容对象存储，
-并允许在另一台设备上选择会话进行恢复。
+**换设备，不换上下文。**
 
-AgentSync 会同步会话记录，并在 session 中发现结构化的 Agent/工具依赖时，
-保存一份很小的加密依赖清单。对于 session 结构化引用到的 Claude Code 或 Codex skill，如果本地存在
-经过过滤的非敏感 `SKILL.md`，也会把它作为独立环境组件上传；对于实际调用到的
-Claude Code 或 Codex MCP server，只保存适配器允许的非敏感传输意图；命令、参数、HTTP 地址会按格式过滤，env、header 和凭据不会保存。普通的
-`push`、Hook 和 `watch` 不会上传项目文件正文。只有明确执行 `push --include-workspace`
-时，Git 项目会根据 session fingerprint 选择文件；完全没有 Git 的项目会扫描安全过滤后的项目目录；凭据、
-token、密钥材料、`.env`、`.git` 数据都不会进入快照。
-如果 session 的结构化元数据包含当前 Agent 适配器支持的设置（Codex 的 model、model_provider、effort，Claude Code 的 model），
-AgentSync 只会保存这些白名单设置的项目级摘要。目标设备仍需要提前安装相应的 Agent，
-并准备好对应项目的 checkout。
+CtxHop 是一个面向 Claude Code、Codex 等 AI Coding Agent 的跨设备会话与工作区同步工具。你可以在一台设备上开始开发，在另一台设备上恢复原来的 Session 并继续工作；源设备无需保持在线。
 
-workspace 快照、Git 状态、Git/非 Git 项目处理和会话恢复属于统一的 Core 流程，
-Claude Code、Codex 以及后续接入的 Agent 都走同一套规则。Agent 特有的环境文件只由
-对应 Adapter 处理；无法确认格式时只显示为 manual，不会猜测路径、自动安装或写入文件。
+CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 Git 状态。数据在离开设备前完成本地加密，存储后端由你控制，可使用本地目录或 Cloudflare R2 等 S3 兼容对象存储。
 
-会话正文、环境清单、工作区快照和 Git 传输正文会先规范化，并在压缩确实能减少体积时压缩，
-再加密上传。压缩封装带有格式版本、大小和解压比例限制；过小或不可压缩的内容保持原样，
-旧的未压缩远端对象仍然可以读取。凭据、token 和密钥材料不会进入这条流水线。
+## 主要功能
 
-当前状态：pre-alpha。当前实现包含目录和 S3 存储、项目绑定、设备配对、密钥轮换、
-Claude Code 和 Codex 适配器、SessionEnd Hook、恢复安全检查、统一的 workspace/Git/无 Git Core 流程，以及只读环境预览、
-经过明确确认后按需应用的 Claude Code/Codex Skill、MCP 意图和 session 设置组件，以及有限工作区
-快照。原始配置、凭据和可执行组件不进入同步。
+- **跨设备续接 Session**：同步 Claude Code 和 Codex 的项目级会话，在另一台已授权设备上直接恢复并继续。
+- **可选工作区交接**：使用 `--workspace` 时，同时携带有限的项目文件和 Git 状态，适合处理尚未提交的工作。
+- **项目级同步边界**：只有显式绑定的项目和已授权设备参与同步，不扫描或传输无关项目。
+- **自托管存储**：支持本地目录与 S3 兼容对象存储，包括 Cloudflare R2。
+- **安全恢复**：`resume --preview` 可在写入前预览恢复内容；冲突检查失败时不会修改目标工作区。
+- **多 Agent 架构**：Claude Code 与 Codex 通过独立 Adapter 接入，后续可继续扩展其他 Coding Agent。
 
-## 快速开始
+## 安装
 
-下面使用 Cloudflare R2 作为共享存储，演示设备 A 上传会话、设备 B 查看并恢复会话。
+### Windows
 
-### 开始前准备
+从 [Releases](https://github.com/CCCCY-ci/ctxhop/releases) 下载对应架构的安装器：
 
-- 两台设备都已安装 Claude Code 或 Codex CLI；
-- 两台设备都有对应项目的 checkout；
-- 有一个 R2 bucket 和一个 R2 S3 API Token；
-- Token 可以列出对象，并且可以写入、读取和删除对象。init 会使用临时对象
-  进行存储探测。
+- `CtxHop-Setup_<version>_windows_amd64.exe`
+- `CtxHop-Setup_<version>_windows_arm64.exe`
 
-R2 使用账号级 endpoint，bucket 单独传入：
+安装后运行：
 
-~~~text
+```powershell
+ctxhop version
+```
+
+### macOS / Linux
+
+下载对应平台的 Release 压缩包并安装：
+
+```bash
+unzip ctxhop_<version>_<os>_<arch>.zip
+sh install.sh
+```
+
+默认安装到 `$XDG_BIN_HOME` 或 `$HOME/.local/bin`。自定义目录：
+
+```bash
+CTXHOP_INSTALL_DIR=/path/to/bin sh install.sh
+```
+
+### Go Install
+
+```bash
+go install github.com/CCCCY-ci/ctxhop/cmd/ctxhop@latest
+```
+
+### 卸载
+
+```bash
+ctxhop uninstall
+```
+
+卸载仅移除 CLI，本地配置、设备密钥和同步数据会保留。
+
+## 快速开始：Cloudflare R2
+
+下面以 Cloudflare R2 为共享后端。完整流程只有四步：初始化设备 A、绑定并上传项目、授权设备 B、恢复 Session。
+
+开始前，请准备好 R2 Bucket、对应的 Access Key / Secret Access Key，以及两台设备上的项目工作副本。
+
+R2 配置示例：
+
+```text
 Endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 Bucket:   <BUCKET_NAME>
 Region:   auto
-Prefix:   agentsync/demo
-~~~
+Prefix:   ctxhop/demo     # 可选
+```
 
-通常不需要 Windows 本机管理员权限。
+同一同步域中的所有设备必须使用相同的 Bucket 和 Prefix。多个同步域共用一个 Bucket 时，建议使用不同 Prefix 隔离。
 
-### 1. 安装 AgentSync
+### 1. 初始化设备 A
 
-如果已经有二进制文件，可以跳过构建。从源码构建：
-
-~~~bash
-git clone https://github.com/CCCCY-ci/agentsync.git
-cd agentsync
-go build -trimpath -o agentsync ./cmd/agentsync
-~~~
-
-将二进制文件注册成用户级命令：
-
-~~~bash
-./agentsync install
-~~~
-
-Windows PowerShell：
-
-~~~powershell
-go build -trimpath -o agentsync.exe ./cmd/agentsync
-.\agentsync.exe install
-~~~
-
-命令会把二进制文件安装到用户目录。Windows 会在不需要管理员权限的情况下，
-把该目录加入用户级 PATH。Unix 如果 `~/.local/bin` 不在 PATH 中，`install`
-会打印需要执行的 PATH 命令。重新打开终端后执行：
-
-~~~bash
-agentsync version
-~~~
-
-使用 `--dir DIR` 可以指定其他安装目录；使用 `--no-path` 只复制二进制文件，
-不修改 PATH。
-
-### 2. 初始化设备 A
-
-在设备 A 上执行，尖括号里的内容替换成自己的值：
-
-~~~bash
-./agentsync init --backend s3 \
+```bash
+ctxhop init \
+  --backend s3 \
   --endpoint "https://<ACCOUNT_ID>.r2.cloudflarestorage.com" \
   --bucket "<BUCKET_NAME>" \
   --region "auto" \
-  --prefix "agentsync/demo" \
+  --prefix "ctxhop/demo" \
   --device-name "device-a"
-~~~
+```
 
-init 会提示输入 R2 access key、secret key、可选的 session token，以及加密密码。
-输入密钥时不会回显。普通 R2 API Token 没有 session token，直接回车即可。
+按提示输入 R2 凭据和加密密码。普通 R2 API Token 不需要 Session Token，可直接留空。
 
-第一台设备会打印 Recovery Key。请离线保存，并在提示时输入
-`saved` 确认。加密密码和 Recovery Key 都丢失后，加密数据无法恢复。
+首次初始化会生成 **Recovery Key**，请离线保存。加密密码和 Recovery Key 同时丢失后，远端加密数据无法恢复。
 
-如果检测到 Claude Code 或 Codex CLI，init 会询问是否安装对应的 SessionEnd Hook。输入
-`y` 可以在会话结束后自动 push，直接回车则跳过。不需要交互时可以使用
-`--no-hook`。
+`init` 可同时安装 SessionEnd Hook，使 Agent 会话结束后自动执行 `push`。也可以之后手动安装：
 
-对于 Codex，安装后请重启 Codex，执行 /hooks，并信任 AgentSync Hook。
-如果已经执行过 init，不需要重新初始化同步域，可以直接安装：
+```bash
+ctxhop hook install --agent codex
+# 或
+ctxhop hook install --agent claude-code
+```
 
-~~~bash
-./agentsync hook install --agent codex
-~~~
+不使用 Hook 时，在初始化阶段指定 `--no-hook`。
 
-Claude Code 使用 --agent claude-code；不传 --agent 会配置检测到的所有支持的 Agent。
+### 2. 绑定项目并上传
 
-### 3. 绑定项目并上传
+在项目目录中执行：
 
-在设备 A 上执行：
-
-~~~bash
+```bash
 cd /path/to/project
-./agentsync project bind --path .
-./agentsync push
+ctxhop project bind --path .
+ctxhop push
+```
 
-# 可选：明确上传有限工作区快照。Git 项目使用 session fingerprint；无 Git 项目扫描安全过滤后的项目目录。
-./agentsync push --include-workspace
-~~~
+默认 `push` 只同步当前项目的 Session 和过滤后的环境信息。
 
-普通 push 还会记录一份很小的加密 Git 状态摘要，包括仓库 HEAD、分支、upstream
-和 dirty 路径，但不会上传 Git 对象或项目文件。如果需要明确携带本地 commit 或
-tracked/untracked 的未提交修改到另一份 checkout，执行：
+如果还需要交接未提交的工作区与 Git 状态：
 
-~~~bash
-./agentsync push --include-git-state
-~~~
+```bash
+ctxhop push --workspace
+```
 
-这个选项会先做敏感内容预检，再生成 Git 原生 bundle。它不会上传整个 .git 目录。
-设备 B 需要明确执行应用；commit 会先导入隐藏的 AgentSync ref，当前分支不会自动改变。
+没有可用 Git 身份时，可以手动指定项目名；两台设备需使用同一个名称：
 
-如果要传输已有的 stash，而不是当前工作区，先查看 stash 列表，再明确指定引用：
+```bash
+ctxhop project bind --name "my-project" --path .
+```
 
-~~~bash
-git stash list
-./agentsync push --git-stash 'stash@{0}'
-~~~
+### 3. 授权设备 B
 
-`--git-stash` 会自动启用显式 Git 传输，并用指定 stash 替代传输中的 worktree 部分。
-原 stash 只会被读取，不会被应用、修改或删除；当前工作区的修改不会进入这份 worktree bundle。
-指定的 stash 仍会执行同样的敏感路径和内容安全检查。
+在设备 A 生成邀请文件：
 
-没有可用 Git 身份的项目使用手动名称：
+```bash
+ctxhop device invite --output ctxhop-device-b.json
+```
 
-~~~bash
-./agentsync project bind --name "my-project" --path .
-./agentsync push
-~~~
+通过可信渠道将邀请文件传到设备 B，然后执行：
 
-设备 B 使用同一个手动名称。绑定只保存本地关系，push 只上传当前项目的会话。
-要同步其他项目，进入对应目录后单独执行绑定。
+```bash
+ctxhop init \
+  --invite ./ctxhop-device-b.json \
+  --device-name "device-b"
+```
 
-### 4. 配对设备 B
+设备 B 仍需输入自己的 R2 凭据，以及与设备 A 相同的加密密码。邀请文件本身不包含存储凭据、加密密码或 Session 内容。
 
-在设备 A 上创建 invitation：
+### 4. 恢复 Session
 
-~~~bash
-./agentsync device invite --output agentsync-device-b.json
-~~~
+如果需要先查看其他设备发布的项目：
 
-通过可信渠道把 JSON 文件传给设备 B。文件包含远端配置和签名的同步域证明，
-不包含 R2 凭据、加密密码或会话内容。
+```bash
+ctxhop project discover
+```
 
-在设备 B 上初始化：
+在设备 B 准备好对应项目后：
 
-~~~bash
-./agentsync init --invite ./agentsync-device-b.json --device-name "device-b"
-~~~
+```bash
+cd /path/to/project
+ctxhop project bind --path .
+ctxhop pull
+ctxhop list
+```
 
-按提示输入 R2 凭据，并使用与设备 A 相同的加密密码。不要把
-`--invite` 与 `--endpoint`、`--bucket`、`--region`、`--prefix` 等
-后端参数一起使用。
+`pull` 只刷新远端元数据，`list` 列出当前项目可恢复的 Session。
 
-### 5. 在设备 B 查看并恢复
+恢复指定 Session：
 
-已授权设备可以发现其他设备发布的新项目：
+```bash
+ctxhop resume <SESSION_ID>
+```
 
-~~~bash
-./agentsync project discover
-~~~
+先预览、不写入：
 
-这个命令只列出项目身份，不会自动 clone 仓库，也不会绑定本地目录。先在设备 B
-准备好项目 checkout，再完成绑定：
+```bash
+ctxhop resume --preview <SESSION_ID>
+```
 
-~~~bash
-cd /path/to/the/same/project
-./agentsync project bind --path .
-./agentsync pull --check
-./agentsync list
-~~~
+如果源设备通过 `push --workspace` 上传了工作区数据，可一并恢复：
 
-恢复前可以先查看这个 session 记录到的依赖引用：
+```bash
+ctxhop resume --workspace <SESSION_ID>
+```
 
-~~~bash
-./agentsync env preview <NATIVE_SESSION_ID>
-~~~
+`resume --workspace` 会先检查目标工作区和 Git 状态；存在冲突时直接停止，不会强制覆盖。
 
-这个命令只读远端加密 metadata，不会安装、应用或执行任何内容。如果上传了安全的
-Claude Code/Codex Skill、MCP 意图或 session 设置组件，预览只显示类型、作用域、大小和 fingerprint，
-不显示也不应用组件正文。
-对于 MCP 意图和白名单 Claude Code/Codex settings，预览会按组件的 global/project 作用域检查相应配置，
-并显示 missing、changed 或 unchanged。
-不安全或无法读取的值会保持为 unavailable/manual；全局配置存在不同的项目级覆盖时会显示
-conflict。只有白名单值可以在后续显式写入，原始 Claude JSON/TOML、env、header 值和凭据永远不会复制。
-预览还会显示本机工具是否存在以及 SessionEnd Hook 状态。版本差异只作提示，适配器仍按
-session 实际包含的字段判断兼容性。
+如果只需要 Session，不希望目标工作区差异阻止恢复：
 
-`env preview` 用于只读查看本地组件差异。`env apply` 不加 `--yes` 时也只显示差异，不会写入文件：
+```bash
+ctxhop resume --allow-divergent <SESSION_ID>
+```
 
-~~~bash
-./agentsync env apply <NATIVE_SESSION_ID>
-~~~
+恢复完成后，使用 Agent 原生命令继续会话：
 
-确认输出后，明确加上 `--yes` 才会应用过滤后的值；替换已有文件前会先创建备份：
+```bash
+# Codex
+codex resume <SESSION_ID>
 
-~~~bash
-./agentsync env apply --yes <NATIVE_SESSION_ID>
-~~~
+# Claude Code
+claude --resume <SESSION_ID>
+```
 
-这个命令只会写入白名单 Claude Code/Codex Skill 正文、过滤后的 MCP 传输意图，以及 session settings
-中的白名单键。它会保留其它 JSON/TOML 内容以及 MCP 的 env/header 段，并在替换前备份整个配置文件。
-如果全局组件存在不同的项目级覆盖，会报告 conflict 并停止写入。它不会安装工具、复制原始
-配置、启动 MCP 或执行命令。
-如果设备 A 使用了 `push --include-workspace`，设备 B 可以先查看并明确应用这个有限工作区快照。
-预览不会写入文件；加上 `--yes` 后才会写入可用的文件正文，替换已有文件前会先备份：
+## 同步内容
 
-~~~bash
-./agentsync workspace preview <NATIVE_SESSION_ID>
-./agentsync workspace apply <NATIVE_SESSION_ID>
-./agentsync workspace apply --yes <NATIVE_SESSION_ID>
-~~~
+| 内容 | 默认 | 说明 |
+|---|---|---|
+| Agent Session | 同步 | 本地压缩并加密后上传。 |
+| 项目身份与 Git 摘要 | 同步 | 用于跨设备识别项目，不包含项目文件或完整 Git 对象。 |
+| Session 相关环境 | 过滤后同步 | 仅恢复白名单中的 Skill、MCP 传输意图和 Session 设置。 |
+| 工作区与 Git 状态 | 按需 | 仅在 `push --workspace` / `resume --workspace` 时处理。 |
+| Token、凭据与 `.env` | 永不同步 | 登录状态、私钥、Header、Secrets 等不会进入同步数据。 |
 
-Git 项目快照只包含该 session fingerprint 已选中的文件；无 Git 项目快照来自安全过滤后的目录扫描。不可用、敏感、二进制或超出大小限制的正文
-会保留为需要手动处理的项目。无 Git 快照中的本地多余文件会显示为删除候选。
-文本和 `--json` 输出会列出 `target-conflict`、`manual-item`、`unsafe-path`、
-`apply-failed` 等冲突值。`status: attention` 表示仍有需要手动处理的项目；它不会自动删除
-本地文件、切换分支、提交、stash 或执行 Git 命令。
+普通 `push`、Hook 和 `watch` 不上传项目文件正文。启用 `--workspace` 后，CtxHop 也不会自动删除本地文件、切换分支，或执行 merge、rebase、commit、push、reset 等 Git 操作。
 
-使用 `list` 打印出的会话 ID 进行恢复：
+敏感文件、二进制文件、超出大小限制的文件以及存在冲突的路径会保留给用户手动处理。
 
-~~~bash
-# 目标工作区与源设备一致时使用。
-./agentsync resume <NATIVE_SESSION_ID>
+## 常用命令
 
-# 设备 B 的项目路径或工作区不一致时使用。
-./agentsync resume --allow-divergent <NATIVE_SESSION_ID>
-~~~
+执行 `ctxhop <command> --help` 查看完整参数。交互式终端中直接运行 `ctxhop` 可打开命令选择器；脚本和 CI 可在支持的命令上使用 `--json`。
 
-恢复成功后，执行下面的命令即可在 Claude Code 的会话列表中看到同步过来的 session：
-
-~~~bash
-claude --resume
-~~~
-
-`pull --check` 只读取远端元数据。`env preview` 会显示 session 记录到的结构化依赖和本地
-组件差异。只有源设备使用了 `push --include-workspace` 时，`workspace preview` 才会显示
-有限工作区快照。`resume` 才会下载选中的加密会话并恢复到 Claude Code。`env apply` 不加
-`--yes` 只显示差异；`env apply --yes` 会备份后写入过滤后的 Skill、MCP 意图和
-session settings 白名单值。`workspace apply --yes` 会用同样的方式写入可用的有限工作区正文。
-它们都不会安装工具、复制原始配置、删除本地文件或执行命令。
-
-恢复前可以先查看 session 记录的 Git 状态：
-
-~~~bash
-./agentsync git preview <NATIVE_SESSION_ID>
-./agentsync git apply <NATIVE_SESSION_ID>
-./agentsync git apply --yes <NATIVE_SESSION_ID>
-~~~
-
-git preview 只读；git apply 不加 --yes 也只预览。加上 --yes 后，显式上传的
-本地 commit 会导入到隐藏的 refs/agentsync/...，工作区快照只有在目标工作区干净且
-HEAD 与来源基线一致时才会应用。应用前还会检查快照涉及的路径；如果目标端已有未跟踪或被
-忽略的同名文件/目录，即使 `git status` 看起来干净，也会报告冲突并保持目标不变。它不会
-切换分支、merge、rebase、commit 或 push。文本输出和 `--json` 输出会列出机器可读的冲突
-值，例如 `target-dirty`（目标工作区有改动）、`base-diverged`（目标 HEAD 与来源基线不一致）、
-`path-collision`（目标路径会被未跟踪或忽略的文件/目录挡住）、`transfer-import-failed`
-（传输正文导入失败）和 `partial-apply`（应用已经开始但没有完成）。这些值只是停止原因，
-不是覆盖目标文件的指令。如果 Git 应用已经启动但中途失败，先检查并手动处理 `git status`，
-目标重新通过 preflight 后再执行同一个 `git apply --yes`；AgentSync 不会自动 reset 或删除文件。
-
-commit bundle 导入后，输出和本地应用记录会保存隐藏 commit ref、来源基线和目标分支，
-方便你手动检查。可以先执行 `git log --oneline --reverse <COMMIT_REF>`，确认后再用
-正常 Git 命令整合；AgentSync 不会自动执行这一步。相同传输成功应用后再次执行
-`git apply --yes` 会报告 `already-applied`，不会再次修改工作区。如果之前的应用失败并
-要求手动清理，需要先处理 `git status`。目标重新通过同样的 preflight 后，可以再次执行
-`git apply --yes`；AgentSync 仍不会自动 reset 或删除文件。
-恢复 session 时：
-
-- AgentSync 会先检查相关的项目文件。这里检查的是项目文件，不是 session 内容；如果这些
-  文件和源设备不一致，恢复会停止，也不会写入 session 文件。
-- 如果确认当前项目没选错，但仍然要继续恢复，就加上 `--allow-divergent`。它只会继续恢复
-  session，不会修改或同步项目文件。
-- `workspace: divergent` 表示 session 已经恢复，但这台设备上的相关项目文件与源设备不一致。
-- `workspace context: injected` 表示恢复的会话里加入了一条本地差异提示，不会上传到远端。
-- `workspace verdict is divergent` 表示恢复被停止，session 文件没有写入。
-
-例如：
-
-~~~text
-resumed: 将sidecar服务迁移到浏览器插件架构
-session: b9dcdfcc-0470-4692-a9d9-cb3d9c6e8c6d
-workspace: divergent (1 file differences)
-workspace context: injected
-~~~
-
-### 6. 添加其他项目
-
-AgentSync 不会自动扫描所有目录。要同步哪个项目，就进入该项目并单独绑定：
-
-~~~bash
-cd /path/to/another/project
-./agentsync project bind --path .
-./agentsync push
-~~~
-
-没有 Git 的项目在两台设备上使用相同的 `--name`。
-
-## CLI 命令
-
-下面是一张当前支持的完整命令表。除非命令提供 path 参数，会话相关命令都针对
-当前项目。删除类命令默认会要求确认，传入 `--yes` 才会跳过确认。
-
-如果忘记命令，可以在交互式终端直接运行 `agentsync` 打开命令选择器：输入前缀筛选，使用上下键选择，
-Enter 进入分组，左键或 Esc 返回。选中最后一级时只会打印完整命令和参数，不会自动执行 apply、删除或
-其它会修改数据的操作。`agentsync help` 始终输出稳定的纯文本帮助，`agentsync help git apply` 会显示具体
-命令的参数。输出被重定向到管道或 CI 时，直接运行 `agentsync` 会回退为纯文本帮助。已有命令写法仍然保留。
+### 项目与同步
 
 | 命令 | 说明 |
 |---|---|
-| `agentsync help` | 显示命令用法。 |
-| `agentsync version` | 显示版本、commit、构建时间和运行时信息。 |
-| `agentsync completion bash, zsh, fish, powershell, pwsh` | 生成 Shell 补全；`pwsh` 是 `powershell` 的别名。 |
-| `agentsync init [--invite FILE or backend options]` | 创建或加入加密同步域并写入本地配置；使用 `--invite` 加入已有设备的同步域，可选安装 Claude Code 或 Codex SessionEnd Hook。 |
-| `agentsync hook install [--agent all|claude-code|codex]` | 安装支持的 Agent SessionEnd Hook，用于会话结束后自动 push。会保留已有 Hook；Codex 安装后需要重启并在 /hooks 中信任。 |
-| `agentsync install [--dir DIR] [--no-path]` | 把当前二进制安装到用户级命令目录；Windows 会更新用户级 PATH。 |
-| `agentsync status [--json] [--remote]` | 显示本地状态；`--remote` 会检查远端元数据。 |
-| `agentsync doctor [--json]` | 检查配置、后端访问、Agent 安装、项目身份和最近的本地错误。 |
-| `agentsync project bind [--path DIR] [--name NAME or --identity ID]` | 绑定本地项目；没有 Git 时使用 `--name`。 |
-| `agentsync project unbind [--path DIR or --identity ID]` | 删除本地项目绑定。 |
-| `agentsync project mode normal / push-only / excluded [--path DIR or --identity ID]` | 设置项目同步策略。 |
-| `agentsync project list [--json]` | 列出已绑定项目及其策略。 |
-| `agentsync project discover [--json]` | 列出已授权设备发布的项目；不会自动绑定或 clone 项目。 |
-| `agentsync push [--include-workspace] [--include-git-state] [--git-stash STASH_REF] [--session SESSION_ID 或 SESSION_ID] [--agentsync-hook]` | 上传当前项目的新记录和加密 Git 状态；--include-git-state 明确上传 Git 原生 commit/worktree 传输内容，--git-stash 选择已有的 `stash@{N}` 并自动启用 --include-git-state，--include-workspace 是另一条有限文件快照路径。 |
-| `agentsync watch [--interval DURATION] [--once] [--json]` | 持续扫描并上传当前项目；`--once` 只执行一次。 |
-| `agentsync pull --check [--json]` | 检查加密远端元数据，不下载会话正文。 |
-| `agentsync list [--json]` | 列出当前项目可用的会话。 |
-| `agentsync env preview [--json] SESSION_ID` | 查看 session 记录到的结构化依赖和本地组件差异；只读。 |
-| `agentsync env apply [--yes] [--json] SESSION_ID` | 显示组件差异；只有加上 `--yes` 才会备份并写入过滤后的 Skill、MCP 意图和 session settings 白名单值，原始配置仍不复制。 |
-| `agentsync workspace preview [--json] SESSION_ID` | 对比明确上传的有限工作区快照和当前项目；只读，不显示文件正文。 |
-| `agentsync workspace apply [--yes] [--json] SESSION_ID` | 显示工作区差异；只有加上 `--yes` 才会先备份再写入可用的过滤后文件正文，不会删除文件或执行 Git 命令。 |
-| `agentsync git preview/apply [--yes] [--json] SESSION_ID` | 查看或明确应用 session 的 Git 状态；preview 和不加 --yes 的 apply 只读，apply --yes 只导入隐藏 ref 并在匹配的干净基线上应用工作区。 |
-| `agentsync resume [restore options] [SESSION_ID]` | 下载并恢复一个会话；选项包括 `--version`、`--allow-limited`、`--allow-divergent`、`--no-workspace-context` 和 `--replace-existing`，选项要放在会话 ID 前面。 |
-| `agentsync history SESSION_ID [--json]` | 查看会话可恢复版本和 fork。 |
-| `agentsync history cleanup SESSION_ID [cleanup options]` | 删除一个会话，是 `remote delete-session` 的别名。 |
-| `agentsync history prune SESSION_ID --keep N or --before RFC3339` | 按一种保留规则删除旧版本。 |
-| `agentsync stats [--json]` | 显示本地跨设备恢复统计。 |
-| `agentsync device status [--json]` | 显示本机设备模式。 |
-| `agentsync device mode normal / push-only / disabled` | 修改本机设备模式。 |
-| `agentsync device list [--json]` | 列出同步域中已授权的设备。 |
-| `agentsync device rename NAME` | 修改本机显示名称。 |
-| `agentsync device invite [--output FILE]` | 创建给另一台设备使用的签名 invitation。 |
-| `agentsync device rotate-key` | 保存新的 Recovery Key 后发布新一代加密密钥。 |
-| `agentsync device remove DEVICE_ID [--yes]` | 撤销设备对未来 generation 的访问，并删除它的远端分支。 |
-| `agentsync passphrase change` | 使用当前密码修改加密密码。 |
-| `agentsync passphrase reset` | 使用已有 Recovery Key 重置加密密码。 |
-| `agentsync remote delete-session SESSION_ID [--remote-id] [--yes]` | 删除一个远端会话。 |
-| `agentsync remote delete-project [--path DIR] [--yes]` | 删除一个项目的全部远端会话。 |
-| `agentsync remote delete-all [--yes]` | 删除配置同步域命名空间下的全部对象。 |
+| `ctxhop project bind` | 绑定当前项目。 |
+| `ctxhop project discover` | 查看其他设备已发布的项目。 |
+| `ctxhop push` | 上传当前项目的 Session。 |
+| `ctxhop push --workspace` | 同时上传有限工作区和 Git 状态。 |
+| `ctxhop pull` | 刷新远端元数据。 |
+| `ctxhop list` | 列出当前项目可恢复的 Session。 |
+| `ctxhop resume` | 恢复 Session 和过滤环境。 |
+| `ctxhop resume --workspace` | 同时恢复已上传的工作区和 Git 状态。 |
+| `ctxhop watch` | 监视本地 Session 变化并上传。 |
 
-执行 `agentsync <command> --help` 查看具体参数。需要自动化时，在支持的命令上
-使用 `--json`。
+### 设备与安全
+
+| 命令 | 说明 |
+|---|---|
+| `ctxhop device invite` | 创建新设备邀请。 |
+| `ctxhop device list` | 查看已授权设备。 |
+| `ctxhop device remove` | 撤销设备后续访问权限。 |
+| `ctxhop device rotate-key` | 轮换加密密钥。 |
+| `ctxhop passphrase change/reset` | 修改或使用 Recovery Key 重置加密密码。 |
+
+### 状态与维护
+
+| 命令 | 说明 |
+|---|---|
+| `ctxhop status` | 查看本地状态；`--remote` 同时检查远端。 |
+| `ctxhop doctor` | 检查配置、存储后端、Agent 和项目状态。 |
+| `ctxhop history` | 查看和清理 Session 历史。 |
+| `ctxhop stats` | 查看跨设备恢复统计。 |
+| `ctxhop hook install` | 安装 Claude Code / Codex SessionEnd Hook。 |
+| `ctxhop completion` | 生成 Shell 补全。 |
+| `ctxhop version` | 查看版本和构建信息。 |
 
 ## 配置
 
-### 配置目录
+CtxHop 默认使用 `~/.ctxhop` 保存本地配置、设备密钥和同步状态：
 
-没有设置 `AGENTSYNC_CONFIG_DIR` 时，AgentSync 在所有平台都使用当前用户 home 下
-清晰可见的 `~/.agentsync`：
-
-| 平台 | 默认目录 |
+| 系统 | 默认目录 |
 |---|---|
-| Windows | `%USERPROFILE%\.agentsync` |
-| macOS | `~/.agentsync` |
-| Linux 和其他 Unix 系统 | `~/.agentsync` |
+| Windows | `%USERPROFILE%\.ctxhop` |
+| macOS / Linux | `~/.ctxhop` |
 
-初始化成功后，`init` 会打印实际目录。需要使用自定义配置目录时，可以覆盖这个默认目录：
+可通过 `CTXHOP_CONFIG_DIR` 修改配置目录：
 
-~~~bash
-export AGENTSYNC_CONFIG_DIR="$HOME/.agentsync-custom"
-~~~
+```bash
+export CTXHOP_CONFIG_DIR="$HOME/.ctxhop-custom"
+```
 
 PowerShell：
 
-~~~powershell
-$env:AGENTSYNC_CONFIG_DIR = Join-Path $env:USERPROFILE '.agentsync-custom'
-~~~
+```powershell
+$env:CTXHOP_CONFIG_DIR = Join-Path $env:USERPROFILE '.ctxhop-custom'
+```
 
-该目录包含配置、加密 secrets、设备密钥和本地状态。不要提交或公开这个目录。Claude
-Code 的数据目录与 AgentSync 分开，可以通过 `CLAUDE_CONFIG_DIR` 指定。
-
-在 CI 或短期测试中，可以设置 `AGENTSYNC_ACCESS_KEY_ID` 和
-`AGENTSYNC_SECRET_ACCESS_KEY`；`AGENTSYNC_SESSION_TOKEN` 可选。环境变量中的凭据不会写入磁盘。
-
-## 限制与安全
-
-- 会话正文、环境清单、工作区快照和 Git 传输正文会在加密前尽量压缩。压缩封装有格式版本、
-  解压大小和比例限制；过小或不可压缩的内容保持原样，旧的未压缩远端对象仍然可以读取。
-  凭据、token 和密钥材料不会进入这条流水线。
-- 每台设备都有独立的 device ID 和远端分支。
-- `push` 写入当前设备的分支，不会把该分支再拉回本机。
-- `pull --check` 只读取元数据；`resume` 才是显式下载正文并恢复的操作。
-- 默认不会上传项目文件正文：普通 push、Hook 和 watch 只同步会话、环境和小型 Git
-  状态摘要。push --include-workspace 会生成有限快照：Git 项目使用 session fingerprint，
-  无 Git 项目扫描安全过滤后的项目目录。push --include-git-state 是另一条明确的 Git 原生 commit/worktree bundle 传输
-  路径。传输前会做敏感内容预检，无法安全检查时直接失败；整个 .git、token、凭据、
-  密钥材料和 .env 文件永不上传。git preview 只读；git apply --yes 只会把 commit
-  导入隐藏 ref，并在目标工作区干净且基线匹配时应用工作区快照，不会切换分支、提交、
-  merge、rebase 或 push。
-- 目标设备必须提前准备好对应的 Agent 和项目；环境应用不会安装 Agent、MCP server 或运行时依赖。
-- Git 项目有更强的工作区检查；没有 Git 的项目使用 manual identity。普通工作区上下文使用 touched 文件回退检查，显式 --include-workspace 时使用有限目录扫描。
-- 没有 Claude Code 的服务器可以保存数据并执行管理检查，但不能上传或原生恢复
-  Claude 会话。
-- 加密密码和 Recovery Key 同时丢失后，加密数据无法恢复。
-
-### 常见初始化问题
-
-- **backend probe failed：** 使用账号级 R2 endpoint，bucket 单独传入，region 设置为
-  `auto`，并检查对象列出、读取、写入和删除权限。
-- **passphrase does not unlock storage：** 使用这个同步域原来的加密密码。
-- **already configured：** 使用现有配置，或设置新的 `AGENTSYNC_CONFIG_DIR`；init
-  不会覆盖有效配置。
-- **设备 B 没有会话：** 两台设备绑定相同的项目身份，并确认设备 A 已经完成
-  `push`。
+该目录包含本地加密信息和设备密钥，请勿提交到仓库或公开分享。
 
 ## 开发
 
-~~~bash
+从源码构建：
+
+```bash
+git clone https://github.com/CCCCY-ci/ctxhop.git
+cd ctxhop
+go build -trimpath -o ctxhop ./cmd/ctxhop
+./ctxhop install
+```
+
+Windows：
+
+```powershell
+go build -trimpath -o ctxhop.exe ./cmd/ctxhop
+.\ctxhop.exe install
+```
+
+检查：
+
+```bash
 go test ./...
-go build -trimpath -o agentsync ./cmd/agentsync
-~~~
+go test -race ./...
+go vet ./...
+go build -trimpath -o ctxhop ./cmd/ctxhop
+```
+
+请勿将真实 Session 文件、Token 或后端凭据提交到仓库。
 
 ## 许可证
 
-AgentSync 使用 [Apache License 2.0](LICENSE)。重新分发时请保留 [NOTICE](NOTICE) 文件。
+CtxHop 使用 [Apache License 2.0](LICENSE)。重新分发时请保留 [NOTICE](NOTICE) 文件。

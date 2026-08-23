@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 var (

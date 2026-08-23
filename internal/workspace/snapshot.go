@@ -20,7 +20,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/CCCCY-ci/agentsync/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
 )
 
 const (

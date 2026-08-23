@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 )
 
 func TestSessionSummaryCarriesAgentForCodexAndReadsLegacyPayloads(t *testing.T) {

@@ -100,7 +100,7 @@ type Remote interface {
 // Prober is implemented by backends that can verify their configuration before
 // any real work happens.
 //
-// `agentsync init` refuses to save a configuration that fails this check, so
+// `ctxhop init` refuses to save a configuration that fails this check, so
 // that credential and permission problems surface during setup rather than
 // during the first sync (§9.1).
 type Prober interface {

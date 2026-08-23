@@ -27,7 +27,7 @@ const (
 	// more than a normal interactive session.
 	maxSessionRecords = 4 << 20
 	maxSessionBytes   = 512 << 20
-	digestDomain      = "agentsync/records/v1\x00"
+	digestDomain      = "ctxhop/records/v1\x00"
 )
 
 var (

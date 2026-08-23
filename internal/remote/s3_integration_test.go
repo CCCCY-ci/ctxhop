@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/config"
+	"github.com/CCCCY-ci/ctxhop/internal/config"
 )
 
 // TestS3Integration is opt-in so ordinary unit and CI runs never contact an
 // external service. It uses only synthetic bytes and records each key it
 // writes, so cleanup deletes only objects created by this test invocation.
 func TestS3Integration(t *testing.T) {
-	if os.Getenv("AGENTSYNC_S3_INTEGRATION") != "1" {
-		t.Skip("set AGENTSYNC_S3_INTEGRATION=1 to run the external S3/R2 acceptance test")
+	if os.Getenv("CTXHOP_S3_INTEGRATION") != "1" {
+		t.Skip("set CTXHOP_S3_INTEGRATION=1 to run the external S3/R2 acceptance test")
 	}
 
 	s3Config := integrationS3Config(t)
@@ -28,7 +28,7 @@ func TestS3Integration(t *testing.T) {
 	if prefix != "" {
 		prefix += "/"
 	}
-	s3Config.Prefix = prefix + fmt.Sprintf("agentsync-integration/%d-%d", time.Now().UnixNano(), os.Getpid())
+	s3Config.Prefix = prefix + fmt.Sprintf("ctxhop-integration/%d-%d", time.Now().UnixNano(), os.Getpid())
 
 	store, err := NewS3(s3Config)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestS3Integration(t *testing.T) {
 		t.Fatalf("S3 deleted object get = %v, want ErrNotFound", err)
 	}
 
-	if os.Getenv("AGENTSYNC_S3_INTEGRATION_PAGINATION") != "1" {
+	if os.Getenv("CTXHOP_S3_INTEGRATION_PAGINATION") != "1" {
 		return
 	}
 
@@ -191,10 +191,10 @@ dispatch:
 
 func TestS3IntegrationLoadsPersistedSettings(t *testing.T) {
 	configDir := t.TempDir()
-	t.Setenv("AGENTSYNC_CONFIG_DIR", configDir)
-	t.Setenv("AGENTSYNC_ACCESS_KEY_ID", "")
-	t.Setenv("AGENTSYNC_SECRET_ACCESS_KEY", "")
-	t.Setenv("AGENTSYNC_SESSION_TOKEN", "")
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CTXHOP_ACCESS_KEY_ID", "")
+	t.Setenv("CTXHOP_SECRET_ACCESS_KEY", "")
+	t.Setenv("CTXHOP_SESSION_TOKEN", "")
 
 	c := config.New()
 	c.Remote = config.Remote{
@@ -250,7 +250,7 @@ func TestS3IntegrationConfigMapping(t *testing.T) {
 		},
 	}
 
-	got, err := s3ConfigFromAgentSyncConfig(c, secrets)
+	got, err := s3ConfigFromCtxHopConfig(c, secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,34 +276,34 @@ func integrationS3Config(t *testing.T) S3Config {
 		case loadErr == nil && strings.EqualFold(strings.TrimSpace(c.Remote.Type), "s3"):
 			secrets, secretsErr := config.LoadSecrets(configDir)
 			if secretsErr != nil {
-				t.Fatalf("load S3 credentials from AgentSync secrets: %v", secretsErr)
+				t.Fatalf("load S3 credentials from CtxHop secrets: %v", secretsErr)
 			}
-			settings, settingsErr := s3ConfigFromAgentSyncConfig(c, secrets)
+			settings, settingsErr := s3ConfigFromCtxHopConfig(c, secrets)
 			if settingsErr != nil {
-				t.Fatalf("load S3 settings from AgentSync config: %v", settingsErr)
+				t.Fatalf("load S3 settings from CtxHop config: %v", settingsErr)
 			}
 			return settings
 		case loadErr != nil && !errors.Is(loadErr, config.ErrNotInitialised):
-			t.Fatalf("load AgentSync config: %v", loadErr)
+			t.Fatalf("load CtxHop config: %v", loadErr)
 		}
 	}
 
 	return integrationS3ConfigFromEnvironment(t)
 }
 
-func s3ConfigFromAgentSyncConfig(c *config.Config, secrets *config.Secrets) (S3Config, error) {
+func s3ConfigFromCtxHopConfig(c *config.Config, secrets *config.Secrets) (S3Config, error) {
 	if c == nil {
-		return S3Config{}, errors.New("AgentSync configuration is unavailable")
+		return S3Config{}, errors.New("CtxHop configuration is unavailable")
 	}
 	if !strings.EqualFold(strings.TrimSpace(c.Remote.Type), "s3") {
-		return S3Config{}, errors.New("AgentSync configuration does not select the S3 backend")
+		return S3Config{}, errors.New("CtxHop configuration does not select the S3 backend")
 	}
 	if secrets == nil {
-		return S3Config{}, errors.New("AgentSync secrets are unavailable")
+		return S3Config{}, errors.New("CtxHop secrets are unavailable")
 	}
 	if strings.TrimSpace(secrets.Credentials.AccessKeyID) == "" ||
 		strings.TrimSpace(secrets.Credentials.SecretAccessKey) == "" {
-		return S3Config{}, errors.New("AgentSync S3 credentials are incomplete")
+		return S3Config{}, errors.New("CtxHop S3 credentials are incomplete")
 	}
 	return S3Config{
 		Endpoint:     c.Remote.Endpoint,
@@ -321,22 +321,22 @@ func integrationS3ConfigFromEnvironment(t *testing.T) S3Config {
 	t.Helper()
 
 	pathStyle := false
-	if value := strings.TrimSpace(os.Getenv("AGENTSYNC_S3_PATH_STYLE")); value != "" {
+	if value := strings.TrimSpace(os.Getenv("CTXHOP_S3_PATH_STYLE")); value != "" {
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
-			t.Fatalf("AGENTSYNC_S3_PATH_STYLE: %v", err)
+			t.Fatalf("CTXHOP_S3_PATH_STYLE: %v", err)
 		}
 		pathStyle = parsed
 	}
 
 	return S3Config{
-		Endpoint:     integrationEnv(t, "AGENTSYNC_S3_ENDPOINT"),
-		Region:       integrationEnv(t, "AGENTSYNC_S3_REGION"),
-		Bucket:       integrationEnv(t, "AGENTSYNC_S3_BUCKET"),
-		Prefix:       strings.TrimRight(strings.TrimSpace(os.Getenv("AGENTSYNC_S3_PREFIX")), "/"),
-		AccessKey:    integrationEnv(t, "AGENTSYNC_S3_ACCESS_KEY_ID"),
-		SecretKey:    integrationEnv(t, "AGENTSYNC_S3_SECRET_ACCESS_KEY"),
-		SessionToken: os.Getenv("AGENTSYNC_S3_SESSION_TOKEN"),
+		Endpoint:     integrationEnv(t, "CTXHOP_S3_ENDPOINT"),
+		Region:       integrationEnv(t, "CTXHOP_S3_REGION"),
+		Bucket:       integrationEnv(t, "CTXHOP_S3_BUCKET"),
+		Prefix:       strings.TrimRight(strings.TrimSpace(os.Getenv("CTXHOP_S3_PREFIX")), "/"),
+		AccessKey:    integrationEnv(t, "CTXHOP_S3_ACCESS_KEY_ID"),
+		SecretKey:    integrationEnv(t, "CTXHOP_S3_SECRET_ACCESS_KEY"),
+		SessionToken: os.Getenv("CTXHOP_S3_SESSION_TOKEN"),
 		PathStyle:    pathStyle,
 	}
 }

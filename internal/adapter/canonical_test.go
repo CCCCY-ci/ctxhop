@@ -295,7 +295,7 @@ func TestLocalizeFailsFromInsideNestedStructures(t *testing.T) {
 func TestLocalizeLeavesTokenLikeContentAlone(t *testing.T) {
 	// Tokens are only ever written into allowlisted positions, so the same
 	// characters elsewhere are user content. Refusing there would make any
-	// session that discusses AgentSync itself impossible to restore - including
+	// session that discusses CtxHop itself impossible to restore - including
 	// the ones produced while building it.
 	tests := []string{
 		`{"text":"${AS_PROJECT}/src is the token we use"}`,
@@ -381,7 +381,7 @@ func TestCanonicalizeTokenizesTopLevelPath(t *testing.T) {
 }
 
 func TestUnknownPathFieldsNeverLeakContent(t *testing.T) {
-	// Findings reach `agentsync doctor`, whose output must be safe to paste
+	// Findings reach `ctxhop doctor`, whose output must be safe to paste
 	// into a public issue: no paths, project names or session content (BR-09).
 	c := NewCanonicalizer(winSpace)
 	in := `{"otherContainer":{"C:\\Users\\alice\\.claude\\x.md":"D:\\Workspace\\Example\\y"}}`

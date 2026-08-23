@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 const maxKeyfileBytes = 1 << 20
 
 var (
 	// ErrNoRemoteKeyfile reports a backend that has not been initialised for
-	// AgentSync yet.
+	// CtxHop yet.
 	ErrNoRemoteKeyfile = errors.New("syncer: remote keyfile is not present")
 
 	// ErrRemoteKeyfileExists prevents a later init from replacing the envelope

@@ -20,7 +20,7 @@ func TestCodexHookInstallIsIdempotentAndPreservesUserHooks(t *testing.T) {
 	writeCodexHooksTestFile(t, filepath.Join(home, "hooks.json"), settings)
 
 	layout := CodexLayout{Home: home}
-	if err := layout.InstallHook(`C:\Program Files\AgentSync\agentsync.exe`); err != nil {
+	if err := layout.InstallHook(`C:\Program Files\CtxHop\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 	installed, err := layout.HookInstalled()
@@ -28,7 +28,7 @@ func TestCodexHookInstallIsIdempotentAndPreservesUserHooks(t *testing.T) {
 		t.Fatalf("HookInstalled = %v, %v", installed, err)
 	}
 
-	if err := layout.InstallHook(`D:\tools\agentsync.exe`); err != nil {
+	if err := layout.InstallHook(`D:\tools\ctxhop.exe`); err != nil {
 		t.Fatalf("reinstall hook: %v", err)
 	}
 	current := readCodexHooksTestFile(t, layout.HooksPath())
@@ -41,7 +41,7 @@ func TestCodexHookInstallIsIdempotentAndPreservesUserHooks(t *testing.T) {
 	for _, item := range items {
 		if codexIsOurs(item) {
 			ours++
-			if !strings.Contains(item["command"].(string), hookMarker) || !strings.Contains(item["commandWindows"].(string), "D:\\tools\\agentsync.exe") {
+			if !strings.Contains(item["command"].(string), hookMarker) || !strings.Contains(item["commandWindows"].(string), "D:\\tools\\ctxhop.exe") {
 				t.Fatalf("updated hook = %+v", item)
 			}
 		}

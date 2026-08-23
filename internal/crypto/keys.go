@@ -106,7 +106,7 @@ func recoveryKEK(recovery []byte) ([]byte, error) {
 	if len(recovery) != recoveryKeyLen {
 		return nil, fmt.Errorf("crypto: recovery key must be %d bytes", recoveryKeyLen)
 	}
-	return hkdf.Expand(sha256.New, recovery, "agentsync/recovery-kek", keyLen)
+	return hkdf.Expand(sha256.New, recovery, "ctxhop/recovery-kek", keyLen)
 }
 
 // DataKey is the key everything else hangs off.
@@ -133,7 +133,7 @@ func NewDataKey() *DataKey {
 // keeps the envelope unchanged: the passphrase and the recovery key still wrap
 // one random secret, and everything else hangs off it (spec §3.1).
 func (d *DataKey) IdentityPrivate() (*ecdh.PrivateKey, error) {
-	seed, err := d.derive("agentsync/identity-x25519")
+	seed, err := d.derive("ctxhop/identity-x25519")
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func (d *DataKey) IdentityPublic() (*ecdh.PublicKey, error) {
 // Separate from the content key so that a compromise of one does not hand over
 // the other, and so that neither purpose can be confused for the other.
 func (d *DataKey) IdentifierKey() ([]byte, error) {
-	return d.derive("agentsync/identifier")
+	return d.derive("ctxhop/identifier")
 }
 
 func (d *DataKey) derive(info string) ([]byte, error) {

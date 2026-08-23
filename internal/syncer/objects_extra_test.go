@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 )
 
 func TestObjectLayoutMethodsRejectInvalidStoredState(t *testing.T) {

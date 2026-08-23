@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 func TestAppendExecutorPublishesAndCommitsEachShard(t *testing.T) {

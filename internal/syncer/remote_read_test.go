@@ -9,8 +9,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 type remoteReadFake struct {

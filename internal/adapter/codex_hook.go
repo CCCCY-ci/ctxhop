@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 const (
@@ -24,14 +24,14 @@ var _ HookInstaller = Layout{}
 var _ HookInstaller = CodexLayout{}
 
 // HooksPath is the user-level Codex hook configuration file. Project-local
-// hooks are intentionally not used: AgentSync's project selection is stored in
+// hooks are intentionally not used: CtxHop's project selection is stored in
 // its own configuration and should not require adding files to every project.
 func (l CodexLayout) HooksPath() string {
 	return filepath.Join(l.Home, codexHooksFileName)
 }
 
 // InstallHook registers a Codex SessionEnd hook. The command starts an
-// independent agentsync push process because Codex gives SessionEnd handlers a
+// independent ctxhop push process because Codex gives SessionEnd handlers a
 // short shutdown window; waiting for a remote push here would make the hook
 // unreliable for normal S3 latency.
 //
@@ -67,7 +67,7 @@ func (l CodexLayout) InstallHook(executable string) error {
 				"type":           "command",
 				"command":        command,
 				"commandWindows": commandWindows,
-				"statusMessage":  "starting AgentSync push",
+				"statusMessage":  "starting CtxHop push",
 			},
 		},
 	})
@@ -77,7 +77,7 @@ func (l CodexLayout) InstallHook(executable string) error {
 
 // probe
 
-// RemoveHook removes only the AgentSync command from Codex hooks.json.
+// RemoveHook removes only the CtxHop command from Codex hooks.json.
 func (l CodexLayout) RemoveHook() error {
 	settings, err := l.loadCodexHooks()
 	if err != nil {
@@ -99,7 +99,7 @@ func (l CodexLayout) RemoveHook() error {
 	return l.saveCodexHooks(settings)
 }
 
-// HookInstalled reports whether an AgentSync command is registered for Codex.
+// HookInstalled reports whether a CtxHop command is registered for Codex.
 func (l CodexLayout) HookInstalled() (bool, error) {
 	settings, err := l.loadCodexHooks()
 	if err != nil {
@@ -126,7 +126,7 @@ func codexHookCommands(executable string) (string, string, error) {
 		// process must not keep the hook's stdout/stderr pipe open.
 		command += " >/dev/null 2>&1 &"
 	}
-	commandWindows := "Start-Process -FilePath " + powershellSingleQuoted(executable) + " -ArgumentList 'push','--agentsync-hook' -WindowStyle Hidden"
+	commandWindows := "Start-Process -FilePath " + powershellSingleQuoted(executable) + " -ArgumentList 'push','--ctxhop-hook' -WindowStyle Hidden"
 	return command, commandWindows, nil
 }
 

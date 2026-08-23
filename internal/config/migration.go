@@ -6,14 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
-const legacyAppDir = "agentsync"
+const legacyAppDir = "ctxhop"
 
 // migrateLegacyIfNeeded copies a previous AppData configuration into the new
 // home-directory location. It only runs when the new config does not exist and
-// only for the implicit default; an explicit AGENTSYNC_CONFIG_DIR is never
+// only for the implicit default; an explicit CTXHOP_CONFIG_DIR is never
 // changed behind the caller's back. The old directory is retained as a
 // recoverable backup.
 func migrateLegacyIfNeeded(dir string) error {

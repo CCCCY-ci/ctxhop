@@ -267,7 +267,7 @@ func joinFieldPath(prefix, key string) string {
 
 // report records a schema finding, but only under a name that is safe to show.
 //
-// Findings surface in `agentsync doctor`, whose output must be safe to paste
+// Findings surface in `ctxhop doctor`, whose output must be safe to paste
 // into a public issue - no paths, project names or session content (BR-09).
 // Keys of an unknown path-keyed container are themselves absolute paths, so a
 // name that is not a plain identifier is replaced rather than leaked.
@@ -435,7 +435,7 @@ func (l *localizer) walk(path string, v any) (any, error) {
 // tokens into allowlisted positions, so the same characters appearing in a
 // message body or a command line are user content that happens to look like
 // our marker - and refusing there would make any session that discusses
-// AgentSync itself impossible to restore.
+// CtxHop itself impossible to restore.
 func (l *localizer) text(field, s string, tokenized bool) (string, error) {
 	if embeddedPathTextFields[fieldLeaf(field)] {
 		return l.rewriteEmbeddedPathText(s)

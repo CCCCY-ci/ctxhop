@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 var (

@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
-	"github.com/CCCCY-ci/agentsync/internal/syncflow"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
 
 const (
@@ -42,7 +42,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	root, err := os.MkdirTemp("", "agentsync-mvp-")
+	root, err := os.MkdirTemp("", "ctxhop-mvp-")
 	if err != nil {
 		return fmt.Errorf("create temporary acceptance root: %w", err)
 	}

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 func TestQueuedPusherRetriesMetadataWithoutRepublishingDurableShard(t *testing.T) {

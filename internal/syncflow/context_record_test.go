@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
 )
 
 func TestWorkspaceContextRecordForProducesBoundedLocalMarker(t *testing.T) {
@@ -29,7 +29,7 @@ func TestWorkspaceContextRecordForProducesBoundedLocalMarker(t *testing.T) {
 	if err := json.Unmarshal(record, &decoded); err != nil {
 		t.Fatalf("decode marker: %v", err)
 	}
-	if decoded.Type != "user" || !decoded.IsMeta || decoded.AgentSync.Kind != workspaceContextKind {
+	if decoded.Type != "user" || !decoded.IsMeta || decoded.CtxHop.Kind != workspaceContextKind {
 		t.Fatalf("decoded marker = %+v", decoded)
 	}
 	if !bytes.Contains([]byte(decoded.Message.Content), []byte("src/a.go: added")) || !bytes.Contains([]byte(decoded.Message.Content), []byte("src/z.go: changed")) {
@@ -94,7 +94,7 @@ func TestCodexWorkspaceContextRecordUsesEventMessageShape(t *testing.T) {
 	if err := json.Unmarshal(record, &decoded); err != nil {
 		t.Fatalf("decode Codex marker: %v", err)
 	}
-	if decoded.Type != "event_msg" || decoded.Payload.Type != "user_message" || decoded.Payload.AgentSync.Kind != workspaceContextKind {
+	if decoded.Type != "event_msg" || decoded.Payload.Type != "user_message" || decoded.Payload.CtxHop.Kind != workspaceContextKind {
 		t.Fatalf("decoded marker = %+v", decoded)
 	}
 	if !bytes.Contains([]byte(decoded.Payload.Message), []byte("main.go: modified")) || !isWorkspaceContextRecord(record) {

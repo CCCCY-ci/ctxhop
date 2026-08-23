@@ -603,7 +603,7 @@ func TestSealLocalRoundTrip(t *testing.T) {
 	}
 	const secret = "AKIAIOSFODNN7EXAMPLE/wJalrXUtnFEMI"
 
-	sealed, err := SealLocal(key, "agentsync/secrets", []byte(secret))
+	sealed, err := SealLocal(key, "ctxhop/secrets", []byte(secret))
 	if err != nil {
 		t.Fatalf("SealLocal: %v", err)
 	}
@@ -611,7 +611,7 @@ func TestSealLocalRoundTrip(t *testing.T) {
 		t.Fatal("the credential survived into the sealed bytes")
 	}
 
-	got, err := OpenLocal(key, "agentsync/secrets", sealed)
+	got, err := OpenLocal(key, "ctxhop/secrets", sealed)
 	if err != nil {
 		t.Fatalf("OpenLocal: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestSealLocalRoundTrip(t *testing.T) {
 	}
 
 	// The label is authenticated, so a file cannot be presented as another.
-	if _, err := OpenLocal(key, "agentsync/something-else", sealed); err == nil {
+	if _, err := OpenLocal(key, "ctxhop/something-else", sealed); err == nil {
 		t.Error("sealed data opened under a different label")
 	}
 	// And a different device key cannot open it.
@@ -628,7 +628,7 @@ func TestSealLocalRoundTrip(t *testing.T) {
 	if _, err := rand.Read(other); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenLocal(other, "agentsync/secrets", sealed); err == nil {
+	if _, err := OpenLocal(other, "ctxhop/secrets", sealed); err == nil {
 		t.Error("sealed data opened under a different key")
 	}
 }

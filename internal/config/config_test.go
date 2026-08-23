@@ -18,7 +18,7 @@ func fullConfig() *Config {
 		Endpoint:  "https://storage.example.invalid",
 		Bucket:    "acme-private-bucket",
 		Region:    "eu-west-1",
-		Prefix:    "agentsync/",
+		Prefix:    "ctxhop/",
 		PathStyle: true,
 	}
 	c.IdentityPublic = []byte{1, 2, 3, 4}
@@ -163,7 +163,7 @@ func TestLoadReportsAnUninitialisedMachine(t *testing.T) {
 }
 
 // TestLoadDoesNotCreateAnything: a read must not decide the machine is now set
-// up, or a mistyped AGENTSYNC_CONFIG_DIR would leave litter and report success.
+// up, or a mistyped CTXHOP_CONFIG_DIR would leave litter and report success.
 func TestLoadDoesNotCreateAnything(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "not-there")

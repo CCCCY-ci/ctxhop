@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 const maxEncryptedShardBytes = maxShardBytes + 1024

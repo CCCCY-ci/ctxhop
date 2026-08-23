@@ -194,7 +194,7 @@ func CaptureTransferWithOptions(ctx context.Context, root string, state State, o
 		return state, transfer, nil
 	}
 	if len(state.Repository.Submodules) != 0 {
-		state.Transfer.Reason = "the project contains submodules; AgentSync records their gitlinks but does not transport submodule objects or worktree changes"
+		state.Transfer.Reason = "the project contains submodules; CtxHop records their gitlinks but does not transport submodule objects or worktree changes"
 		return state, transfer, nil
 	}
 	absolute, err := filepath.Abs(root)
@@ -419,7 +419,7 @@ func createWorktreeTransfer(ctx context.Context, root string, state State) (stri
 	if hasUntrackedWorktreeChanges(state.Worktree.Entries) {
 		return createTemporaryStashTransfer(ctx, root)
 	}
-	stashTip, stashErr := runGit(ctx, root, "stash", "create", "AgentSync workspace transfer")
+	stashTip, stashErr := runGit(ctx, root, "stash", "create", "CtxHop workspace transfer")
 	if stashErr != nil {
 		return "", nil, fmt.Errorf("gitstate: create worktree snapshot: %w", ErrTransferUnavailable)
 	}
@@ -450,7 +450,7 @@ func createTemporaryStashTransfer(ctx context.Context, root string) (string, []b
 	} else if ctx.Err() != nil {
 		return "", nil, ctx.Err()
 	}
-	if _, err := runGit(ctx, root, "stash", "push", "--include-untracked", "--message", "AgentSync temporary workspace transfer"); err != nil {
+	if _, err := runGit(ctx, root, "stash", "push", "--include-untracked", "--message", "CtxHop temporary workspace transfer"); err != nil {
 		return "", nil, fmt.Errorf("gitstate: create temporary worktree snapshot: %w", ErrTransferUnavailable)
 	}
 	stashTip, err := runGit(ctx, root, "rev-parse", "--verify", "refs/stash")
@@ -643,7 +643,7 @@ func createBundle(ctx context.Context, root, revision string) ([]byte, error) {
 		if _, err := crand.Read(nonce); err != nil {
 			return nil, fmt.Errorf("gitstate: prepare bundle: %w", ErrTransferUnavailable)
 		}
-		temporaryRef = "refs/agentsync/transfer/" + hex.EncodeToString(nonce)
+		temporaryRef = "refs/ctxhop/transfer/" + hex.EncodeToString(nonce)
 		if _, err := runGit(ctx, root, "update-ref", temporaryRef, revision); err != nil {
 			return nil, fmt.Errorf("gitstate: prepare bundle: %w", ErrTransferUnavailable)
 		}
@@ -654,7 +654,7 @@ func createBundle(ctx context.Context, root, revision string) ([]byte, error) {
 		}()
 		bundleRevision = temporaryRef
 	}
-	file, err := os.CreateTemp("", "agentsync-git-bundle-*")
+	file, err := os.CreateTemp("", "ctxhop-git-bundle-*")
 	if err != nil {
 		return nil, fmt.Errorf("gitstate: prepare bundle: %w", ErrTransferUnavailable)
 	}

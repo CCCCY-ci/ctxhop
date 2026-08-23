@@ -214,7 +214,7 @@ func captureDirectoryFile(ctx context.Context, root, relative string) (File, boo
 
 func excludedDirectory(relative string) bool {
 	switch strings.ToLower(filepath.Base(filepath.FromSlash(relative))) {
-	case ".agentsync", ".git", ".claude", ".codex", ".cache",
+	case ".ctxhop", ".git", ".claude", ".codex", ".cache",
 		"node_modules", "vendor", "target", "dist", "build", "coverage",
 		"__pycache__", ".venv", "venv", ".next":
 		return true

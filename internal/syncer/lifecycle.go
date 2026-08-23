@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 // ProjectRemotePrefix returns the slash-terminated namespace for one project.

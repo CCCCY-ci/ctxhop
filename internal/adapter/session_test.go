@@ -133,8 +133,8 @@ func TestReadSessionFile(t *testing.T) {
 
 func TestEncodeProjectSlug(t *testing.T) {
 	tests := map[string]string{
-		`D:\Workspace\Projects\AgentSync`: "D--Workspace-Projects-AgentSync",
-		"/Users/bob/Projects/Example":     "-Users-bob-Projects-Example",
+		`D:\Workspace\Projects\CtxHop`: "D--Workspace-Projects-CtxHop",
+		"/Users/bob/Projects/Example":  "-Users-bob-Projects-Example",
 
 		// Every non-alphanumeric character becomes a dash, not just the
 		// separators. Getting this wrong points us at a directory the agent

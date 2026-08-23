@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/crypto"
+	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 )
 
 func TestSealShardCompressesBeforeEncryptionAndReadsLegacyObjects(t *testing.T) {

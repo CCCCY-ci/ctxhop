@@ -18,7 +18,7 @@ func TestDirDefaultsToHomeDotAgentsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".agentsync")
+	want := filepath.Join(home, ".ctxhop")
 	if got != want {
 		t.Fatalf("Dir() = %q, want %q", got, want)
 	}
@@ -47,11 +47,11 @@ func TestMigrateLegacyCopiesAvailableFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Clean(filepath.Join(home, ".agentsync")) == filepath.Clean(filepath.Join(configRoot, "agentsync")) {
+	if filepath.Clean(filepath.Join(home, ".ctxhop")) == filepath.Clean(filepath.Join(configRoot, "ctxhop")) {
 		t.Skip("legacy and current configuration directories are the same")
 	}
 
-	legacy := filepath.Join(configRoot, "agentsync")
+	legacy := filepath.Join(configRoot, "ctxhop")
 	legacyConfig := filepath.Join(legacy, configFile)
 	if _, err := os.Stat(legacyConfig); errors.Is(err, os.ErrNotExist) {
 		t.Skip("the host has no legacy configuration to migrate")

@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
 )
 
 const (

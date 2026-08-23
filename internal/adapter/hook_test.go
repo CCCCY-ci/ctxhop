@@ -36,7 +36,7 @@ func writeSettings(t *testing.T, l Layout, body string) {
 func TestInstallHookCreatesSettings(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestInstallHookCreatesSettings(t *testing.T) {
 		t.Errorf("command = %q", command)
 	}
 	// The path is quoted so a directory with a space does not split it.
-	if !strings.Contains(command, `"C:\bin\agentsync.exe"`) {
+	if !strings.Contains(command, `"C:\bin\ctxhop.exe"`) {
 		t.Errorf("executable not quoted: %q", command)
 	}
 }
@@ -68,7 +68,7 @@ func TestInstallHookIsIdempotent(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 
 	for i := 0; i < 3; i++ {
-		if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+		if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 			t.Fatalf("InstallHook: %v", err)
 		}
 	}
@@ -83,10 +83,10 @@ func TestInstallHookIsIdempotent(t *testing.T) {
 func TestInstallHookUpdatesAMovedExecutable(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 
-	if err := l.InstallHook(`C:\old\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\old\ctxhop.exe`); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.InstallHook(`D:\new\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`D:\new\ctxhop.exe`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,7 +96,7 @@ func TestInstallHookUpdatesAMovedExecutable(t *testing.T) {
 		t.Fatalf("got %d groups, want 1", len(groups))
 	}
 	command := groups[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
-	if !strings.Contains(command, `D:\new\agentsync.exe`) {
+	if !strings.Contains(command, `D:\new\ctxhop.exe`) {
 		t.Errorf("command not updated: %q", command)
 	}
 }
@@ -115,7 +115,7 @@ func TestInstallHookPreservesEverythingElse(t *testing.T) {
 	  }
 	}`)
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestRemoveHookLeavesNoTrace(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 	writeSettings(t, l, `{"model":"opus"}`)
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.RemoveHook(); err != nil {
@@ -173,7 +173,7 @@ func TestRemoveHookKeepsTheUsersHooks(t *testing.T) {
 	  "hooks": {
 	    "SessionEnd": [{"hooks": [
 	      {"type": "command", "command": "echo mine"},
-	      {"type": "command", "command": "\"C:\\bin\\agentsync.exe\" push --agentsync-hook"}
+	      {"type": "command", "command": "\"C:\\bin\\ctxhop.exe\" push --ctxhop-hook"}
 	    ]}]
 	  }
 	}`)
@@ -220,7 +220,7 @@ func TestHookRefusesToTouchUnparseableSettings(t *testing.T) {
 
 	// Overwriting a file we cannot parse would destroy configuration we never
 	// saw, so every entry point refuses instead.
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err == nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err == nil {
 		t.Error("InstallHook overwrote unparseable settings")
 	}
 	if err := l.RemoveHook(); err == nil {
@@ -251,7 +251,7 @@ func TestInstallHookRejectsUnquotableExecutables(t *testing.T) {
 		// Both shells interpolate these inside a double-quoted string, and
 		// both are legal in a path. `C:\Users\a$b\x.exe` would silently invoke
 		// `C:\Users\a\x.exe`, so backups would stop with no visible symptom.
-		`C:\Users\a$b\agentsync.exe`,
+		`C:\Users\a$b\ctxhop.exe`,
 		"C:\\bin\\back`tick.exe",
 	} {
 		l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
@@ -265,7 +265,7 @@ func TestInstallHookRejectsUnquotableExecutables(t *testing.T) {
 }
 
 func TestHookCommandIsExecutableByTheHostShell(t *testing.T) {
-	got, err := hookCommand(`C:\Program Files\agentsync.exe`)
+	got, err := hookCommand(`C:\Program Files\ctxhop.exe`)
 	if err != nil {
 		t.Fatalf("hookCommand: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestHookCommandIsExecutableByTheHostShell(t *testing.T) {
 	// The path is quoted so a directory with a space stays one argument, and
 	// the backslashes are literal - Go-style quoting would emit `C:\\Program`,
 	// which no shell resolves.
-	if !strings.Contains(got, `"C:\Program Files\agentsync.exe"`) {
+	if !strings.Contains(got, `"C:\Program Files\ctxhop.exe"`) {
 		t.Errorf("path not quoted literally: %q", got)
 	}
 	if !strings.HasSuffix(got, " push "+hookMarker) {
@@ -300,7 +300,7 @@ func TestRemoveHookPreservesShapesItDoesNotUnderstand(t *testing.T) {
 	    "SessionEnd": [
 	      "a string",
 	      {"hooks": "not a list"},
-	      {"hooks": [{"type": "command", "command": "\"x\" push --agentsync-hook"}]}
+	      {"hooks": [{"type": "command", "command": "\"x\" push --ctxhop-hook"}]}
 	    ]
 	  }
 	}`)
@@ -335,7 +335,7 @@ func TestHookHandlesAnEmptySettingsFile(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 	writeSettings(t, l, "\n  \n")
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 	installed, err := l.HookInstalled()
@@ -362,7 +362,7 @@ func TestHookToleratesUnexpectedEntriesInAListWeUnderstand(t *testing.T) {
 		t.Error("found a hook that is not there")
 	}
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestInstallHookRefusesContainersItDoesNotModel(t *testing.T) {
 			l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 			writeSettings(t, l, body)
 
-			err := l.InstallHook(`C:\bin\agentsync.exe`)
+			err := l.InstallHook(`C:\bin\ctxhop.exe`)
 			if !errors.Is(err, ErrUnexpectedSettings) {
 				t.Fatalf("got %v, want ErrUnexpectedSettings", err)
 			}
@@ -409,7 +409,7 @@ func TestInstallHookLeavesAUserWrapperAlone(t *testing.T) {
 	// launcher. It already invokes us, so the hook counts as installed, and
 	// rewriting it would silently discard their change.
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
-	const wrapper = `nohup "C:\bin\agentsync.exe" push --agentsync-hook >> /tmp/log 2>&1`
+	const wrapper = `nohup "C:\bin\ctxhop.exe" push --ctxhop-hook >> /tmp/log 2>&1`
 	writeSettings(t, l, `{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":`+
 		mustJSON(t, wrapper)+`}]}]}}`)
 
@@ -417,7 +417,7 @@ func TestInstallHookLeavesAUserWrapperAlone(t *testing.T) {
 	if err != nil || !installed {
 		t.Fatalf("HookInstalled = %v, %v", installed, err)
 	}
-	if err := l.InstallHook(`D:\new\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`D:\new\ctxhop.exe`); err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
 
@@ -437,7 +437,7 @@ func TestRemoveHookDeletesASettingsFileWeCreated(t *testing.T) {
 	// empty document behind is still a trace of our having been there (BR-13).
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.RemoveHook(); err != nil {
@@ -452,14 +452,14 @@ func TestRemoveHookDeletesASettingsFileWeCreated(t *testing.T) {
 
 func TestLooksGenerated(t *testing.T) {
 	tests := map[string]bool{
-		`"C:\bin\agentsync.exe" push --agentsync-hook`:   true,
-		`& "C:\bin\agentsync.exe" push --agentsync-hook`: true,
+		`"C:\bin\ctxhop.exe" push --ctxhop-hook`:   true,
+		`& "C:\bin\ctxhop.exe" push --ctxhop-hook`: true,
 		// Anything else carrying the marker is somebody's own command.
-		`nohup "x" push --agentsync-hook`:            false,
-		`"C:\bin\x.exe" push --agentsync-hook --now`: false,
-		`C:\bin\x.exe push --agentsync-hook`:         false,
-		`"unterminated push --agentsync-hook`:        false,
-		``:                                           false,
+		`nohup "x" push --ctxhop-hook`:            false,
+		`"C:\bin\x.exe" push --ctxhop-hook --now`: false,
+		`C:\bin\x.exe push --ctxhop-hook`:         false,
+		`"unterminated push --ctxhop-hook`:        false,
+		``:                                        false,
 	}
 	for command, want := range tests {
 		got := looksGenerated(map[string]any{"command": command})
@@ -487,7 +487,7 @@ func TestSettingsPath(t *testing.T) {
 
 func TestSettingsWriteIsAtomic(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
-	if err := l.InstallHook(`C:\bin\agentsync.exe`); err != nil {
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
 		t.Fatal(err)
 	}
 

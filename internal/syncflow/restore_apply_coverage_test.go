@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
 )
 
 func TestApplyRestorePublicWrapperAndCompatibilityStops(t *testing.T) {

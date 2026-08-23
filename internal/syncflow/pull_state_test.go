@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 func TestObservedTipStateRoundTripsThroughSyncflow(t *testing.T) {

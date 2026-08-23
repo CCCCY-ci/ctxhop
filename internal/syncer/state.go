@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 const cursorStateVersion = 1
@@ -28,7 +28,7 @@ var (
 	ErrUnsupportedCursorState = errors.New("syncer: push cursor state is newer than this version")
 )
 
-// CursorStore persists one device-local push cursor under an AgentSync
+// CursorStore persists one device-local push cursor under a CtxHop
 // configuration root.
 //
 // The root is kept separate from ObjectLayout because the former is a local

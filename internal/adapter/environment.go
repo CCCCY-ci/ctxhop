@@ -1,6 +1,6 @@
 package adapter
 
-import "github.com/CCCCY-ci/agentsync/internal/environment"
+import "github.com/CCCCY-ci/ctxhop/internal/environment"
 
 // codexEnvironmentProvider keeps Codex's filtered config rules behind the
 // Codex adapter. The Core only sees environment.Provider and does not know

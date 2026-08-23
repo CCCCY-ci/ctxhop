@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/environment"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 )
 
 // CodexLayout locates the JSONL sessions written by Codex CLI.

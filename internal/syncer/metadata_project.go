@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CCCCY-ci/agentsync/internal/environment"
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 // ProjectMetadataRef groups the authenticated metadata objects found under

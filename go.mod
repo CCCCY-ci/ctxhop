@@ -1,4 +1,4 @@
-module github.com/CCCCY-ci/agentsync
+module github.com/CCCCY-ci/ctxhop
 
 go 1.26
 

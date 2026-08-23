@@ -24,21 +24,21 @@ import (
 // was started with, which need not be the user's shell - the adapter layer
 // found exactly this with CLAUDE_CONFIG_DIR - so there has to be one explicit
 // way to say where the configuration lives (spec §2).
-const dirEnv = "AGENTSYNC_CONFIG_DIR"
+const dirEnv = "CTXHOP_CONFIG_DIR"
 
 // appDir is the directory name under the user's home directory.
-const appDir = ".agentsync"
+const appDir = ".ctxhop"
 
 // ErrNotInitialised reports that this machine has no configuration yet.
 //
 // It is a sentinel because the answer for a caller is a specific instruction -
 // run init - rather than a failure to report.
-var ErrNotInitialised = errors.New("config: this machine is not set up yet; run 'agentsync init'")
+var ErrNotInitialised = errors.New("config: this machine is not set up yet; run 'ctxhop init'")
 
 // Dir returns the configuration directory.
 //
-// The default is intentionally visible and easy to back up: ~/.agentsync on
-// every platform. AGENTSYNC_CONFIG_DIR remains an explicit override for tests,
+// The default is intentionally visible and easy to back up: ~/.ctxhop on
+// every platform. CTXHOP_CONFIG_DIR remains an explicit override for tests,
 // portable installations and service accounts.
 func Dir() (string, error) {
 	if dir := os.Getenv(dirEnv); dir != "" {

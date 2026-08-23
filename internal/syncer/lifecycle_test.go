@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
 func TestDeleteRemoteSessionKeepsAdjacentNamespaces(t *testing.T) {

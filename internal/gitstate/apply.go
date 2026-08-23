@@ -20,7 +20,7 @@ const (
 	ApplyNoChange       = "no-changes"
 
 	// Conflict kinds are deliberately descriptive rather than prescriptive.
-	// They tell the caller why AgentSync stopped; they do not authorize an
+	// They tell the caller why CtxHop stopped; they do not authorize an
 	// automatic reset, checkout, merge, or deletion.
 	ConflictTargetDirty      = "target-dirty"
 	ConflictBaseDiverged     = "base-diverged"
@@ -152,11 +152,11 @@ func PreviewTransfer(ctx context.Context, root string, source State, transfer *T
 	if len(source.Repository.Submodules) != 0 || len(current.Repository.Submodules) != 0 {
 		preview.Status = ApplyConflict
 		preview.Conflicts = appendConflictKind(preview.Conflicts, ConflictSubmodule)
-		preview.Notes = append(preview.Notes, "the source or target contains submodules; AgentSync will not transport or rewrite submodule objects; handle submodules with normal Git commands")
+		preview.Notes = append(preview.Notes, "the source or target contains submodules; CtxHop will not transport or rewrite submodule objects; handle submodules with normal Git commands")
 	}
 	if preview.CommitAvailable {
 		preview.CommitReady = true
-		preview.Notes = append(preview.Notes, "the commit bundle will be imported into a hidden refs/agentsync reference")
+		preview.Notes = append(preview.Notes, "the commit bundle will be imported into a hidden refs/ctxhop reference")
 	}
 	if preview.WorktreeAvailable && preview.Status != ApplyConflict {
 		preview.WorktreeReady = current.Worktree.Clean && transfer.WorktreeBase != "" && transfer.WorktreeBase == current.Repository.Head
@@ -213,7 +213,7 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 		}
 		result.CommitRef = ref
 		result.Status = ApplyApplied
-		result.Notes = append(result.Notes, "the source commits were imported into a hidden AgentSync ref; the current branch was not changed")
+		result.Notes = append(result.Notes, "the source commits were imported into a hidden CtxHop ref; the current branch was not changed")
 	}
 	if len(transfer.WorktreeBundle) != 0 {
 		ref, importErr := importBundle(ctx, root, transfer.WorktreeBundle, transfer.WorktreeTip, "worktree")
@@ -235,7 +235,7 @@ func ApplyTransfer(ctx context.Context, root string, source State, transfer Tran
 			result.ManualCleanupRequired = true
 			result.Conflicts = appendConflictKind(result.Conflicts, ConflictPartialApply)
 			result.Notes = append(result.Notes,
-				"the worktree apply started but did not complete; inspect 'git status' and clean up manually if needed; AgentSync did not reset or delete files")
+				"the worktree apply started but did not complete; inspect 'git status' and clean up manually if needed; CtxHop did not reset or delete files")
 			if current, captureErr := Capture(ctx, root, source.ProjectIdentity); captureErr == nil {
 				result.CurrentHead = current.Repository.Head
 				result.CurrentBranch = current.Repository.Branch
@@ -329,7 +329,7 @@ func importBundle(ctx context.Context, root string, bundle []byte, tip, kind str
 	if err := validateHexOptional(tip, kind+" tip"); err != nil {
 		return "", err
 	}
-	file, err := os.CreateTemp("", "agentsync-import-*.bundle")
+	file, err := os.CreateTemp("", "ctxhop-import-*.bundle")
 	if err != nil {
 		return "", errors.New("gitstate: prepare import bundle failed")
 	}
@@ -352,7 +352,7 @@ func importBundle(ctx context.Context, root string, bundle []byte, tip, kind str
 	if kind == "worktree" {
 		prefix = "worktree"
 	}
-	ref := "refs/agentsync/" + prefix + "/" + name
+	ref := "refs/ctxhop/" + prefix + "/" + name
 	if _, err := runGit(ctx, root, "fetch", "--no-tags", path, "+"+tip+":"+ref); err != nil {
 		return "", errors.New("gitstate: import bundle failed")
 	}

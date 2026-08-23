@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 // configVersion is the format this build writes.
@@ -19,7 +19,7 @@ const configVersion = 1
 const configFile = "config.json"
 
 // ErrUnsupportedVersion reports a configuration written by a newer release.
-var ErrUnsupportedVersion = errors.New("config: this configuration was written by a newer agentsync; upgrade to read it")
+var ErrUnsupportedVersion = errors.New("config: this configuration was written by a newer ctxhop; upgrade to read it")
 
 // Device is how this machine identifies itself to the others.
 type Device struct {
@@ -136,7 +136,7 @@ func (c *Config) check() error {
 		return err
 	}
 	if c.Remote.Type == "" {
-		return errors.New("config: the configuration names no storage backend; run 'agentsync init'")
+		return errors.New("config: the configuration names no storage backend; run 'ctxhop init'")
 	}
 	return nil
 }

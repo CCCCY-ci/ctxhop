@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 type cancelAfterContext struct {

@@ -58,7 +58,7 @@ type RepositoryState struct {
 }
 
 // SubmoduleState records only the superproject gitlink and the local
-// submodule worktree condition. AgentSync never transports a submodule's
+// submodule worktree condition. CtxHop never transports a submodule's
 // .git directory or object database as part of a parent Git transfer.
 type SubmoduleState struct {
 	Path        string `json:"path"`

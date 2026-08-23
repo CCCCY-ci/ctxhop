@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CCCCY-ci/agentsync/internal/adapter"
-	"github.com/CCCCY-ci/agentsync/internal/project"
-	"github.com/CCCCY-ci/agentsync/internal/syncer"
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
 type restoreApplyWriterFake struct {

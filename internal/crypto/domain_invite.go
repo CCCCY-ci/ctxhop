@@ -8,7 +8,7 @@ import (
 	"fmt"
 )
 
-const domainInviteProofLabel = "agentsync/domain-invite/v1"
+const domainInviteProofLabel = "ctxhop/domain-invite/v1"
 
 // ErrInvalidDomainInviteProof reports an invitation proof that cannot be
 // verified with the configured domain key.

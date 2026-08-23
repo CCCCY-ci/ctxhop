@@ -349,7 +349,7 @@ func MarshalKeyfile(k *Keyfile) ([]byte, error) {
 func ParseKeyfile(data []byte) (*Keyfile, error) {
 	var k Keyfile
 	if err := json.Unmarshal(data, &k); err != nil {
-		return nil, fmt.Errorf("keyfile is not valid JSON; storage may be corrupt or not an AgentSync store: %w", err)
+		return nil, fmt.Errorf("keyfile is not valid JSON; storage may be corrupt or not a CtxHop store: %w", err)
 	}
 	if err := k.check(); err != nil {
 		return nil, err
