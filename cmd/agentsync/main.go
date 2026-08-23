@@ -79,11 +79,6 @@ func run(args []string) error {
 	if len(args) == 0 {
 		return runDefaultEntry()
 	}
-	if args[0] == "/" {
-		// Keep the old discovery spelling as a compatibility alias for binaries
-		// already used by the user. New users should simply run `agentsync`.
-		return runCommandDiscovery(args[1:])
-	}
 
 	name := args[0]
 	for _, c := range commands {

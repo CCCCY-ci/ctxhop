@@ -42,7 +42,7 @@ func writeCommandDiscovery(w io.Writer, path []string) error {
 		if _, exists := findCommand(root); exists {
 			return writeDiscoveryCommand(w, root)
 		}
-		return fmt.Errorf("command discovery: unknown command %q; run 'agentsync /'", root)
+		return fmt.Errorf("command discovery: unknown command %q; run 'agentsync help'", root)
 	}
 
 	if len(path) == 2 {
@@ -55,7 +55,7 @@ func writeCommandDiscovery(w io.Writer, path []string) error {
 			return writeDiscoveryCommand(w, name)
 		}
 	}
-	return fmt.Errorf("command discovery: unknown command path %q; run 'agentsync / %s'", strings.Join(path, " "), root)
+	return fmt.Errorf("command discovery: unknown command path %q; run 'agentsync help %s'", strings.Join(path, " "), root)
 }
 
 func writeCommandIndex(w io.Writer) error {
@@ -73,7 +73,7 @@ func writeCommandIndex(w io.Writer) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintln(w, "\nUse `agentsync / <group>` for its second-level commands, or `agentsync help <command> [action]` for flags.")
+	_, err := fmt.Fprintln(w, "\nUse `agentsync help <group>` for its second-level commands, or `agentsync help <command> [action]` for flags.")
 	return err
 }
 

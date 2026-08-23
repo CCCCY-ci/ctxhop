@@ -36,32 +36,11 @@ type pickerInput struct {
 	char byte
 }
 
-// runCommandDiscovery keeps the existing plain-text discovery output for
-// pipes, CI and redirected logs. A real terminal gets the small interactive
-// browser so users do not need to remember every top-level command.
-func runCommandDiscovery(path []string) error {
-	if !commandDiscoveryTerminal() || !interactiveDiscoveryPath(path) {
-		return writeCommandDiscovery(os.Stdout, path)
-	}
-	return runInteractiveCommandDiscovery(path, os.Stdin, os.Stdout)
-}
-
 func commandDiscoveryTerminal() bool {
 	if os.Getenv("AGENTSYNC_NO_INTERACTIVE") == "1" {
 		return false
 	}
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-}
-
-func interactiveDiscoveryPath(path []string) bool {
-	switch len(path) {
-	case 0:
-		return true
-	case 1:
-		return len(completionSubcommands[path[0]]) != 0
-	default:
-		return false
-	}
 }
 
 func runInteractiveCommandDiscovery(path []string, input *os.File, output io.Writer) (err error) {
