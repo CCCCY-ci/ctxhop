@@ -503,6 +503,13 @@ func normalizedProjectRoot(value string) string {
 	if err != nil {
 		return filepath.Clean(value)
 	}
+	absolute = filepath.Clean(absolute)
+	// Bindings are local and may have been created through a symlinked path.
+	// Resolve only for comparison; callers still retain the path spelling they
+	// received so Agent session slugs and user-facing output stay unchanged.
+	if canonical, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = canonical
+	}
 	return filepath.Clean(absolute)
 }
 
