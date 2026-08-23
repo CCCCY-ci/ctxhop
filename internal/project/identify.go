@@ -158,6 +158,13 @@ func absoluteDirectory(dir string) (string, error) {
 	if !info.IsDir() {
 		return "", errors.New("the project path is not a directory")
 	}
+	// Git resolves repository roots through the filesystem. Resolve the same
+	// way here so a repository reached through a platform alias such as
+	// macOS's /var -> /private/var does not make files look outside the project.
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		absolute = canonical
+	}
 	return filepath.Clean(absolute), nil
 }
 

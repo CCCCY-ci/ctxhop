@@ -325,11 +325,11 @@ func relativeTouched(root, base string, touched []string) []string {
 }
 
 func relativePath(root, path string) (string, bool) {
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, err := canonicalPath(root)
 	if err != nil {
 		return "", false
 	}
-	pathAbs, err := filepath.Abs(path)
+	pathAbs, err := canonicalPath(path)
 	if err != nil {
 		return "", false
 	}
@@ -341,6 +341,29 @@ func relativePath(root, path string) (string, bool) {
 		return "", false
 	}
 	return filepath.ToSlash(relative), true
+}
+
+// canonicalPath makes comparisons use filesystem identity where the platform
+// exposes more than one spelling for the same location. The final path may be
+// absent (a session can record a deleted file), so resolve its nearest
+// existing parent when the full path cannot be evaluated.
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+
+	parent := filepath.Dir(abs)
+	base := filepath.Base(abs)
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return abs, nil
+	}
+	return filepath.Clean(filepath.Join(resolvedParent, base)), nil
 }
 
 func unionPaths(first, second []string) []string {

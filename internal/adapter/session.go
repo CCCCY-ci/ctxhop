@@ -409,8 +409,19 @@ func (s summary) Title(projectRoot string, fallback time.Time) string {
 	if when.IsZero() {
 		when = fallback
 	}
-	name := filepath.Base(strings.TrimRight(projectRoot, `/\`))
+	name := projectBaseName(projectRoot)
 	return fmt.Sprintf("%s %s", name, when.Format("2006-01-02 15:04"))
+}
+
+// projectBaseName accepts both native and canonical Agent paths. A session
+// captured on Windows can still be summarized while it is being inspected on
+// a POSIX device, where filepath.Base treats a backslash as an ordinary byte.
+func projectBaseName(root string) string {
+	root = strings.TrimRight(root, `/\`)
+	if index := strings.LastIndexAny(root, `/\`); index >= 0 {
+		return root[index+1:]
+	}
+	return root
 }
 
 // clean collapses whitespace and truncates on a rune boundary, so a multi-line

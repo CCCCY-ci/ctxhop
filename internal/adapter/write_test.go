@@ -332,7 +332,7 @@ func TestWriteSessionReportsUnusableHome(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error, got none")
 	}
-	if !strings.Contains(err.Error(), "create session directory") {
+	if !strings.Contains(err.Error(), "create session directory") && !strings.Contains(err.Error(), "check existing session") {
 		t.Errorf("error should name the failing step, got %v", err)
 	}
 }

@@ -15,14 +15,15 @@ func fixedVersion(v string) func(context.Context) string {
 }
 
 func TestDefaultHome(t *testing.T) {
-	t.Setenv("CLAUDE_CONFIG_DIR", `D:\elsewhere\.claude`)
+	wantOverride := filepath.Join(t.TempDir(), ".claude-override")
+	t.Setenv("CLAUDE_CONFIG_DIR", wantOverride)
 	got, err := DefaultHome()
 	if err != nil {
 		t.Fatalf("DefaultHome: %v", err)
 	}
 	// The agent honours this variable, so ignoring it would read and write a
 	// different directory from the one actually in use.
-	if got != `D:\elsewhere\.claude` {
+	if got != wantOverride {
 		t.Errorf("got %q, want the override", got)
 	}
 
