@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// writeCommandDiscovery is the compact command browser behind `agentsync /`
-// and `agentsync help <command>`. It intentionally describes only command
+// writeCommandDiscovery is the compact command browser behind
+// `agentsync help <command>`. It intentionally describes only command
 // names and flags; it does not try to turn every flag into an interactive
 // wizard or guess values that belong to the user's project.
 func writeCommandDiscovery(w io.Writer, path []string) error {

@@ -77,9 +77,11 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return runHelp(nil)
+		return runDefaultEntry()
 	}
 	if args[0] == "/" {
+		// Keep the old discovery spelling as a compatibility alias for binaries
+		// already used by the user. New users should simply run `agentsync`.
 		return runCommandDiscovery(args[1:])
 	}
 
@@ -112,6 +114,13 @@ func runHelp(args []string) error {
 	return writeHelp(os.Stdout)
 }
 
+func runDefaultEntry() error {
+	if !commandDiscoveryTerminal() {
+		return runHelp(nil)
+	}
+	return runInteractiveCommandDiscovery(nil, os.Stdin, os.Stdout)
+}
+
 func writeHelp(w io.Writer) error {
 	if _, err := fmt.Fprint(w, "agentsync - cross-device sync for AI coding agent sessions\n\nusage:\n  agentsync <command> [arguments]\n\ncommands:\n"); err != nil {
 		return err
@@ -125,6 +134,6 @@ func writeHelp(w io.Writer) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprint(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nUse `agentsync /` to browse command groups.\n")
+	_, err := fmt.Fprint(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nRun `agentsync` in an interactive terminal to browse commands, or use `agentsync help <command>` for details.\n")
 	return err
 }

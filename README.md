@@ -381,14 +381,14 @@ All currently supported commands are listed below. Session commands use the
 current project unless the command provides a path option. Destructive commands
 ask for confirmation unless `--yes` is supplied.
 
-If you forget a command, run `agentsync /` in an interactive terminal. It opens a
+If you forget a command, run `agentsync` in an interactive terminal. It opens a
 small command picker: type a prefix to filter, use Up/Down to select, Enter to
 open a group, and Left/Esc to go back. Selecting a leaf only prints the complete
 command and its options; it never runs an apply, delete, or other mutating action.
-You can open a group directly with `agentsync / git` (or another group), and
-`agentsync help git apply` shows the available flags. When stdout is redirected,
-`agentsync /` keeps the plain-text discovery output for scripts and CI. Existing
-command forms remain supported.
+`agentsync help` always prints stable plain-text help, and
+`agentsync help git apply` shows the flags for a specific command. When stdout
+is redirected or the tool runs in CI, `agentsync` falls back to plain-text help.
+Existing command forms remain supported.
 
 | Command | Description |
 |---|---|
