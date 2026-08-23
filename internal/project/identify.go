@@ -68,7 +68,7 @@ func Identify(ctx context.Context, dir string) (Project, error) {
 		}, nil
 	}
 
-	repoRoot, err := absoluteDirectory(top)
+	repoRoot, err := repositoryRootWithInputSpelling(root, top)
 	if err != nil {
 		return Project{}, fmt.Errorf("read the Git project root: %w", err)
 	}
@@ -112,6 +112,31 @@ func Identify(ctx context.Context, dir string) (Project, error) {
 		GitBacked: true,
 		Identity:  Identity{Kind: KindRemote, Value: canonical},
 	}, nil
+}
+
+// repositoryRootWithInputSpelling keeps the path namespace chosen by the
+// caller while still accepting Git's filesystem-resolved spelling. On macOS,
+// for example, Git may report /private/var/... for an input under /var; on
+// Windows it may return a short 8.3 path. Replacing the caller's spelling with
+// Git's would change Claude/Codex project slugs even though both paths name the
+// same directory.
+func repositoryRootWithInputSpelling(inputRoot, gitRoot string) (string, error) {
+	inputCanonical, inputErr := canonicalPath(inputRoot)
+	gitCanonical, gitErr := canonicalPath(gitRoot)
+	if inputErr == nil && gitErr == nil {
+		relative, err := filepath.Rel(filepath.Clean(gitCanonical), filepath.Clean(inputCanonical))
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
+			spelled := filepath.Clean(inputRoot)
+			for _, part := range strings.Split(filepath.Clean(relative), string(filepath.Separator)) {
+				if part == "" || part == "." {
+					continue
+				}
+				spelled = filepath.Dir(spelled)
+			}
+			return spelled, nil
+		}
+	}
+	return absoluteDirectory(gitRoot)
 }
 
 // ManualIdentity creates an identity for a project that has no usable Git
