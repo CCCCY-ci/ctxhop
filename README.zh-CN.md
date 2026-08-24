@@ -1,5 +1,9 @@
 # CtxHop
 
+<p align="center">
+  <img src="assets/ctxhop-icon.png" alt="CtxHop Logo" width="180">
+</p>
+
 [English](README.md) | 简体中文
 
 **换设备，不换上下文。**
@@ -26,10 +30,10 @@ CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 G
 - `CtxHop-Setup_<version>_windows_amd64.exe`
 - `CtxHop-Setup_<version>_windows_arm64.exe`
 
-安装后运行：
+安装完成后，CtxHop 会自动打开命令提示符，显示 ASCII Logo 和下一步操作。可以直接运行：
 
 ```powershell
-ctxhop version
+ctxhop init
 ```
 
 ### macOS / Linux

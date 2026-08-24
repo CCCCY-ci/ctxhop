@@ -1,5 +1,9 @@
 # CtxHop
 
+<p align="center">
+  <img src="assets/ctxhop-icon.png" alt="CtxHop logo" width="180">
+</p>
+
 [简体中文](README.zh-CN.md)
 
 **Switch devices. Keep your context.**
@@ -43,10 +47,11 @@ Download the installer for your CPU architecture from
 - CtxHop-Setup_<version>_windows_amd64.exe
 - CtxHop-Setup_<version>_windows_arm64.exe
 
-Run the installer and open a new terminal afterwards:
+Run the installer. When installation completes, CtxHop opens a Command Prompt
+that displays its ASCII logo and the next step. You can continue directly with:
 
 ~~~powershell
-ctxhop version
+ctxhop init
 ~~~
 
 The installer places CtxHop in %USERPROFILE%\.ctxhop\bin and adds that

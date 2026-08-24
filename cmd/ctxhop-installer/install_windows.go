@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -160,8 +161,35 @@ func reportInstallerFailure(err error) {
 }
 
 func reportInstallerSuccess(targetPath string) {
+	if err := launchInstallerWelcome(targetPath); err == nil {
+		return
+	}
 	message := fmt.Sprintf("CtxHop was installed for the current user at:\n%s\n\nOpen a new terminal, then run:\nctxhop version", targetPath)
 	showInstallerMessage("CtxHop installation complete", message, false)
+}
+
+func launchInstallerWelcome(targetPath string) error {
+	if strings.TrimSpace(targetPath) == "" {
+		return fmt.Errorf("installed executable path is empty")
+	}
+	commandInterpreter := strings.TrimSpace(os.Getenv("COMSPEC"))
+	if commandInterpreter == "" {
+		commandInterpreter = "cmd.exe"
+	}
+	commandLine := installerWelcomeCommandLine(targetPath)
+	command := exec.Command(commandInterpreter, "/K", commandLine)
+	command.Dir = filepath.Dir(targetPath)
+	command.Env = installerWelcomeEnvironment(targetPath)
+	return command.Start()
+}
+
+func installerWelcomeCommandLine(targetPath string) string {
+	return fmt.Sprintf(`""%s" --installer-welcome"`, targetPath)
+}
+
+func installerWelcomeEnvironment(targetPath string) []string {
+	pathValue := filepath.Dir(targetPath) + string(os.PathListSeparator) + os.Getenv("PATH")
+	return append(os.Environ(), "PATH="+pathValue)
 }
 
 func showInstallerMessage(title, message string, failure bool) {
