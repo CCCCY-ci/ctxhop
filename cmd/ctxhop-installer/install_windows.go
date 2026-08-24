@@ -4,11 +4,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -174,22 +176,130 @@ func launchInstallerWelcome(targetPath string) error {
 	}
 	commandInterpreter := strings.TrimSpace(os.Getenv("COMSPEC"))
 	if commandInterpreter == "" {
-		commandInterpreter = "cmd.exe"
+		systemRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+		if systemRoot == "" {
+			commandInterpreter = "cmd.exe"
+		} else {
+			commandInterpreter = filepath.Join(systemRoot, "System32", "cmd.exe")
+		}
 	}
-	commandLine := installerWelcomeCommandLine(targetPath)
-	command := exec.Command(commandInterpreter, "/K", commandLine)
-	command.Dir = filepath.Dir(targetPath)
-	command.Env = installerWelcomeEnvironment(targetPath)
-	return command.Start()
+	scriptPath, err := createInstallerWelcomeScript(targetPath)
+	if err != nil {
+		return err
+	}
+	process, err := startInstallerWelcomeCommand(commandInterpreter, targetPath, scriptPath)
+	if err != nil {
+		return withInstallerWelcomeCleanup(err, scriptPath)
+	}
+	result, err := windows.WaitForSingleObject(process, 2_000)
+	var exitCode uint32
+	var exitCodeErr error
+	if err == nil && result == windows.WAIT_OBJECT_0 {
+		exitCodeErr = windows.GetExitCodeProcess(process, &exitCode)
+	}
+	closeErr := windows.CloseHandle(process)
+	if err != nil {
+		return withInstallerWelcomeCleanup(fmt.Errorf("wait for welcome command: %w", err), scriptPath)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close welcome command handle: %w", closeErr)
+	}
+	switch result {
+	case uint32(windows.WAIT_TIMEOUT):
+		// The command line removes the script after the welcome command returns.
+		// Keep it in place while cmd.exe may still be starting or reading it.
+		return nil
+	case windows.WAIT_OBJECT_0:
+		if exitCodeErr != nil {
+			return withInstallerWelcomeCleanup(fmt.Errorf("welcome command exited immediately: %w", exitCodeErr), scriptPath)
+		}
+		return withInstallerWelcomeCleanup(fmt.Errorf("welcome command exited immediately with code %d", exitCode), scriptPath)
+	default:
+		return withInstallerWelcomeCleanup(fmt.Errorf("wait for welcome command returned unexpected status %#x", result), scriptPath)
+	}
 }
 
-func installerWelcomeCommandLine(targetPath string) string {
-	return fmt.Sprintf(`mode con: cols=120 lines=32 >nul 2>&1 & "%s" --installer-welcome`, targetPath)
+func withInstallerWelcomeCleanup(primary error, scriptPath string) error {
+	if err := os.Remove(scriptPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("%w; remove welcome script: %v", primary, err)
+	}
+	return primary
 }
 
-func installerWelcomeEnvironment(targetPath string) []string {
-	pathValue := filepath.Dir(targetPath) + string(os.PathListSeparator) + os.Getenv("PATH")
-	return append(os.Environ(), "PATH="+pathValue)
+func createInstallerWelcomeScript(targetPath string) (string, error) {
+	script, err := os.CreateTemp(filepath.Dir(targetPath), ".ctxhop-welcome-*.cmd")
+	if err != nil {
+		return "", fmt.Errorf("create welcome script: %w", err)
+	}
+	scriptPath := script.Name()
+	if _, err := io.WriteString(script, installerWelcomeScript()); err != nil {
+		closeErr := script.Close()
+		removeErr := os.Remove(scriptPath)
+		if closeErr != nil {
+			err = fmt.Errorf("%w; close welcome script: %v", err, closeErr)
+		}
+		if removeErr != nil && !os.IsNotExist(removeErr) {
+			err = fmt.Errorf("%w; remove welcome script: %v", err, removeErr)
+		}
+		return "", fmt.Errorf("write welcome script: %w", err)
+	}
+	if err := script.Close(); err != nil {
+		if removeErr := os.Remove(scriptPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return "", fmt.Errorf("close welcome script: %w; remove welcome script: %v", err, removeErr)
+		}
+		return "", fmt.Errorf("close welcome script: %w", err)
+	}
+	return scriptPath, nil
+}
+
+func installerWelcomeScript() string {
+	return "@echo off\r\n" +
+		"mode con: cols=120 lines=32 >nul 2>&1\r\n" +
+		".\\ctxhop.exe --installer-welcome\r\n"
+}
+
+func startInstallerWelcomeCommand(commandInterpreter, targetPath, scriptPath string) (windows.Handle, error) {
+	application, err := windows.UTF16PtrFromString(commandInterpreter)
+	if err != nil {
+		return 0, err
+	}
+	commandLine, err := windows.UTF16FromString(installerWelcomeCommandLine(commandInterpreter, scriptPath))
+	if err != nil {
+		return 0, err
+	}
+	workingDirectory, err := windows.UTF16PtrFromString(filepath.Dir(targetPath))
+	if err != nil {
+		return 0, err
+	}
+	startup := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
+	var process windows.ProcessInformation
+	if err := windows.CreateProcess(
+		application,
+		&commandLine[0],
+		nil,
+		nil,
+		false,
+		windows.CREATE_NEW_CONSOLE,
+		nil,
+		workingDirectory,
+		&startup,
+		&process,
+	); err != nil {
+		return 0, err
+	}
+	if err := windows.CloseHandle(process.Thread); err != nil {
+		if closeProcessErr := windows.CloseHandle(process.Process); closeProcessErr != nil {
+			return 0, fmt.Errorf("close welcome thread handle: %w; close process handle: %v", err, closeProcessErr)
+		}
+		return 0, fmt.Errorf("close welcome thread handle: %w", err)
+	}
+	return process.Process, nil
+}
+
+func installerWelcomeCommandLine(commandInterpreter, scriptPath string) string {
+	scriptName := filepath.Base(scriptPath)
+	cleanup := fmt.Sprintf("del /f /q %s >nul 2>&1", scriptName)
+	return fmt.Sprintf("%s /D /K \"call %s & %s\"", syscall.EscapeArg(commandInterpreter), scriptName, cleanup)
 }
 
 func showInstallerMessage(title, message string, failure bool) {

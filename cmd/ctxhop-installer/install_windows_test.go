@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,28 +14,20 @@ func TestLaunchInstallerWelcomeRejectsEmptyTarget(t *testing.T) {
 	}
 }
 
-func TestInstallerWelcomeEnvironmentFindsInstalledCommand(t *testing.T) {
-	targetPath := filepath.Join(`C:\Users\Ctx Hop`, ".ctxhop", "bin", "ctxhop.exe")
-	installDir := filepath.Dir(targetPath)
-	wantPrefix := "PATH=" + installDir + string(os.PathListSeparator)
-	var pathEntry string
-	for _, entry := range installerWelcomeEnvironment(targetPath) {
-		if strings.HasPrefix(strings.ToUpper(entry), "PATH=") {
-			pathEntry = entry
-		}
+func TestInstallerWelcomeScriptRunsInstalledCLI(t *testing.T) {
+	script := installerWelcomeScript()
+	if !strings.Contains(script, `.\ctxhop.exe --installer-welcome`) {
+		t.Fatalf("welcome script = %q, want installed CLI invocation", script)
 	}
-	if !strings.HasPrefix(pathEntry, wantPrefix) {
-		t.Fatalf("welcome PATH = %q, want prefix %q", pathEntry, wantPrefix)
-	}
-	if !strings.Contains(pathEntry, os.Getenv("PATH")) {
-		t.Fatalf("welcome PATH did not preserve the existing PATH: %q", pathEntry)
+	if strings.Contains(script, "del ") {
+		t.Fatalf("welcome script deletes itself while cmd is still executing: %q", script)
 	}
 }
 
-func TestInstallerWelcomeCommandQuotesPathsWithSpaces(t *testing.T) {
+func TestInstallerWelcomeCommandCleansUpScript(t *testing.T) {
 	targetPath := filepath.Join(`C:\Users\Ctx Hop`, ".ctxhop", "bin", "ctxhop.exe")
-	want := `mode con: cols=120 lines=32 >nul 2>&1 & "` + targetPath + `" --installer-welcome`
-	if got := installerWelcomeCommandLine(targetPath); got != want {
-		t.Fatalf("welcome command = %q, want %q", got, want)
+	scriptPath := filepath.Join(filepath.Dir(targetPath), ".ctxhop-welcome-test.cmd")
+	if got, want := installerWelcomeCommandLine("cmd.exe", scriptPath), `cmd.exe /D /K "call .ctxhop-welcome-test.cmd & del /f /q .ctxhop-welcome-test.cmd >nul 2>&1"`; got != want {
+		t.Fatalf("welcome command line = %q, want %q", got, want)
 	}
 }

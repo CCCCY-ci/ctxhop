@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 )
 
 // Build metadata, injected at link time by scripts/build.sh.
@@ -54,7 +53,6 @@ var commands = []command{
 	{name: "pull", summary: "check remote metadata without restoring sessions"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},
-	{name: "completion", summary: "print shell completion script"},
 }
 
 func init() {
@@ -108,9 +106,7 @@ func commandHelpPath(args []string) ([]string, bool) {
 }
 
 func runVersion([]string) error {
-	_, err := fmt.Fprintf(os.Stdout, "%s %s (commit %s, built %s, %s/%s, %s)\n",
-		cliName,
-		version, commit, date, runtime.GOOS, runtime.GOARCH, runtime.Version())
+	_, err := fmt.Fprintf(os.Stdout, "%s %s\n", cliName, version)
 	return err
 }
 
@@ -124,10 +120,7 @@ func runHelp(args []string) error {
 }
 
 func runDefaultEntry() error {
-	if !commandDiscoveryTerminal() {
-		return runHelp(nil)
-	}
-	return runInteractiveCommandDiscovery(nil, os.Stdin, os.Stdout)
+	return runHelp(nil)
 }
 
 func writeHelp(w io.Writer) error {
@@ -143,6 +136,6 @@ func writeHelp(w io.Writer) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nRun `%s` in an interactive terminal to browse commands, or use `%s help <command>` for details.\n", cliName, cliName)
+	_, err := fmt.Fprintf(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nRun `%s help <command>` for command details.\n", cliName)
 	return err
 }

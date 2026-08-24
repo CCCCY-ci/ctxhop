@@ -6,11 +6,10 @@
 
 <p align="center">
   <a href="https://github.com/CCCCY-ci/ctxhop/releases/latest"><img src="https://img.shields.io/github/v/release/CCCCY-ci/ctxhop?sort=semver" alt="Latest release"></a>
-  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/CCCCY-ci/ctxhop" alt="Go version"></a>
   <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
 </p>
 
-[简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
 **Switch devices. Keep your context.**
 
@@ -281,10 +280,8 @@ and conflicting paths are left for manual handling.
 ## CLI
 
 Run `ctxhop <command> --help` for the complete options of a command. Running
-`ctxhop` without arguments in an interactive terminal opens the command picker.
-Select a command with a prefix and the Up/Down keys, then press Enter. The
-picker only selects a command; it does not execute a restore, deletion, or
-other mutating operation.
+`ctxhop` without arguments prints the command index. Use `ctxhop help
+<command>` for command details.
 
 ### Project and synchronization
 
@@ -319,7 +316,6 @@ other mutating operation.
 | `ctxhop history` | View and clean up Session history. |
 | `ctxhop stats` | Show cross-device restore statistics. |
 | `ctxhop hook install` | Install the Claude Code or Codex SessionEnd Hook. |
-| `ctxhop completion` | Generate shell completion scripts. |
 | `ctxhop version` | Show version and build information. |
 
 ## Configuration
