@@ -73,6 +73,23 @@ func logPushFinished(summary pushSummary, workspace bool) {
 	)
 }
 
+func logPushSessionFinished(agent, sessionID string, summary pushSummary, duration time.Duration) {
+	if commandLogger == nil {
+		return
+	}
+	result := "success"
+	if summary.Failed != 0 {
+		result = "failed"
+	}
+	commandLogger.Info(
+		"session_push_finished",
+		"agent", agent,
+		"session_id", sessionID,
+		"result", result,
+		"duration_ms", duration.Milliseconds(),
+	)
+}
+
 func currentLogPath(configDir string) string {
 	return logging.CurrentPath(configDir, time.Now())
 }

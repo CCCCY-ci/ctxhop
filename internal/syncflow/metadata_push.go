@@ -96,14 +96,14 @@ func (p QueuedPusher) PushSessionWithMetadataAt(ctx context.Context, key syncer.
 	if _, err := syncer.NewMetadata(cursor.RecordCount, cursor.HeadDigest, payload); err != nil {
 		return syncer.PushCursor{}, fmt.Errorf("syncflow: prepare session metadata: %w", err)
 	}
-	reopen, err := p.prepareSession(ctx, key, now)
+	reopenFailure, err := p.prepareSession(ctx, key, now)
 	if err != nil {
 		return syncer.PushCursor{}, err
 	}
 
 	stream, err := CanonicalizeSession(data, space, installation)
 	if err != nil {
-		if reopen {
+		if reopenFailure != syncer.FailureNone {
 			return syncer.PushCursor{}, err
 		}
 		failure := ClassifySessionFailure(err)
@@ -116,7 +116,7 @@ func (p QueuedPusher) PushSessionWithMetadataAt(ctx context.Context, key syncer.
 		return syncer.PushCursor{}, err
 	}
 
-	if err := p.reopenExcluded(ctx, key, reopen); err != nil {
+	if err := p.reopenRevalidated(ctx, key, reopenFailure); err != nil {
 		return syncer.PushCursor{}, err
 	}
 

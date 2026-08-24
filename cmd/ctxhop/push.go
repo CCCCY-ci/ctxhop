@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
@@ -23,6 +24,8 @@ import (
 )
 
 const pushTimeout = 10 * time.Minute
+
+const maxPushSessionWorkers = 4
 
 type pushOptions struct {
 	hook      bool
@@ -49,6 +52,9 @@ func (s *pushSummary) fail(stage string, err error) {
 
 func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
 	s.Failed++
+	if errors.Is(err, syncer.ErrQueueItemBlocked) {
+		stage = "queue-blocked"
+	}
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
 	classText := ""
@@ -59,6 +65,8 @@ func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
 		}
 		classText = string(class)
 		switch {
+		case errors.Is(err, syncer.ErrQueueItemBlocked):
+			classText = "blocked"
 		case errors.Is(err, context.DeadlineExceeded):
 			classText = "timeout"
 		case errors.Is(err, context.Canceled):
@@ -75,7 +83,7 @@ func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
 
 func pushFailureStageHasClass(stage string) bool {
 	switch stage {
-	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
+	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
 		return true
 	default:
 		return false
@@ -319,129 +327,202 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 }
 
 func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, identifierKey []byte, projectID, projectIdentity string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, options pushSessionOptions) pushSummary {
-	var summary pushSummary
 	options.projectIdentity = projectIdentity
-	for _, ref := range refs {
-		fail := func(stage string, err error) {
-			summary.failContext(layout.Name(), ref.NativeID, stage, err)
-		}
-		if err := ctx.Err(); err != nil {
-			fail("context", err)
-			continue
-		}
-		sessionID, err := crypto.SessionID(identifierKey, projectID, ref.NativeID)
-		if err != nil {
-			fail("session-id", err)
-			continue
-		}
-		objectLayout, err := syncer.NewObjectLayout(projectID, sessionID, deviceID)
-		if err != nil {
-			fail("object-layout", err)
-			continue
-		}
-		key, err := syncer.NewQueueKey(projectID, sessionID, deviceID)
-		if err != nil {
-			fail("queue-key", err)
-			continue
-		}
-		cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
-		if err != nil {
-			fail("cursor-store", err)
-			continue
-		}
-		cursor, err := cursorStore.Load(ctx)
-		if errors.Is(err, syncer.ErrNoPushCursor) {
-			cursor = syncer.NewPushCursor()
-		} else if err != nil {
-			fail("cursor", err)
-			continue
-		}
-		executor, err := syncer.NewAppendExecutor(store, public, objectLayout, cursorStore, syncer.DefaultPlanOptions())
-		if err != nil {
-			fail("executor", err)
-			continue
-		}
-		readRef := ref
-		if readRef.ProjectPath == "" {
-			readRef.ProjectPath = projectRoot
-		}
-		data, err := layout.ReadSession(readRef)
-		if err != nil {
-			fail("session-read", err)
-			continue
-		}
-		fingerprint, err := capturePushFingerprint(ctx, layout, projectRoot, data)
-		if err != nil {
-			fail("workspace-fingerprint", err)
-			continue
-		}
-		payload, err := syncflow.EncodeSessionSummaryWithFingerprint(ref, &fingerprint)
-		if err != nil {
-			fail("metadata", err)
-			continue
-		}
-		nextCursor, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload)
-		if err != nil {
-			fail("remote-push", err)
-			continue
-		}
-		environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
-		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
-			fail("environment-record", err)
-			continue
-		}
-		if options.includeWorkspace {
-			var snapshot workspacepkg.Snapshot
-			var captureErr error
-			if options.includeDirectoryWorkspace {
-				snapshot, captureErr = workspacepkg.CaptureDirectory(ctx, projectRoot)
-			} else {
-				snapshot, captureErr = workspacepkg.Capture(ctx, projectRoot, fingerprint)
+	refs = deduplicatePushRefs(refs)
+	if len(refs) == 0 {
+		return pushSummary{}
+	}
+
+	workerCount := maxPushSessionWorkers
+	if len(refs) < workerCount {
+		workerCount = len(refs)
+	}
+	type result struct {
+		index   int
+		summary pushSummary
+	}
+	jobs := make(chan int)
+	results := make(chan result, len(refs))
+	var workers sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results <- result{
+					index:   index,
+					summary: pushOneDiscoveredSession(ctx, deviceID, identifierKey, projectID, layout, installation, space, store, public, pusher, stateRoot, projectRoot, refs[index], options),
+				}
 			}
-			if captureErr != nil {
-				fail("workspace-record", captureErr)
-				continue
+		}()
+	}
+	for index := range refs {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	close(results)
+
+	partials := make([]pushSummary, len(refs))
+	for item := range results {
+		partials[item.index] = item.summary
+	}
+	var summary pushSummary
+	for _, partial := range partials {
+		summary.Pushed += partial.Pushed
+		summary.Failed += partial.Failed
+		summary.Skipped += partial.Skipped
+		if partial.failureDetails != "" {
+			if summary.failureDetails != "" {
+				summary.failureDetails += "\n"
 			}
-			snapshot.RecordCount = nextCursor.RecordCount
-			if nextCursor.RecordCount != 0 {
-				snapshot.HeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
-			}
-			if publishErr := syncer.PutWorkspaceSnapshot(ctx, store, public, objectLayout, snapshot); publishErr != nil {
-				fail("workspace-record", publishErr)
-				continue
-			}
+			summary.failureDetails += partial.failureDetails
 		}
-		gitState, gitErr := gitstate.Capture(ctx, projectRoot, options.projectIdentity)
-		if gitErr != nil {
-			fail("git-state-record", gitErr)
-			continue
-		}
-		gitState.SessionRecordCount = nextCursor.RecordCount
-		if nextCursor.RecordCount != 0 {
-			gitState.SessionHeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
-		}
-		var transfer gitstate.Transfer
-		if options.includeGitTransfer {
-			var transferErr error
-			gitState, transfer, transferErr = gitstate.CaptureTransferWithOptions(ctx, projectRoot, gitState, gitstate.TransferOptions{StashRef: options.gitStash})
-			if transferErr != nil {
-				fail("git-transfer-capture", transferErr)
-				continue
-			}
-		}
-		if publishErr := syncer.PutGitState(ctx, store, public, objectLayout, gitState); publishErr != nil {
-			fail("git-state-record", publishErr)
-			continue
-		}
-		if options.includeGitTransfer && (len(transfer.CommitBundle) != 0 || len(transfer.WorktreeBundle) != 0) {
-			if publishErr := syncer.PutGitTransfer(ctx, store, public, objectLayout, transfer); publishErr != nil {
-				fail("git-transfer-upload", publishErr)
-				continue
-			}
-		}
-		summary.Pushed++
 	}
 	return summary
+}
+
+func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, ref adapter.SessionRef, options pushSessionOptions) (summary pushSummary) {
+	started := time.Now()
+	defer func() {
+		logPushSessionFinished(layout.Name(), ref.NativeID, summary, time.Since(started))
+	}()
+	fail := func(stage string, err error) {
+		summary.failContext(layout.Name(), ref.NativeID, stage, err)
+	}
+	if err := ctx.Err(); err != nil {
+		fail("context", err)
+		return summary
+	}
+	sessionID, err := crypto.SessionID(identifierKey, projectID, ref.NativeID)
+	if err != nil {
+		fail("session-id", err)
+		return summary
+	}
+	objectLayout, err := syncer.NewObjectLayout(projectID, sessionID, deviceID)
+	if err != nil {
+		fail("object-layout", err)
+		return summary
+	}
+	key, err := syncer.NewQueueKey(projectID, sessionID, deviceID)
+	if err != nil {
+		fail("queue-key", err)
+		return summary
+	}
+	cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
+	if err != nil {
+		fail("cursor-store", err)
+		return summary
+	}
+	cursor, err := cursorStore.Load(ctx)
+	if errors.Is(err, syncer.ErrNoPushCursor) {
+		cursor = syncer.NewPushCursor()
+	} else if err != nil {
+		fail("cursor", err)
+		return summary
+	}
+	executor, err := syncer.NewAppendExecutor(store, public, objectLayout, cursorStore, syncer.DefaultPlanOptions())
+	if err != nil {
+		fail("executor", err)
+		return summary
+	}
+	readRef := ref
+	if readRef.ProjectPath == "" {
+		readRef.ProjectPath = projectRoot
+	}
+	data, err := layout.ReadSession(readRef)
+	if err != nil {
+		fail("session-read", err)
+		return summary
+	}
+	fingerprint, err := capturePushFingerprint(ctx, layout, projectRoot, data)
+	if err != nil {
+		fail("workspace-fingerprint", err)
+		return summary
+	}
+	payload, err := syncflow.EncodeSessionSummaryWithFingerprint(ref, &fingerprint)
+	if err != nil {
+		fail("metadata", err)
+		return summary
+	}
+	nextCursor, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload)
+	if err != nil {
+		fail("remote-push", err)
+		return summary
+	}
+	environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
+	if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
+		fail("environment-record", err)
+		return summary
+	}
+	if options.includeWorkspace {
+		var snapshot workspacepkg.Snapshot
+		var captureErr error
+		if options.includeDirectoryWorkspace {
+			snapshot, captureErr = workspacepkg.CaptureDirectory(ctx, projectRoot)
+		} else {
+			snapshot, captureErr = workspacepkg.Capture(ctx, projectRoot, fingerprint)
+		}
+		if captureErr != nil {
+			fail("workspace-record", captureErr)
+			return summary
+		}
+		snapshot.RecordCount = nextCursor.RecordCount
+		if nextCursor.RecordCount != 0 {
+			snapshot.HeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
+		}
+		if publishErr := syncer.PutWorkspaceSnapshot(ctx, store, public, objectLayout, snapshot); publishErr != nil {
+			fail("workspace-record", publishErr)
+			return summary
+		}
+	}
+	gitState, gitErr := gitstate.Capture(ctx, projectRoot, options.projectIdentity)
+	if gitErr != nil {
+		fail("git-state-record", gitErr)
+		return summary
+	}
+	gitState.SessionRecordCount = nextCursor.RecordCount
+	if nextCursor.RecordCount != 0 {
+		gitState.SessionHeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
+	}
+	var transfer gitstate.Transfer
+	if options.includeGitTransfer {
+		var transferErr error
+		gitState, transfer, transferErr = gitstate.CaptureTransferWithOptions(ctx, projectRoot, gitState, gitstate.TransferOptions{StashRef: options.gitStash})
+		if transferErr != nil {
+			fail("git-transfer-capture", transferErr)
+			return summary
+		}
+	}
+	if publishErr := syncer.PutGitState(ctx, store, public, objectLayout, gitState); publishErr != nil {
+		fail("git-state-record", publishErr)
+		return summary
+	}
+	if options.includeGitTransfer && (len(transfer.CommitBundle) != 0 || len(transfer.WorktreeBundle) != 0) {
+		if publishErr := syncer.PutGitTransfer(ctx, store, public, objectLayout, transfer); publishErr != nil {
+			fail("git-transfer-upload", publishErr)
+			return summary
+		}
+	}
+	summary.Pushed++
+	return summary
+}
+
+func deduplicatePushRefs(refs []adapter.SessionRef) []adapter.SessionRef {
+	seen := make(map[string]struct{}, len(refs))
+	result := make([]adapter.SessionRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref.NativeID == "" {
+			result = append(result, ref)
+			continue
+		}
+		if _, exists := seen[ref.NativeID]; exists {
+			continue
+		}
+		seen[ref.NativeID] = struct{}{}
+		result = append(result, ref)
+	}
+	return result
 }
 
 func capturePushFingerprint(ctx context.Context, layout adapter.SessionLayout, projectRoot string, data adapter.SessionData) (project.Fingerprint, error) {

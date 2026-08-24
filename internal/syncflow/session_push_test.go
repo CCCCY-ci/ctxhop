@@ -189,3 +189,34 @@ func TestPushSessionAtReopensExcludedAfterCanonicalization(t *testing.T) {
 		t.Fatalf("queue after revalidated success = %+v", snapshot.Items)
 	}
 }
+
+func TestPushSessionAtReopensSessionCorruptionAfterCanonicalization(t *testing.T) {
+	fixture := newQueuedFixture(t, func(error) syncer.FailureClass {
+		return syncer.FailureNetwork
+	})
+	fixture.remote.failures = 0
+	policy := syncer.RetryPolicy{BaseDelay: 10 * time.Second, MaxDelay: time.Minute}
+	if err := fixture.queue.Enqueue(context.Background(), fixture.key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.queue.RecordFailure(context.Background(), fixture.key, syncer.FailureSessionCorrupt, time.Time{}, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	space := adapter.PathSpace{ProjectRoot: `/source/project`, AgentHome: `/source/agent`}
+	data := adapter.SessionData{Records: [][]byte{[]byte(`{"ok":true}`)}}
+	now := time.Date(2026, time.August, 14, 0, 0, 0, 0, time.UTC)
+	if _, err := fixture.pusher.PushSessionAt(context.Background(), fixture.key, data, space, adapter.Installation{Compatibility: adapter.CompatFull}, fixture.executor, fixture.cursor, now); err != nil {
+		t.Fatalf("PushSessionAt: %v", err)
+	}
+	if fixture.remote.puts != 1 {
+		t.Fatalf("remote puts = %d, want 1", fixture.remote.puts)
+	}
+	snapshot, err := fixture.queue.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Items) != 0 {
+		t.Fatalf("queue after revalidated success = %+v", snapshot.Items)
+	}
+}

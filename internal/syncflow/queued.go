@@ -108,13 +108,13 @@ func (p QueuedPusher) PushAt(ctx context.Context, key syncer.QueueKey, stream Ca
 }
 
 func (p QueuedPusher) prepare(ctx context.Context, key syncer.QueueKey, now time.Time) error {
-	snapshot, err := p.queue.Load(ctx)
-	if err != nil {
-		return fmt.Errorf("syncflow: load pending queue: %w", err)
-	}
-	for _, item := range snapshot.Items {
-		if item.Key != key {
-			continue
+	err := p.queue.Update(ctx, func(snapshot *syncer.QueueSnapshot) error {
+		item, err := snapshot.Item(key)
+		if errors.Is(err, syncer.ErrQueueItemMissing) {
+			return snapshot.Enqueue(key)
+		}
+		if err != nil {
+			return err
 		}
 		if item.State == syncer.QueueBlocked {
 			return syncer.ErrQueueItemBlocked
@@ -123,43 +123,41 @@ func (p QueuedPusher) prepare(ctx context.Context, key syncer.QueueKey, now time
 			return fmt.Errorf("%w: retry is scheduled for %s", ErrQueuedPushNotDue, item.NextAttemptAt.UTC().Format(time.RFC3339Nano))
 		}
 		return nil
-	}
-
-	if err := snapshot.Enqueue(key); err != nil {
-		return err
-	}
-	if err := p.queue.Save(ctx, snapshot); err != nil {
-		return fmt.Errorf("syncflow: enqueue pending task: %w", err)
+	})
+	if err != nil {
+		return fmt.Errorf("syncflow: update pending queue: %w", err)
 	}
 	return nil
 }
 
-// prepareSession preserves the normal scheduling check, but identifies an
-// excluded task that may be safely reconsidered after the source session has
-// been canonicalized again. This repairs queue entries written by an older
-// adapter rule without reopening them before validation.
-func (p QueuedPusher) prepareSession(ctx context.Context, key syncer.QueueKey, now time.Time) (bool, error) {
+// prepareSession preserves the normal scheduling check, but identifies a
+// source-data task that may be safely reconsidered after the current snapshot
+// has been canonicalized again. This repairs queue entries written while an
+// Agent was still writing a session without reopening them before validation.
+func (p QueuedPusher) prepareSession(ctx context.Context, key syncer.QueueKey, now time.Time) (syncer.FailureClass, error) {
 	if err := p.prepare(ctx, key, now); err == nil {
-		return false, nil
+		return syncer.FailureNone, nil
 	} else if !errors.Is(err, syncer.ErrQueueItemBlocked) {
-		return false, err
+		return syncer.FailureNone, err
 	}
 
 	item, err := p.queue.Item(ctx, key)
 	if err != nil {
-		return false, fmt.Errorf("syncflow: inspect blocked task: %w", err)
+		return syncer.FailureNone, fmt.Errorf("syncflow: inspect blocked task: %w", err)
 	}
-	if item.Failure != syncer.FailureExcluded {
-		return false, syncer.ErrQueueItemBlocked
+	switch item.Failure {
+	case syncer.FailureExcluded, syncer.FailureSessionCorrupt:
+		return item.Failure, nil
+	default:
+		return syncer.FailureNone, syncer.ErrQueueItemBlocked
 	}
-	return true, nil
 }
 
-func (p QueuedPusher) reopenExcluded(ctx context.Context, key syncer.QueueKey, needed bool) error {
-	if !needed {
+func (p QueuedPusher) reopenRevalidated(ctx context.Context, key syncer.QueueKey, failure syncer.FailureClass) error {
+	if failure == syncer.FailureNone {
 		return nil
 	}
-	if err := p.queue.Reopen(ctx, key, syncer.FailureExcluded); err != nil {
+	if err := p.queue.Reopen(ctx, key, failure); err != nil {
 		return fmt.Errorf("syncflow: reopen revalidated task: %w", err)
 	}
 	return nil
