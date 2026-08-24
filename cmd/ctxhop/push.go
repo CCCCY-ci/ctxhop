@@ -44,15 +44,20 @@ type pushSummary struct {
 }
 
 func (s *pushSummary) fail(stage string, err error) {
+	s.failContext("", "", stage, err)
+}
+
+func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
 	s.Failed++
 
 	detail := fmt.Sprintf("push failure: stage=%s", stage)
+	classText := ""
 	if pushFailureStageHasClass(stage) {
 		class := classifyPushFailure(err)
 		if class == syncer.FailureNone {
 			class = syncer.FailureUnknown
 		}
-		classText := string(class)
+		classText = string(class)
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
 			classText = "timeout"
@@ -65,6 +70,7 @@ func (s *pushSummary) fail(stage string, err error) {
 		s.failureDetails += "\n"
 	}
 	s.failureDetails += detail
+	logPushFailure(agent, sessionID, stage, classText, err)
 }
 
 func pushFailureStageHasClass(stage string) bool {
@@ -132,6 +138,7 @@ func runPushWithIO(args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	logPushFinished(summary, options.workspace)
 	if options.hook {
 		return nil
 	}
@@ -315,40 +322,43 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 	var summary pushSummary
 	options.projectIdentity = projectIdentity
 	for _, ref := range refs {
+		fail := func(stage string, err error) {
+			summary.failContext(layout.Name(), ref.NativeID, stage, err)
+		}
 		if err := ctx.Err(); err != nil {
-			summary.fail("context", err)
+			fail("context", err)
 			continue
 		}
 		sessionID, err := crypto.SessionID(identifierKey, projectID, ref.NativeID)
 		if err != nil {
-			summary.fail("session-id", err)
+			fail("session-id", err)
 			continue
 		}
 		objectLayout, err := syncer.NewObjectLayout(projectID, sessionID, deviceID)
 		if err != nil {
-			summary.fail("object-layout", err)
+			fail("object-layout", err)
 			continue
 		}
 		key, err := syncer.NewQueueKey(projectID, sessionID, deviceID)
 		if err != nil {
-			summary.fail("queue-key", err)
+			fail("queue-key", err)
 			continue
 		}
 		cursorStore, err := syncer.NewCursorStore(stateRoot, objectLayout)
 		if err != nil {
-			summary.fail("cursor-store", err)
+			fail("cursor-store", err)
 			continue
 		}
 		cursor, err := cursorStore.Load(ctx)
 		if errors.Is(err, syncer.ErrNoPushCursor) {
 			cursor = syncer.NewPushCursor()
 		} else if err != nil {
-			summary.fail("cursor", err)
+			fail("cursor", err)
 			continue
 		}
 		executor, err := syncer.NewAppendExecutor(store, public, objectLayout, cursorStore, syncer.DefaultPlanOptions())
 		if err != nil {
-			summary.fail("executor", err)
+			fail("executor", err)
 			continue
 		}
 		readRef := ref
@@ -357,27 +367,27 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 		}
 		data, err := layout.ReadSession(readRef)
 		if err != nil {
-			summary.fail("session-read", err)
+			fail("session-read", err)
 			continue
 		}
 		fingerprint, err := capturePushFingerprint(ctx, layout, projectRoot, data)
 		if err != nil {
-			summary.fail("workspace-fingerprint", err)
+			fail("workspace-fingerprint", err)
 			continue
 		}
 		payload, err := syncflow.EncodeSessionSummaryWithFingerprint(ref, &fingerprint)
 		if err != nil {
-			summary.fail("metadata", err)
+			fail("metadata", err)
 			continue
 		}
 		nextCursor, err := pusher.PushSessionWithMetadata(ctx, key, data, space, installation, executor, cursor, payload)
 		if err != nil {
-			summary.fail("remote-push", err)
+			fail("remote-push", err)
 			continue
 		}
 		environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
 		if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
-			summary.fail("environment-record", err)
+			fail("environment-record", err)
 			continue
 		}
 		if options.includeWorkspace {
@@ -389,7 +399,7 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 				snapshot, captureErr = workspacepkg.Capture(ctx, projectRoot, fingerprint)
 			}
 			if captureErr != nil {
-				summary.fail("workspace-record", captureErr)
+				fail("workspace-record", captureErr)
 				continue
 			}
 			snapshot.RecordCount = nextCursor.RecordCount
@@ -397,13 +407,13 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 				snapshot.HeadDigest = fmt.Sprintf("%x", nextCursor.HeadDigest)
 			}
 			if publishErr := syncer.PutWorkspaceSnapshot(ctx, store, public, objectLayout, snapshot); publishErr != nil {
-				summary.fail("workspace-record", publishErr)
+				fail("workspace-record", publishErr)
 				continue
 			}
 		}
 		gitState, gitErr := gitstate.Capture(ctx, projectRoot, options.projectIdentity)
 		if gitErr != nil {
-			summary.fail("git-state-record", gitErr)
+			fail("git-state-record", gitErr)
 			continue
 		}
 		gitState.SessionRecordCount = nextCursor.RecordCount
@@ -415,17 +425,17 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 			var transferErr error
 			gitState, transfer, transferErr = gitstate.CaptureTransferWithOptions(ctx, projectRoot, gitState, gitstate.TransferOptions{StashRef: options.gitStash})
 			if transferErr != nil {
-				summary.fail("git-transfer-capture", transferErr)
+				fail("git-transfer-capture", transferErr)
 				continue
 			}
 		}
 		if publishErr := syncer.PutGitState(ctx, store, public, objectLayout, gitState); publishErr != nil {
-			summary.fail("git-state-record", publishErr)
+			fail("git-state-record", publishErr)
 			continue
 		}
 		if options.includeGitTransfer && (len(transfer.CommitBundle) != 0 || len(transfer.WorktreeBundle) != 0) {
 			if publishErr := syncer.PutGitTransfer(ctx, store, public, objectLayout, transfer); publishErr != nil {
-				summary.fail("git-transfer-upload", publishErr)
+				fail("git-transfer-upload", publishErr)
 				continue
 			}
 		}

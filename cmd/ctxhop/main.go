@@ -64,7 +64,15 @@ func init() {
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	args := os.Args[1:]
+	startCommandLogging(args)
+	defer func() {
+		commandLogger = nil
+	}()
+
+	err := run(args)
+	finishCommandLogging(args, err)
+	if err != nil {
 		recordCommandFailure(os.Args[1:], err)
 		fmt.Fprintf(os.Stderr, "%s: %v\n", cliName, err)
 		os.Exit(1)
