@@ -32,6 +32,22 @@ examples/
 # Repository regression tests are versioned; local fixtures remain ignored.
 **/testdata/
 **/__snapshots__/
+
+# Tests used only for local/manual verification. These are intentionally kept
+# out of the release branch.
+/internal/environment/config_apply_test.go
+/internal/environment/global_override_test.go
+/internal/environment/inspect_test.go
+/internal/environment/settings_scope_test.go
+/internal/gitstate/apply_test.go
+/internal/gitstate/capture_test.go
+/internal/syncer/compression_metadata_test.go
+/internal/syncer/git_test.go
+/internal/syncer/workspace_test.go
+/internal/workspace/apply_test.go
+/internal/workspace/directory_test.go
+/internal/workspace/snapshot_test.go
+
 *.test
 *.out
 *.prof
