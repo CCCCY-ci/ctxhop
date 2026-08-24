@@ -23,7 +23,7 @@ func TestCommandTableIsUniqueAndFullyImplemented(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"init", "install", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "pull", "version", "help", "completion"} {
+	for _, name := range []string{"init", "install", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "pull", "version", "help"} {
 		if _, exists := seen[name]; !exists {
 			t.Errorf("expected command %q is missing", name)
 		}
@@ -75,8 +75,8 @@ func TestVersionUsesCtxHopName(t *testing.T) {
 	if err := read.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output.String(), "ctxhop ") {
-		t.Fatalf("version output = %q, want ctxhop prefix", output.String())
+	if got, want := output.String(), "ctxhop "+version+"\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
 

@@ -8,6 +8,45 @@ import (
 	"strings"
 )
 
+var commandSubcommands = map[string][]string{
+	"device":     {"status", "mode", "list", "rename", "remove", "rotate-key", "invite"},
+	"history":    {"cleanup", "prune"},
+	"hook":       {"install"},
+	"passphrase": {"change", "reset"},
+	"project":    {"bind", "unbind", "mode", "list", "discover"},
+	"remote":     {"delete-session", "delete-project", "delete-all"},
+}
+
+var commandOptions = map[string][]string{
+	"init":                  {"--backend", "--path", "--endpoint", "--bucket", "--region", "--prefix", "--path-style", "--device-name", "--device-mode", "--no-hook", "--expect-domain-fingerprint", "--invite"},
+	"hook install":          {"--agent"},
+	"install":               {"--dir", "--no-path"},
+	"uninstall":             {"--dir"},
+	"status":                {"--json", "--remote"},
+	"list":                  {"--json"},
+	"resume":                {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version"},
+	"history":               {"--json"},
+	"history prune":         {"--yes", "--remote-id", "--path", "--keep", "--before"},
+	"stats":                 {"--json"},
+	"push":                  {"--workspace", "--git-stash"},
+	"watch":                 {"--interval", "--once", "--json"},
+	"doctor":                {"--json"},
+	"pull":                  {"--json"},
+	"device status":         {"--json"},
+	"device list":           {"--json"},
+	"device remove":         {"--yes"},
+	"device rotate-key":     {},
+	"device invite":         {"--output"},
+	"project bind":          {"--path", "--identity", "--name"},
+	"project unbind":        {"--path", "--identity"},
+	"project mode":          {"--path", "--identity"},
+	"project list":          {"--json"},
+	"project discover":      {"--json"},
+	"remote delete-session": {"--yes", "--remote-id", "--path"},
+	"remote delete-project": {"--yes", "--path"},
+	"remote delete-all":     {"--yes"},
+}
+
 // writeCommandDiscovery is the compact command browser behind
 // `ctxhop help <command>`. It intentionally describes only command
 // names and flags; it does not try to turn every flag into an interactive
@@ -28,7 +67,7 @@ func writeCommandDiscovery(w io.Writer, path []string) error {
 
 	root := path[0]
 	if len(path) == 1 {
-		if actions := sortedDiscoveryValues(completionSubcommands[root]); len(actions) != 0 {
+		if actions := sortedDiscoveryValues(commandSubcommands[root]); len(actions) != 0 {
 			if _, err := fmt.Fprintf(w, "%s %s commands:\n", cliName, root); err != nil {
 				return err
 			}
@@ -46,7 +85,7 @@ func writeCommandDiscovery(w io.Writer, path []string) error {
 	}
 
 	name := strings.Join(path, " ")
-	if actions := sortedDiscoveryValues(completionSubcommands[name]); len(actions) != 0 {
+	if actions := sortedDiscoveryValues(commandSubcommands[name]); len(actions) != 0 {
 		if _, err := fmt.Fprintf(w, "%s %s commands:\n", cliName, name); err != nil {
 			return err
 		}
@@ -57,7 +96,7 @@ func writeCommandDiscovery(w io.Writer, path []string) error {
 		}
 		return writeDiscoveryOptions(w, name)
 	}
-	if _, exists := completionOptions[name]; exists {
+	if _, exists := commandOptions[name]; exists {
 		return writeDiscoveryCommand(w, name)
 	}
 	return fmt.Errorf("command discovery: unknown command path %q; run '%s help %s'", name, cliName, root)
@@ -68,7 +107,7 @@ func writeCommandIndex(w io.Writer) error {
 		return err
 	}
 	for _, command := range commands {
-		if actions := sortedDiscoveryValues(completionSubcommands[command.name]); len(actions) != 0 {
+		if actions := sortedDiscoveryValues(commandSubcommands[command.name]); len(actions) != 0 {
 			if _, err := fmt.Fprintf(w, "  %-12s %s\n", command.name, strings.Join(actions, ", ")); err != nil {
 				return err
 			}
@@ -93,7 +132,7 @@ func writeDiscoveryCommand(w io.Writer, name string) error {
 }
 
 func writeDiscoveryOptions(w io.Writer, name string) error {
-	options := sortedDiscoveryValues(completionOptions[name])
+	options := sortedDiscoveryValues(commandOptions[name])
 	options = append(options, "--help")
 	sort.Strings(options)
 	if len(options) == 0 {

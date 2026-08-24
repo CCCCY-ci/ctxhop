@@ -6,7 +6,6 @@
 
 <p align="center">
   <a href="https://github.com/CCCCY-ci/ctxhop/releases/latest"><img src="https://img.shields.io/github/v/release/CCCCY-ci/ctxhop?sort=semver" alt="Latest release"></a>
-  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/CCCCY-ci/ctxhop" alt="Go version"></a>
   <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
 </p>
 
@@ -227,7 +226,7 @@ claude --resume <SESSION_ID>
 
 ## 常用命令
 
-执行 `ctxhop <command> --help` 查看完整参数。交互式终端中直接运行 `ctxhop` 可打开命令选择器；脚本和 CI 可在支持的命令上使用 `--json`。
+执行 `ctxhop <command> --help` 查看完整参数。直接运行 `ctxhop` 会输出命令索引；使用 `ctxhop help <command>` 查看具体命令说明。脚本和 CI 可在支持的命令上使用 `--json`。
 
 ### 项目与同步
 
@@ -262,7 +261,6 @@ claude --resume <SESSION_ID>
 | `ctxhop history` | 查看和清理 Session 历史。 |
 | `ctxhop stats` | 查看跨设备恢复统计。 |
 | `ctxhop hook install` | 安装 Claude Code / Codex SessionEnd Hook。 |
-| `ctxhop completion` | 生成 Shell 补全。 |
 | `ctxhop version` | 查看版本和构建信息。 |
 
 ## 配置
