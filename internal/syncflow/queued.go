@@ -101,10 +101,21 @@ func (p QueuedPusher) PushAt(ctx context.Context, key syncer.QueueKey, stream Ca
 		return next, pushErr
 	}
 
-	if err := p.queue.Complete(ctx, key); err != nil {
+	if err := completeQueueTask(ctx, p.queue, key); err != nil {
 		return next, fmt.Errorf("%w: complete task: %w", ErrQueueUpdate, err)
 	}
 	return next, nil
+}
+
+// completeQueueTask is idempotent after the remote stream and metadata are
+// durable. A concurrent CtxHop process may have completed and removed the
+// same retry item already; that does not invalidate the successful upload.
+func completeQueueTask(ctx context.Context, queue syncer.QueueStore, key syncer.QueueKey) error {
+	err := queue.Complete(ctx, key)
+	if errors.Is(err, syncer.ErrQueueItemMissing) && !errors.Is(err, syncer.ErrQueueFileMissing) {
+		return nil
+	}
+	return err
 }
 
 func (p QueuedPusher) prepare(ctx context.Context, key syncer.QueueKey, now time.Time) error {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -198,6 +199,11 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	if configuredDeviceMode(c) == config.DeviceModeDisabled {
 		return pushSummary{Skipped: 1}, nil
 	}
+	pushLock, err := syncer.AcquireLocalFileLock(ctx, filepath.Join(configDir, "push.lock"))
+	if err != nil {
+		return pushSummary{}, fmt.Errorf("push: acquire local push lock: %w", err)
+	}
+	defer pushLock.Close()
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
 		return pushSummary{}, fmt.Errorf("push: local device identity is invalid: %w", err)
 	}
