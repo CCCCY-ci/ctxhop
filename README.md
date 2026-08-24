@@ -269,8 +269,8 @@ and conflicting paths are left for manual handling.
 
 ## CLI
 
-Run ctxhop <command> --help for the complete options of a command. Running
-ctxhop without arguments in an interactive terminal opens the command picker.
+Run `ctxhop <command> --help` for the complete options of a command. Running
+`ctxhop` without arguments in an interactive terminal opens the command picker.
 Select a command with a prefix and the Up/Down keys, then press Enter. The
 picker only selects a command; it does not execute a restore, deletion, or
 other mutating operation.
@@ -279,37 +279,37 @@ other mutating operation.
 
 | Command | Description |
 |---|---|
-| ctxhop project bind | Bind the current project. |
-| ctxhop project discover | View projects announced by other devices. |
-| ctxhop push | Upload the current project's Session. |
-| ctxhop push --workspace | Also upload the limited workspace and Git state. |
-| ctxhop pull | Refresh remote metadata. |
-| ctxhop list | List Sessions available for the current project. |
-| ctxhop resume | Restore a Session and its filtered environment. |
-| ctxhop resume --workspace | Also restore the uploaded workspace and Git state. |
-| ctxhop watch | Watch local Session changes and upload them. |
+| `ctxhop project bind` | Bind the current project. |
+| `ctxhop project discover` | View projects announced by other devices. |
+| `ctxhop push` | Upload the current project's Session. |
+| `ctxhop push --workspace` | Also upload the limited workspace and Git state. |
+| `ctxhop pull` | Refresh remote metadata. |
+| `ctxhop list` | List Sessions available for the current project. |
+| `ctxhop resume` | Restore a Session and its filtered environment. |
+| `ctxhop resume --workspace` | Also restore the uploaded workspace and Git state. |
+| `ctxhop watch` | Watch local Session changes and upload them. |
 
 ### Devices and security
 
 | Command | Description |
 |---|---|
-| ctxhop device invite | Create an invitation for a new device. |
-| ctxhop device list | List authorized devices. |
-| ctxhop device remove | Revoke a device's future access. |
-| ctxhop device rotate-key | Rotate the encryption key. |
-| ctxhop passphrase change/reset | Change the encryption password or reset it with the Recovery Key. |
+| `ctxhop device invite` | Create an invitation for a new device. |
+| `ctxhop device list` | List authorized devices. |
+| `ctxhop device remove` | Revoke a device's future access. |
+| `ctxhop device rotate-key` | Rotate the encryption key. |
+| `ctxhop passphrase change/reset` | Change the encryption password or reset it with the Recovery Key. |
 
 ### Status and maintenance
 
 | Command | Description |
 |---|---|
-| ctxhop status | Show local status; --remote also checks the backend. |
-| ctxhop doctor | Check configuration, backend, Agent, and project status. |
-| ctxhop history | View and clean up Session history. |
-| ctxhop stats | Show cross-device restore statistics. |
-| ctxhop hook install | Install the Claude Code or Codex SessionEnd Hook. |
-| ctxhop completion | Generate shell completion scripts. |
-| ctxhop version | Show version and build information. |
+| `ctxhop status` | Show local status; `--remote` also checks the backend. |
+| `ctxhop doctor` | Check configuration, backend, Agent, and project status. |
+| `ctxhop history` | View and clean up Session history. |
+| `ctxhop stats` | Show cross-device restore statistics. |
+| `ctxhop hook install` | Install the Claude Code or Codex SessionEnd Hook. |
+| `ctxhop completion` | Generate shell completion scripts. |
+| `ctxhop version` | Show version and build information. |
 
 ## Configuration
 
@@ -367,5 +367,5 @@ Do not commit real Session files, tokens, or backend credentials.
 
 ## License
 
-CtxHop is licensed under the Apache License 2.0. Retain the NOTICE file when
-redistributing the project.
+CtxHop is licensed under the [Apache License 2.0](LICENSE). Retain the
+[NOTICE](NOTICE) file when redistributing the project.
