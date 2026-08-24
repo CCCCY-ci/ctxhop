@@ -31,6 +31,11 @@ var (
 	// ErrQueueItemMissing reports an operation for a task that is not queued.
 	ErrQueueItemMissing = errors.New("syncer: pending queue item does not exist")
 
+	// ErrQueueFileMissing reports that the queue file itself disappeared while
+	// a queue operation was running. It wraps ErrQueueItemMissing for callers
+	// that still need to classify the missing task.
+	ErrQueueFileMissing = errors.New("syncer: pending queue file does not exist")
+
 	// ErrQueueItemBlocked reports an attempt to retry a terminally blocked task.
 	ErrQueueItemBlocked = errors.New("syncer: pending queue item is blocked")
 
@@ -230,9 +235,10 @@ func (q QueueSnapshot) Item(key QueueKey) (QueueItem, error) {
 	return QueueItem{}, ErrQueueItemMissing
 }
 
-// Reopen clears an excluded terminal failure after the caller has
-// revalidated the source data. Other terminal failures remain blocked because
-// they require an explicit credential, permission, or storage decision.
+// Reopen clears a terminal failure after the caller has revalidated the source
+// data. Excluded and session-corrupt failures are source-data decisions;
+// credential, permission and storage failures remain blocked until the user
+// addresses the backend configuration.
 func (q *QueueSnapshot) Reopen(key QueueKey, failure FailureClass) error {
 	if q == nil {
 		return errors.New("syncer: queue snapshot is required")
@@ -240,7 +246,7 @@ func (q *QueueSnapshot) Reopen(key QueueKey, failure FailureClass) error {
 	if err := key.Validate(); err != nil {
 		return err
 	}
-	if failure != FailureExcluded {
+	if failure != FailureExcluded && failure != FailureSessionCorrupt {
 		return ErrQueueItemBlocked
 	}
 	for index, item := range q.Items {
@@ -406,7 +412,8 @@ func (p RetryPolicy) Delay(attempt uint32) (time.Duration, error) {
 
 // QueueStore persists queue metadata below a local configuration root.
 type QueueStore struct {
-	root string
+	root        string
+	processLock chan struct{}
 }
 
 // NewQueueStore validates a local queue root.
@@ -418,12 +425,52 @@ func NewQueueStore(root string) (QueueStore, error) {
 	if err != nil {
 		return QueueStore{}, fmt.Errorf("syncer: resolve queue state root: %w", err)
 	}
-	return QueueStore{root: abs}, nil
+	processLock := make(chan struct{}, 1)
+	processLock <- struct{}{}
+	return QueueStore{root: abs, processLock: processLock}, nil
+}
+
+func (s QueueStore) acquire(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		return nil, errors.New("syncer: context is required")
+	}
+	unlockProcess := func() {}
+	if s.processLock != nil {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("syncer: acquire queue process lock: %w", ctx.Err())
+		case <-s.processLock:
+			unlockProcess = func() { s.processLock <- struct{}{} }
+		}
+	}
+	_, err := s.filePath()
+	if err != nil {
+		unlockProcess()
+		return nil, err
+	}
+	fileLock, err := AcquireLocalFileLock(ctx, filepath.Join(s.root, "queue.lock"))
+	if err != nil {
+		unlockProcess()
+		return nil, err
+	}
+	return func() {
+		_ = fileLock.Close()
+		unlockProcess()
+	}, nil
 }
 
 // Load reads and strictly validates the queue. A missing file is an empty
 // queue, which is safe because queue metadata never establishes sync progress.
 func (s QueueStore) Load(ctx context.Context) (QueueSnapshot, error) {
+	unlock, err := s.acquire(ctx)
+	if err != nil {
+		return QueueSnapshot{}, err
+	}
+	defer unlock()
+	return s.load(ctx)
+}
+
+func (s QueueStore) load(ctx context.Context) (QueueSnapshot, error) {
 	if ctx == nil {
 		return QueueSnapshot{}, errors.New("syncer: context is required")
 	}
@@ -480,6 +527,15 @@ func (s QueueStore) Load(ctx context.Context) (QueueSnapshot, error) {
 
 // Save validates and atomically replaces the queue contents.
 func (s QueueStore) Save(ctx context.Context, snapshot QueueSnapshot) error {
+	unlock, err := s.acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.save(ctx, snapshot)
+}
+
+func (s QueueStore) save(ctx context.Context, snapshot QueueSnapshot) error {
 	if ctx == nil {
 		return errors.New("syncer: context is required")
 	}
@@ -531,16 +587,33 @@ func (s QueueStore) Save(ctx context.Context, snapshot QueueSnapshot) error {
 	return nil
 }
 
-// Enqueue loads the queue, adds a task idempotently, and saves it.
-func (s QueueStore) Enqueue(ctx context.Context, key QueueKey) error {
-	snapshot, err := s.Load(ctx)
+// Update serializes a queue read-modify-write operation. It is used by the
+// queued pusher when independent sessions are uploaded concurrently, so one
+// worker cannot overwrite another worker's queue transition.
+func (s QueueStore) Update(ctx context.Context, update func(*QueueSnapshot) error) error {
+	if update == nil {
+		return errors.New("syncer: queue update function is required")
+	}
+	unlock, err := s.acquire(ctx)
 	if err != nil {
 		return err
 	}
-	if err := snapshot.Enqueue(key); err != nil {
+	defer unlock()
+	snapshot, err := s.load(ctx)
+	if err != nil {
 		return err
 	}
-	return s.Save(ctx, snapshot)
+	if err := update(&snapshot); err != nil {
+		return err
+	}
+	return s.save(ctx, snapshot)
+}
+
+// Enqueue loads the queue, adds a task idempotently, and saves it.
+func (s QueueStore) Enqueue(ctx context.Context, key QueueKey) error {
+	return s.Update(ctx, func(snapshot *QueueSnapshot) error {
+		return snapshot.Enqueue(key)
+	})
 }
 
 // Item loads one queued task without changing the queue.
@@ -555,42 +628,47 @@ func (s QueueStore) Item(ctx context.Context, key QueueKey) (QueueItem, error) {
 // Reopen clears an excluded terminal task after the caller has independently
 // revalidated its source session.
 func (s QueueStore) Reopen(ctx context.Context, key QueueKey, failure FailureClass) error {
-	snapshot, err := s.Load(ctx)
-	if err != nil {
-		return err
-	}
-	if err := snapshot.Reopen(key, failure); err != nil {
-		return err
-	}
-	return s.Save(ctx, snapshot)
+	return s.Update(ctx, func(snapshot *QueueSnapshot) error {
+		return snapshot.Reopen(key, failure)
+	})
 }
 
 // Complete removes a successfully synchronized task from the queue.
 func (s QueueStore) Complete(ctx context.Context, key QueueKey) error {
-	snapshot, err := s.Load(ctx)
+	unlock, err := s.acquire(ctx)
 	if err != nil {
 		return err
+	}
+	defer unlock()
+
+	path, err := s.filePath()
+	if err != nil {
+		return err
+	}
+	snapshot, err := s.load(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return errors.Join(ErrQueueFileMissing, ErrQueueItemMissing)
+	} else if err != nil {
+		return fmt.Errorf("syncer: inspect pending queue: %w", statePathSafe(err))
 	}
 	if err := snapshot.Complete(key); err != nil {
 		return err
 	}
-	return s.Save(ctx, snapshot)
+	return s.save(ctx, snapshot)
 }
 
 // RecordFailure records a classified failure and persists its retry state.
 func (s QueueStore) RecordFailure(ctx context.Context, key QueueKey, failure FailureClass, now time.Time, policy RetryPolicy) (QueueItem, error) {
-	snapshot, err := s.Load(ctx)
-	if err != nil {
-		return QueueItem{}, err
-	}
-	item, err := snapshot.RecordFailure(key, failure, now, policy)
-	if err != nil {
-		return QueueItem{}, err
-	}
-	if err := s.Save(ctx, snapshot); err != nil {
-		return QueueItem{}, err
-	}
-	return item, nil
+	var item QueueItem
+	err := s.Update(ctx, func(snapshot *QueueSnapshot) error {
+		var err error
+		item, err = snapshot.RecordFailure(key, failure, now, policy)
+		return err
+	})
+	return item, err
 }
 
 // Due returns pending tasks eligible at the supplied time.

@@ -157,7 +157,7 @@ func (l CodexLayout) DiscoverSessions(projectRoot string) ([]SessionRef, error) 
 		return nil, errors.New("list sessions: Codex sessions path is not a directory")
 	}
 
-	var refs []SessionRef
+	refsByID := make(map[string]SessionRef)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -186,7 +186,7 @@ func (l CodexLayout) DiscoverSessions(projectRoot string) ([]SessionRef, error) 
 		if updated.IsZero() || info.ModTime().After(updated) {
 			updated = info.ModTime()
 		}
-		refs = append(refs, SessionRef{
+		ref := SessionRef{
 			Agent:       l.Name(),
 			NativeID:    summary.nativeID,
 			ProjectPath: projectRoot,
@@ -195,11 +195,18 @@ func (l CodexLayout) DiscoverSessions(projectRoot string) ([]SessionRef, error) 
 			UpdatedAt:   updated,
 			Size:        info.Size(),
 			localPath:   path,
-		})
+		}
+		if existing, found := refsByID[ref.NativeID]; !found || ref.UpdatedAt.After(existing.UpdatedAt) || (ref.UpdatedAt.Equal(existing.UpdatedAt) && ref.localPath < existing.localPath) {
+			refsByID[ref.NativeID] = ref
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	refs := make([]SessionRef, 0, len(refsByID))
+	for _, ref := range refsByID {
+		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].UpdatedAt.Equal(refs[j].UpdatedAt) {

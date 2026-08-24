@@ -32,14 +32,14 @@ func (p QueuedPusher) PushSessionAt(ctx context.Context, key syncer.QueueKey, da
 	if now.IsZero() {
 		return syncer.PushCursor{}, errors.New("syncflow: queue time is required")
 	}
-	reopen, err := p.prepareSession(ctx, key, now)
+	reopenFailure, err := p.prepareSession(ctx, key, now)
 	if err != nil {
 		return syncer.PushCursor{}, err
 	}
 
 	stream, err := CanonicalizeSession(data, space, installation)
 	if err != nil {
-		if reopen {
+		if reopenFailure != syncer.FailureNone {
 			return syncer.PushCursor{}, err
 		}
 		failure := ClassifySessionFailure(err)
@@ -52,7 +52,7 @@ func (p QueuedPusher) PushSessionAt(ctx context.Context, key syncer.QueueKey, da
 		return syncer.PushCursor{}, err
 	}
 
-	if err := p.reopenExcluded(ctx, key, reopen); err != nil {
+	if err := p.reopenRevalidated(ctx, key, reopenFailure); err != nil {
 		return syncer.PushCursor{}, err
 	}
 

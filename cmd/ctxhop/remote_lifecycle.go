@@ -16,7 +16,10 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
-const remoteLifecycleTimeout = 30 * time.Second
+// Remote deletion is an explicit administrative operation. The individual
+// S3 requests still have their own 30-second timeout, while the larger
+// operation gets enough time to remove a project with many immutable shards.
+const remoteLifecycleTimeout = 5 * time.Minute
 
 const (
 	remoteActionDeleteSession = "delete-session"

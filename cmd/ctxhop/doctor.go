@@ -14,6 +14,7 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/config"
 	"github.com/CCCCY-ci/ctxhop/internal/diagnostic"
+	"github.com/CCCCY-ci/ctxhop/internal/logging"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
 
@@ -26,6 +27,7 @@ type doctorReport struct {
 	Agents        []doctorAgent       `json:"agents,omitempty"`
 	Project       statusProject       `json:"project"`
 	RecentErrors  doctorRecentErrors  `json:"recentErrors"`
+	LogPath       string              `json:"-"`
 }
 
 type doctorCheck struct {
@@ -113,6 +115,7 @@ func collectDoctor(c *config.Config, configDir, projectDir string) (doctorReport
 		Agents:        detectAgents(ctx),
 		Project:       status.Project,
 		RecentErrors:  recentErrors,
+		LogPath:       currentLogPath(configDir),
 	}, nil
 }
 
@@ -311,6 +314,11 @@ func writeDoctorJSON(w io.Writer, report doctorReport) error {
 }
 
 func writeDoctorText(w io.Writer, report doctorReport) error {
+	if report.LogPath != "" {
+		if _, err := fmt.Fprintf(w, "logs: %s (retention: %d days)\n", report.LogPath, logging.RetentionDays); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintln(w, "configuration:"); err != nil {
 		return err
 	}
