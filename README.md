@@ -1,7 +1,7 @@
 # CtxHop
 
 <p align="center">
-  <img src="assets/ctxhop-icon.png" alt="CtxHop logo" width="180">
+  <img src="assets/ctxhop-logo.png" alt="CtxHop logo" width="180">
 </p>
 
 <p align="center">
