@@ -4,6 +4,12 @@
   <img src="assets/ctxhop-icon.png" alt="CtxHop logo" width="180">
 </p>
 
+<p align="center">
+  <a href="https://github.com/CCCCY-ci/ctxhop/releases/latest"><img src="https://img.shields.io/github/v/release/CCCCY-ci/ctxhop?sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/CCCCY-ci/ctxhop" alt="Go version"></a>
+  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
+</p>
+
 [简体中文](README.zh-CN.md)
 
 **Switch devices. Keep your context.**
