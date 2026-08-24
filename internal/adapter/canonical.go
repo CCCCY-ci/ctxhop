@@ -29,18 +29,52 @@ type PathSpace struct {
 	AgentHome string
 }
 
-// pathValueFields are leaf field names whose value is a single absolute path.
+// pathValueFields are common leaf field names whose values, or array elements,
+// are paths. They are hints for fields that can contain paths with spaces;
+// unknown leaf values use the structural bare-path fallback below.
 //
 // Every one of these is tried against both roots rather than being tied to one:
 // PoC-1 found `file_path` holding paths under the agent's own directory, not
 // just under the project.
 var pathValueFields = map[string]bool{
-	"cwd":           true,
-	"file_path":     true,
-	"filePath":      true,
-	"planFilePath":  true,
-	"trackingPath":  true,
-	"realParentDir": true,
+	"cwd":             true,
+	"workspace_roots": true,
+	"file_path":       true,
+	"filePath":        true,
+	"fileName":        true,
+	"fileNames":       true,
+	"filename":        true,
+	"filenames":       true,
+	"planFilePath":    true,
+	"path":            true,
+	"trackingPath":    true,
+	"realParentDir":   true,
+}
+
+// embeddedPathTextFields contains structured environment fields whose value is
+// a metadata document rather than one JSON path. Only known machine metadata
+// gets this treatment; ordinary conversation text remains untouched.
+var embeddedPathTextFields = map[string]bool{
+	"filesystem": true,
+}
+
+// pathValuePaths contains exact nested paths whose leaf name is too generic
+// to add to pathValueFields. Claude Code 2.1.228 can emit a structured path in
+// message.content.content. The array form, message.content[].content, remains
+// conversation text and is deliberately not included here.
+var pathValuePaths = map[string]bool{
+	"message.content.content": true,
+}
+
+// embeddedJSONPaths are Codex tool argument fields. Their values are JSON
+// strings rather than objects, so normal structural traversal cannot see the
+// nested file_path/path fields. Invalid JSON is left untouched because it may
+// be an ordinary command or user-provided text.
+var embeddedJSONPaths = map[string]bool{
+	"payload.arguments":      true,
+	"payload.input":          true,
+	"payload.item.arguments": true,
+	"payload.item.input":     true,
 }
 
 // pathKeyedContainers are objects whose *keys* are absolute paths. Rewriting
@@ -48,6 +82,13 @@ var pathValueFields = map[string]bool{
 // produces a session the agent cannot resolve (spec §4.5).
 var pathKeyedContainers = map[string]bool{
 	"trackedFileBackups": true,
+}
+
+// pathKeyedPaths contains agent-specific containers whose keys are paths but
+// whose leaf name is too generic to enable globally. Codex stores file change
+// snapshots under payload.item.changes/<absolute-path>.
+var pathKeyedPaths = map[string]bool{
+	"payload.item.changes": true,
 }
 
 // Canonicalizer converts a machine's session records into canonical form.
@@ -76,12 +117,12 @@ func (c *Canonicalizer) Record(raw []byte) ([]byte, error) {
 	return encode(c.walk("", v))
 }
 
-// UnknownPathFields returns field names, sorted, that held one of this
-// machine's known path prefixes but are not in the allowlist.
+// UnknownPathFields returns safe field names for path-bearing object keys.
+// Unknown leaf values use the structural fallback instead.
 //
-// Such a field means the agent gained a path-bearing field we do not rewrite,
-// so restoring would produce a session pointing at the source machine. The
-// caller downgrades compatibility rather than writing anything (spec §4.8).
+// Unknown object keys remain conservative because their semantics are ambiguous,
+// and changing arbitrary user content would be unsafe. The
+// caller downgrades compatibility when an unresolved path key is present.
 func (c *Canonicalizer) UnknownPathFields() []string {
 	out := make([]string, 0, len(c.unknown))
 	for k := range c.unknown {
@@ -91,28 +132,32 @@ func (c *Canonicalizer) UnknownPathFields() []string {
 	return out
 }
 
-// walk returns a copy of v with known path prefixes replaced by tokens. field
-// is the map key that led to v, or "" at the top level.
-func (c *Canonicalizer) walk(field string, v any) any {
+func isPathKeyedContainer(path string) bool {
+	return pathKeyedContainers[fieldLeaf(path)] || pathKeyedPaths[path]
+}
+
+// walk returns a copy of v with known path prefixes replaced by tokens. path
+// is the dotted map path that led to v, or "" at the top level.
+func (c *Canonicalizer) walk(path string, v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			out[c.key(field, k)] = c.walk(k, child)
+			out[c.key(path, k)] = c.walk(joinFieldPath(path, k), child)
 		}
 		return out
 
 	case []any:
 		out := make([]any, len(t))
 		for i, child := range t {
-			// Array elements inherit the field name that led to the array, so
-			// that content[].input.file_path is still seen as file_path.
-			out[i] = c.walk(field, child)
+			// Keep an array marker for exact schema paths, while fieldLeaf
+			// still lets common leaf fields inherit their array's field name.
+			out[i] = c.walk(path+"[]", child)
 		}
 		return out
 
 	case string:
-		return c.text(field, t)
+		return c.text(path, t)
 
 	default:
 		return v
@@ -120,8 +165,8 @@ func (c *Canonicalizer) walk(field string, v any) any {
 }
 
 // key tokenizes a map key when the enclosing field is a path-keyed container.
-func (c *Canonicalizer) key(parentField, k string) string {
-	if pathKeyedContainers[parentField] {
+func (c *Canonicalizer) key(parentPath, k string) string {
+	if isPathKeyedContainer(parentPath) {
 		if out, ok := c.tokenize(k); ok {
 			return out
 		}
@@ -129,16 +174,26 @@ func (c *Canonicalizer) key(parentField, k string) string {
 	}
 	if isBarePath(k) {
 		if _, ok := c.tokenize(k); ok {
-			c.report(parentField + ".<key>")
+			c.report(joinFieldPath(parentPath, "<key>"))
 		}
 	}
 	return k
 }
 
-// text tokenizes a string value when its field is allowlisted, and otherwise
-// records it as a finding if it nonetheless carries one of our path prefixes.
-func (c *Canonicalizer) text(field, s string) string {
-	if pathValueFields[field] {
+// text tokenizes a string value when its field is allowlisted. For unknown
+// fields, an exact bare value under one of the current machine's roots is also
+// rewritten. This structural fallback is what keeps ordinary Claude Code
+// minor releases from requiring a new field-specific adapter release.
+func (c *Canonicalizer) text(path, s string) string {
+	if embeddedJSONPaths[path] {
+		if rewritten, ok := c.rewriteEmbeddedJSON(path, s); ok {
+			return rewritten
+		}
+	}
+	if embeddedPathTextFields[fieldLeaf(path)] {
+		return c.rewriteEmbeddedPathText(s)
+	}
+	if isPathValuePath(path) {
 		if out, ok := c.tokenize(s); ok {
 			return out
 		}
@@ -149,19 +204,73 @@ func (c *Canonicalizer) text(field, s string) string {
 	}
 
 	if isBarePath(s) {
-		if _, ok := c.tokenize(s); ok {
-			c.report(field)
+		if out, ok := c.tokenize(s); ok {
+			return out
 		}
 	}
 	return s
 }
 
+func (c *Canonicalizer) rewriteEmbeddedJSON(path, value string) (string, bool) {
+	decoded, err := decode([]byte(value))
+	if err != nil {
+		return value, false
+	}
+	rewritten := c.walk(path+".<json>", decoded)
+	encoded, err := encode(rewritten)
+	if err != nil {
+		return value, false
+	}
+	return string(encoded), true
+}
+
+func (c *Canonicalizer) rewriteEmbeddedPathText(value string) string {
+	type candidate struct {
+		root  string
+		token string
+	}
+	candidates := []candidate{
+		{root: c.space.ProjectRoot, token: TokenProject},
+		{root: c.space.AgentHome, token: TokenAgentHome},
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return len(candidates[i].root) > len(candidates[j].root)
+	})
+	for _, candidate := range candidates {
+		if candidate.root != "" {
+			value = replaceEmbeddedPathRoot(value, candidate.root, candidate.token)
+		}
+	}
+	return strings.ReplaceAll(value, `\`, "/")
+}
+
+func isPathValuePath(path string) bool {
+	return pathValueFields[fieldLeaf(path)] || pathValuePaths[path]
+}
+
+func fieldLeaf(path string) string {
+	for strings.HasSuffix(path, "[]") {
+		path = strings.TrimSuffix(path, "[]")
+	}
+	if i := strings.LastIndexByte(path, '.'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+func joinFieldPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
+}
+
 // report records a schema finding, but only under a name that is safe to show.
 //
-// Findings surface in `agentsync doctor`, whose output must be safe to paste
+// Findings surface in `ctxhop doctor`, whose output must be safe to paste
 // into a public issue - no paths, project names or session content (BR-09).
-// Keys of a path-keyed container are themselves absolute paths, so a name that
-// is not a plain identifier is replaced rather than leaked.
+// Keys of an unknown path-keyed container are themselves absolute paths, so a
+// name that is not a plain identifier is replaced rather than leaked.
 func (c *Canonicalizer) report(field string) {
 	if !isFieldName(field) {
 		field = "<redacted>"
@@ -176,7 +285,7 @@ func isFieldName(s string) bool {
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '_' || r == '.' || r == '<' || r == '>':
+		case r == '_' || r == '.' || r == '[' || r == ']' || r == '<' || r == '>':
 		default:
 			return false
 		}
@@ -186,18 +295,27 @@ func isFieldName(s string) bool {
 
 // isBarePath reports whether a value is plausibly a path and nothing else.
 //
-// The finding it gates downgrades compatibility, which stops the agent from
-// syncing entirely, so the test errs towards silence. Prose routinely begins
-// with a path - a pasted filename followed by a question, a shell command in a
-// tool argument - and treating those as schema drift would kill sync for
-// ordinary sessions.
-//
-// Requiring the value to contain no whitespace means paths containing spaces go
-// unreported. That is an acceptable trade: detection is statistical across
-// every record of every session, so a genuinely new path field will show up on
-// some space-free path quickly, whereas a false positive is immediately fatal.
+// Prose can begin with a path - a pasted filename followed by a question,
+// a shell command in a tool argument - and rewriting such prose would change
+// the session's meaning. Unknown fields therefore use a conservative shape
+// check; named path fields still support spaces and non-ASCII paths.
 func isBarePath(s string) bool {
 	return s != "" && !strings.ContainsAny(s, " \t\r\n")
+}
+
+// isCanonicalPath reports whether s has the shape produced by tokenize for an
+// unknown leaf field. A canonical path is either the token itself or the token
+// followed by a slash-separated remainder.
+func isCanonicalPath(s string) bool {
+	if !isBarePath(s) {
+		return false
+	}
+	for _, token := range []string{TokenProject, TokenAgentHome} {
+		if s == token || strings.HasPrefix(s, token+"/") || strings.HasPrefix(s, token+"\\") {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenize replaces a leading path prefix with its token. The longer root is
@@ -274,16 +392,16 @@ type localizer struct {
 	space PathSpace
 }
 
-func (l *localizer) walk(field string, v any) (any, error) {
+func (l *localizer) walk(path string, v any) (any, error) {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			key, err := l.text(field, k, pathKeyedContainers[field])
+			key, err := l.text(path, k, isPathKeyedContainer(path))
 			if err != nil {
 				return nil, err
 			}
-			value, err := l.walk(k, child)
+			value, err := l.walk(joinFieldPath(path, k), child)
 			if err != nil {
 				return nil, err
 			}
@@ -294,7 +412,7 @@ func (l *localizer) walk(field string, v any) (any, error) {
 	case []any:
 		out := make([]any, len(t))
 		for i, child := range t {
-			value, err := l.walk(field, child)
+			value, err := l.walk(path+"[]", child)
 			if err != nil {
 				return nil, err
 			}
@@ -303,7 +421,7 @@ func (l *localizer) walk(field string, v any) (any, error) {
 		return out, nil
 
 	case string:
-		return l.text(field, t, pathValueFields[field])
+		return l.text(path, t, isPathValuePath(path) || isCanonicalPath(t))
 
 	default:
 		return v, nil
@@ -317,8 +435,18 @@ func (l *localizer) walk(field string, v any) (any, error) {
 // tokens into allowlisted positions, so the same characters appearing in a
 // message body or a command line are user content that happens to look like
 // our marker - and refusing there would make any session that discusses
-// AgentSync itself impossible to restore.
+// CtxHop itself impossible to restore.
 func (l *localizer) text(field, s string, tokenized bool) (string, error) {
+	if embeddedPathTextFields[fieldLeaf(field)] {
+		return l.rewriteEmbeddedPathText(s)
+	}
+	if embeddedJSONPaths[field] {
+		if rewritten, ok, err := l.rewriteEmbeddedJSON(field, s); err != nil {
+			return "", err
+		} else if ok {
+			return rewritten, nil
+		}
+	}
 	if !tokenized {
 		return s, nil
 	}
@@ -353,6 +481,138 @@ func (l *localizer) text(field, s string, tokenized bool) (string, error) {
 		return tok.root + strings.ReplaceAll(rest, "/", separatorFor(tok.root)), nil
 	}
 	return s, nil
+}
+
+func (l *localizer) rewriteEmbeddedJSON(path, value string) (string, bool, error) {
+	decoded, err := decode([]byte(value))
+	if err != nil {
+		return value, false, nil
+	}
+	rewritten, err := l.walk(path+".<json>", decoded)
+	if err != nil {
+		return "", false, err
+	}
+	encoded, err := encode(rewritten)
+	if err != nil {
+		return "", false, err
+	}
+	return string(encoded), true, nil
+}
+
+func (l *localizer) rewriteEmbeddedPathText(value string) (string, error) {
+	for _, candidate := range []struct {
+		token string
+		root  string
+	}{
+		{token: TokenProject, root: l.space.ProjectRoot},
+		{token: TokenAgentHome, root: l.space.AgentHome},
+	} {
+		if !strings.Contains(value, candidate.token) {
+			continue
+		}
+		if candidate.root == "" {
+			return "", fmt.Errorf("localize: %s present but no target path configured", candidate.token)
+		}
+		value = replaceEmbeddedPathToken(value, candidate.token, candidate.root)
+	}
+	return value, nil
+}
+
+func replaceEmbeddedPathRoot(value, root, replacement string) string {
+	root = strings.TrimRight(root, `/\`)
+	if root == "" {
+		return value
+	}
+	var out strings.Builder
+	cursor := 0
+	for cursor < len(value) {
+		index := indexPathAt(value, root, cursor)
+		if index < 0 {
+			break
+		}
+		end := index + len(root)
+		if !embeddedPathBoundary(value, index, end) {
+			cursor = index + 1
+			continue
+		}
+		out.WriteString(value[cursor:index])
+		out.WriteString(replacement)
+		tailEnd := embeddedPathSegmentEnd(value, end)
+		if tailEnd > end {
+			out.WriteString(strings.ReplaceAll(value[end:tailEnd], `\`, "/"))
+		}
+		cursor = tailEnd
+	}
+	out.WriteString(value[cursor:])
+	return out.String()
+}
+
+func replaceEmbeddedPathToken(value, token, root string) string {
+	var out strings.Builder
+	cursor := 0
+	for cursor < len(value) {
+		relative := strings.Index(value[cursor:], token)
+		if relative < 0 {
+			break
+		}
+		index := cursor + relative
+		end := index + len(token)
+		out.WriteString(value[cursor:index])
+		out.WriteString(root)
+		tailEnd := embeddedPathSegmentEnd(value, end)
+		if tailEnd > end {
+			tail := value[end:tailEnd]
+			if separatorFor(root) == `\` {
+				tail = strings.ReplaceAll(tail, "/", `\`)
+			} else {
+				tail = strings.ReplaceAll(tail, `\`, "/")
+			}
+			out.WriteString(tail)
+		}
+		cursor = tailEnd
+	}
+	out.WriteString(value[cursor:])
+	return out.String()
+}
+
+func indexPathAt(value, root string, from int) int {
+	if separatorFor(root) != `\` {
+		index := strings.Index(value[from:], root)
+		if index < 0 {
+			return -1
+		}
+		return from + index
+	}
+	for index := from; index+len(root) <= len(value); index++ {
+		if strings.EqualFold(value[index:index+len(root)], root) {
+			return index
+		}
+	}
+	return -1
+}
+
+func embeddedPathBoundary(value string, start, end int) bool {
+	if start > 0 && isEmbeddedPathWord(value[start-1]) {
+		return false
+	}
+	return end >= len(value) || !isEmbeddedPathWord(value[end])
+}
+
+func isEmbeddedPathWord(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '-' || value == '.'
+}
+
+func embeddedPathSegmentEnd(value string, start int) int {
+	end := start
+	for end < len(value) {
+		switch value[end] {
+		case '<', '>', '"', '\'', '&', ' ', '\t', '\r', '\n':
+			return end
+		default:
+			end++
+		}
+	}
+	return end
 }
 
 // samePathPrefix compares two path fragments of equal length under the

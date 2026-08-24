@@ -9,17 +9,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORK="${WORK:-${TMPDIR:-/tmp}/agentsync-poc2}"
+WORK="${WORK:-${TMPDIR:-/tmp}/ctxhop-poc2}"
 # The fingerprint belongs to the sync store, not the project. Keeping it
 # inside the repo would let scenarios commit and then check it out from under
 # themselves.
-FP="${TMPDIR:-/tmp}/agentsync-poc2-fingerprint.json"
+FP="${TMPDIR:-/tmp}/ctxhop-poc2-fingerprint.json"
 TOUCHED="src/a.go,docs/x.md"
 
 # Build once rather than `go run` per invocation: the scenarios cd into a
 # scratch repo that is not part of any module, where `go run` cannot resolve
 # the package.
-BIN="${TMPDIR:-/tmp}/agentsync-poc2-fingerprint.exe"
+BIN="${TMPDIR:-/tmp}/ctxhop-poc2-fingerprint.exe"
 (cd "$REPO_ROOT" && go build -o "$BIN" ./poc/fingerprint)
 
 pass=0

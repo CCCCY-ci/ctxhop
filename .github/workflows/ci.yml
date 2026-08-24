@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: native / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: test
+        run: go test ./...
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build -trimpath -o ctxhop ./cmd/ctxhop
+
+  test-report:
+    name: test-report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: test (JSON report)
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -json ./... | tee test-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-test-report
+          path: test-results.json
+          if-no-files-found: warn
+
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./...
+
+  cross-build:
+    name: cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: VERSION=ci bash ./scripts/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ctxhop-cross-build
+          path: dist/
+          if-no-files-found: error

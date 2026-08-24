@@ -33,6 +33,11 @@ const maxObjectSize = 256 << 20
 // continuation token cannot loop forever.
 const maxListPages = 10_000
 
+// maxListResponseSize bounds one ListObjectsV2 XML response independently of
+// the object size limit. A provider must not be able to make a listing allocate
+// an unbounded amount of memory just by returning a large page.
+const maxListResponseSize = 16 << 20
+
 // S3Config describes one S3-compatible bucket.
 type S3Config struct {
 	// Endpoint is the service URL, for example https://s3.amazonaws.com or a
@@ -47,9 +52,13 @@ type S3Config struct {
 	// AccessKey and SecretKey authenticate requests. They are never logged.
 	AccessKey string
 	SecretKey string
+	// SessionToken authenticates temporary credentials. It is optional and is
+	// sent as a signed X-Amz-Security-Token header when present.
+	SessionToken string
 	// PathStyle addresses the bucket as a path segment rather than a
-	// subdomain. Most S3-compatible providers and MinIO require it, so it is
-	// the default.
+	// subdomain. It is useful for providers that do not support virtual-hosted
+	// addressing. The zero value keeps the AWS/R2-compatible virtual-hosted
+	// style; callers can opt into path-style explicitly.
 	PathStyle bool
 	// HTTPClient overrides the client, for tests.
 	HTTPClient *http.Client
@@ -74,12 +83,24 @@ func NewS3(cfg S3Config) (*S3, error) {
 		return nil, errors.New("remote: no credentials configured")
 	}
 
+	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
+	cfg.Bucket = strings.TrimSpace(cfg.Bucket)
+	cfg.Region = strings.TrimSpace(cfg.Region)
+
 	base, err := url.Parse(strings.TrimRight(cfg.Endpoint, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
 	}
-	if base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("remote: endpoint %q needs a scheme and a host", cfg.Endpoint)
+	base.Scheme = strings.ToLower(base.Scheme)
+	base.Host = strings.ToLower(base.Host)
+	if base.Scheme != "http" && base.Scheme != "https" || base.Host == "" {
+		return nil, fmt.Errorf("remote: endpoint %q needs an http or https scheme and a host", cfg.Endpoint)
+	}
+	if base.User != nil {
+		return nil, errors.New("remote: endpoint must not contain user info")
+	}
+	if base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
+		return nil, errors.New("remote: endpoint must not contain a query or fragment")
 	}
 	if cfg.Region == "" {
 		cfg.Region = "us-east-1"
@@ -108,40 +129,83 @@ func (s *S3) objectKey(key string) string {
 	return strings.TrimRight(s.cfg.Prefix, "/") + "/" + key
 }
 
-// stripPrefix reverses objectKey so callers see the keys they wrote.
-func (s *S3) stripPrefix(full string) string {
+// stripPrefix reverses objectKey so callers see the keys they wrote. The bool
+// prevents a malformed or non-compliant provider response from escaping the
+// configured namespace when a shared bucket is in use.
+func (s *S3) stripPrefix(full string) (string, bool) {
 	if s.cfg.Prefix == "" {
-		return full
+		return full, true
 	}
-	return strings.TrimPrefix(full, strings.TrimRight(s.cfg.Prefix, "/")+"/")
+	prefix := strings.TrimRight(s.cfg.Prefix, "/") + "/"
+	if !strings.HasPrefix(full, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(full, prefix), true
 }
 
 // urlFor builds the request URL for an object key.
 func (s *S3) urlFor(key string) *url.URL {
 	u := *s.base
-	encoded := uriEncode(key, true)
+	basePath := strings.TrimRight(s.base.EscapedPath(), "/")
+	encodedKey := uriEncode(key, true)
 
 	if s.cfg.PathStyle || s.base.Host == "" {
-		u.Path = "/" + s.cfg.Bucket
+		path := appendEscapedPath(basePath, uriEncode(s.cfg.Bucket, false))
 		if key != "" {
-			u.Path += "/" + key
+			path = appendEscapedPath(path, encodedKey)
 		}
-		u.RawPath = "/" + s.cfg.Bucket
-		if key != "" {
-			u.RawPath += "/" + encoded
-		}
+		setEscapedPath(&u, path)
 		return &u
 	}
 
 	u.Host = s.cfg.Bucket + "." + s.base.Host
-	u.Path = "/" + key
-	u.RawPath = "/" + encoded
+	path := basePath
+	if path == "" {
+		path = "/"
+	}
+	if key != "" {
+		path = appendEscapedPath(path, encodedKey)
+	}
+	setEscapedPath(&u, path)
 	return &u
+}
+
+// appendEscapedPath joins two already escaped URL path fragments without
+// allowing a provider endpoint's base path to be discarded.
+func appendEscapedPath(base, part string) string {
+	part = strings.Trim(part, "/")
+	if base == "" || base == "/" {
+		return "/" + part
+	}
+	if part == "" {
+		return base
+	}
+	return strings.TrimRight(base, "/") + "/" + part
+}
+
+// setEscapedPath keeps URL.Path and URL.RawPath consistent. S3 keys may contain
+// characters that need escaping, while the endpoint itself may already carry an
+// escaped base path.
+func setEscapedPath(u *url.URL, escaped string) {
+	if escaped == "" {
+		escaped = "/"
+	}
+	decoded, err := url.PathUnescape(escaped)
+	if err != nil {
+		u.Path = escaped
+		u.RawPath = ""
+		return
+	}
+	u.Path = decoded
+	u.RawPath = escaped
 }
 
 // do signs and performs a request, returning the response for the caller to
 // close.
 func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*http.Response, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -153,6 +217,9 @@ func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*h
 	}
 	if body != nil {
 		req.ContentLength = int64(len(body))
+	}
+	if s.cfg.SessionToken != "" {
+		req.Header.Set("X-Amz-Security-Token", s.cfg.SessionToken)
 	}
 
 	payloadHash := emptyPayloadHash
@@ -167,8 +234,8 @@ func (s *S3) do(ctx context.Context, method string, u *url.URL, body []byte) (*h
 		// Deliberately not ErrNotFound. Reporting a transport failure as
 		// absence would tell the sync layer another device pushed nothing,
 		// which is how a fast-forward turns into a fork.
-		return nil, fmt.Errorf("cannot reach bucket %q: check the endpoint, network and credentials with 'agentsync doctor': %w",
-			s.cfg.Bucket, err)
+		return nil, fmt.Errorf("%w: cannot reach bucket %q: check the endpoint, network and credentials with 'ctxhop doctor': %w",
+			ErrNetwork, s.cfg.Bucket, err)
 	}
 	return resp, nil
 }
@@ -208,18 +275,28 @@ func (s *S3) checkStatus(resp *http.Response, key string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
+	return s.checkStatusCode(resp, key, errorCode(resp))
+}
 
-	code := errorCode(resp)
-
+func (s *S3) checkStatusCode(resp *http.Response, key, code string) error {
 	switch {
 	case resp.StatusCode == http.StatusNotFound && (code == "" || code == "NoSuchKey"):
 		return fmt.Errorf("%w: %s", ErrNotFound, key)
 	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("storage rejected the request with %s: check the bucket name and endpoint with 'agentsync doctor'", code)
-	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized:
-		return errors.New("access denied: check the credentials and the bucket policy with 'agentsync doctor'")
+		if code == "" {
+			code = "unknown 404 error"
+		}
+		return fmt.Errorf("storage rejected the request with %s: check the bucket name and endpoint with 'ctxhop doctor'", code)
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%w: access denied: credentials were rejected; check the credentials with 'ctxhop doctor'", ErrCredentials)
+	case resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("%w: access denied: check the credentials and the bucket policy with 'ctxhop doctor'", ErrPermission)
+	case resp.StatusCode == http.StatusInsufficientStorage:
+		return fmt.Errorf("%w: storage returned %s: check the bucket quota with 'ctxhop doctor'", ErrStorageFull, resp.Status)
+	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		return fmt.Errorf("%w: storage returned %s: retry, or check the bucket with 'ctxhop doctor'", ErrTransient, resp.Status)
 	default:
-		return fmt.Errorf("storage returned %s: retry, or check the bucket with 'agentsync doctor'", resp.Status)
+		return fmt.Errorf("storage returned %s: check the bucket with 'ctxhop doctor'", resp.Status)
 	}
 }
 
@@ -242,6 +319,12 @@ func (s *S3) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 
 // Put stores size bytes read from r.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if r == nil {
+		return errors.New("remote: object body is required")
+	}
 	if err := ValidateKey(key); err != nil {
 		return err
 	}
@@ -249,7 +332,7 @@ func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64) error
 		return fmt.Errorf("remote: object %q is %d bytes, larger than the %d byte limit", key, size, maxObjectSize)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r, maxObjectSize+1))
+	body, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: r}, maxObjectSize+1))
 	if err != nil {
 		return fmt.Errorf("read object body: %w", err)
 	}
@@ -284,7 +367,11 @@ func (s *S3) Delete(ctx context.Context, key string) error {
 	defer drain(resp)
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil
+		code := errorCode(resp)
+		if code == "" || code == "NoSuchKey" {
+			return nil
+		}
+		return s.checkStatusCode(resp, key, code)
 	}
 	return s.checkStatus(resp, key)
 }
@@ -331,13 +418,20 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 
 	var out []ObjectInfo
 	token := ""
+	seenTokens := make(map[string]struct{})
 
 	for page := 0; ; page++ {
+		if token != "" {
+			if _, seen := seenTokens[token]; seen {
+				return nil, fmt.Errorf("listing %q repeated a continuation token: the storage provider did not advance pagination", prefix)
+			}
+			seenTokens[token] = struct{}{}
+		}
 		// A provider that keeps handing back a token would otherwise loop
 		// forever, growing the result without bound; the client timeout
 		// applies per request, not to the loop.
 		if page >= maxListPages {
-			return nil, fmt.Errorf("listing %q did not finish after %d pages: check the bucket with 'agentsync doctor'",
+			return nil, fmt.Errorf("listing %q did not finish after %d pages: check the bucket with 'ctxhop doctor'",
 				prefix, maxListPages)
 		}
 
@@ -364,10 +458,13 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 			return nil, err
 		}
 
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxObjectSize))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxListResponseSize+1))
 		drain(resp)
 		if err != nil {
 			return nil, fmt.Errorf("read listing: %w", err)
+		}
+		if len(body) > maxListResponseSize {
+			return nil, fmt.Errorf("listing %q exceeds the %d byte response limit", prefix, maxListResponseSize)
 		}
 
 		var result listResult
@@ -375,7 +472,10 @@ func (s *S3) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
 			return nil, fmt.Errorf("parse listing: %w", err)
 		}
 		for _, item := range result.Contents {
-			key := s.stripPrefix(item.Key)
+			key, inNamespace := s.stripPrefix(item.Key)
+			if !inNamespace {
+				continue
+			}
 			// A listing is another place an external string becomes a key.
 			// Ours are always valid, so anything else was written by something
 			// other than us and is not ours to hand upwards.
@@ -424,8 +524,10 @@ func (s *S3) Probe(ctx context.Context) (err error) {
 	// Once the object exists it must be removed whatever happens next.
 	// Returning early on a failed read would leave our probe in the user's
 	// bucket permanently, and Prober's contract says it cleans up after itself.
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancelCleanup()
 	defer func() {
-		if delErr := s.Delete(ctx, probeKey); delErr != nil && err == nil {
+		if delErr := s.Delete(cleanupCtx, probeKey); delErr != nil && err == nil {
 			err = fmt.Errorf("cannot delete from the bucket: %w", delErr)
 		}
 	}()
@@ -434,8 +536,16 @@ func (s *S3) Probe(ctx context.Context) (err error) {
 	if getErr != nil {
 		return fmt.Errorf("cannot read back from the bucket: %w", getErr)
 	}
-	if closeErr := r.Close(); closeErr != nil {
-		return fmt.Errorf("cannot read back from the bucket: %w", closeErr)
+	readBack, readErr := io.ReadAll(io.LimitReader(r, int64(len(body)+1)))
+	closeErr := r.Close()
+	if readErr != nil || closeErr != nil || string(readBack) != body {
+		if readErr != nil {
+			return fmt.Errorf("cannot read back from the bucket: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("cannot read back from the bucket: %w", closeErr)
+		}
+		return errors.New("cannot read back from the bucket: the returned object does not match the probe")
 	}
 	if _, listErr := s.List(ctx, ""); listErr != nil {
 		return fmt.Errorf("cannot list the bucket: %w", listErr)

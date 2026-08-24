@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,14 +14,43 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 )
 
-// ErrCorruptSession reports a record that is fully written but unparseable.
-// A truncated tail is not corruption - see ReadRecords.
-var ErrCorruptSession = errors.New("adapter: session contains an unparseable record")
+// The session reader keeps one complete record and the accumulated snapshot
+// bounded. These limits are deliberately much larger than normal Agent
+// records, but prevent a malformed or unexpectedly huge JSONL file from
+// turning a push/list operation into an unbounded allocation.
+const (
+	// MaxSessionRecordBytes is the largest raw JSONL line accepted by an
+	// adapter. The syncer has a 64 MiB shard envelope, so a larger record could
+	// never be published as one immutable record anyway.
+	MaxSessionRecordBytes = 64 << 20
 
-// maxTitleLen bounds a generated title so it stays readable in a terminal list.
-const maxTitleLen = 72
+	// MaxSessionBytes is the largest complete session snapshot read into the
+	// core. It leaves room for long-running sessions while keeping the
+	// adapter/core slice representation bounded.
+	MaxSessionBytes = 512 << 20
+
+	// maxTitleLen bounds a generated title so it stays readable in a terminal
+	// list.
+	maxTitleLen = 72
+)
+
+var (
+	// ErrCorruptSession reports a record that is fully written but unparseable.
+	// A truncated tail is not corruption - see ReadRecords.
+	ErrCorruptSession = errors.New("adapter: session contains an unparseable record")
+
+	// ErrSessionRecordTooLarge reports a JSONL line that cannot be safely
+	// retained as one Agent record.
+	ErrSessionRecordTooLarge = errors.New("adapter: session record exceeds size limit")
+
+	// ErrSessionTooLarge reports a complete session snapshot that exceeds the
+	// bounded adapter input size.
+	ErrSessionTooLarge = errors.New("adapter: session exceeds size limit")
+)
 
 // SessionData is the result of reading a session that the agent may still be
 // appending to.
@@ -65,35 +95,69 @@ func ReadRecordsLenient(r io.Reader) (SessionData, error) {
 }
 
 func readRecords(r io.Reader, strict bool) (SessionData, error) {
+	if r == nil {
+		return SessionData{}, errors.New("read session: reader is required")
+	}
+
 	var out SessionData
 	br := bufio.NewReader(r)
+	totalBytes := 0
 
 	for {
-		line, err := br.ReadString('\n')
-		terminated := err == nil
-
-		if err != nil && !errors.Is(err, io.EOF) {
+		line, terminated, err := readSessionLine(br)
+		if err != nil {
 			return SessionData{}, fmt.Errorf("read session: %w", err)
 		}
+		if len(line) > MaxSessionBytes-totalBytes {
+			return SessionData{}, fmt.Errorf("%w: maximum is %d bytes", ErrSessionTooLarge, MaxSessionBytes)
+		}
+		totalBytes += len(line)
 
-		trimmed := strings.TrimRight(line, "\r\n")
+		trimmed := bytes.TrimRight(line, "\r\n")
 		switch {
-		case trimmed == "":
+		case len(trimmed) == 0:
 			// Blank lines carry nothing, terminated or not.
 		case !terminated:
 			// Trailing bytes with no newline: a write in progress.
 			out.DroppedTail = true
-		case !json.Valid([]byte(trimmed)):
+		case !json.Valid(trimmed):
 			if strict {
 				return SessionData{}, fmt.Errorf("%w: record %d", ErrCorruptSession, len(out.Records)+1)
 			}
 			out.Skipped++
 		default:
-			out.Records = append(out.Records, []byte(trimmed))
+			out.Records = append(out.Records, append([]byte(nil), trimmed...))
 		}
 
-		if err != nil {
+		if !terminated {
 			return out, nil
+		}
+	}
+}
+
+// readSessionLine reads one JSONL line without allowing bufio.Reader to grow
+// beyond the per-record bound. ReadSlice is used instead of Scanner so the
+// normal reader can still report I/O errors and preserve the existing tail
+// semantics.
+func readSessionLine(br *bufio.Reader) ([]byte, bool, error) {
+	var line []byte
+	for {
+		fragment, err := br.ReadSlice('\n')
+		if len(fragment) != 0 {
+			if len(fragment) > MaxSessionRecordBytes-len(line) {
+				return nil, false, ErrSessionRecordTooLarge
+			}
+			line = append(line, fragment...)
+		}
+		switch {
+		case err == nil:
+			return line, true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			return line, false, nil
+		default:
+			return nil, false, fmt.Errorf("read session line: %w", err)
 		}
 	}
 }
@@ -127,6 +191,28 @@ type Layout struct {
 	// the agent itself. It exists so that detection can be tested without
 	// depending on an agent being installed on the machine running the tests.
 	version func(context.Context) string
+}
+
+// Name identifies the Claude Code adapter in configuration and metadata.
+func (l Layout) Name() string {
+	return "claude-code"
+}
+
+// Environment returns Claude's filtered environment capability. Session,
+// workspace, Git, and no-Git synchronization remain Core behavior; the provider
+// only handles Claude-specific Skill, MCP, and allowlisted settings formats.
+func (l Layout) Environment() environment.Provider {
+	return claudeEnvironmentProvider{}
+}
+
+// ReadSession reads the local file identified by ref.
+func (l Layout) ReadSession(ref SessionRef) (SessionData, error) {
+	return ReadSessionFile(l.SessionFile(ref.ProjectPath, ref.NativeID))
+}
+
+// TouchedFiles extracts Claude Code tool accesses from one session.
+func (l Layout) TouchedFiles(records [][]byte, projectRoot string) []FileAccess {
+	return TouchedFiles(records, projectRoot)
 }
 
 // ProjectsDir is where per-project session directories live.
@@ -323,8 +409,19 @@ func (s summary) Title(projectRoot string, fallback time.Time) string {
 	if when.IsZero() {
 		when = fallback
 	}
-	name := filepath.Base(strings.TrimRight(projectRoot, `/\`))
+	name := projectBaseName(projectRoot)
 	return fmt.Sprintf("%s %s", name, when.Format("2006-01-02 15:04"))
+}
+
+// projectBaseName accepts both native and canonical Agent paths. A session
+// captured on Windows can still be summarized while it is being inspected on
+// a POSIX device, where filepath.Base treats a backslash as an ordinary byte.
+func projectBaseName(root string) string {
+	root = strings.TrimRight(root, `/\`)
+	if index := strings.LastIndexAny(root, `/\`); index >= 0 {
+		return root[index+1:]
+	}
+	return root
 }
 
 // clean collapses whitespace and truncates on a rune boundary, so a multi-line
@@ -429,6 +526,7 @@ func (l Layout) describe(dir, name, projectRoot string) (SessionRef, bool) {
 	}
 
 	return SessionRef{
+		Agent:       l.Name(),
 		NativeID:    strings.TrimSuffix(name, ".jsonl"),
 		ProjectPath: projectRoot,
 		Title:       s.Title(projectRoot, info.ModTime()),

@@ -36,7 +36,7 @@ import (
 // Fingerprint is what a push records alongside a session.
 //
 // It holds paths and digests only, never file contents, so it does not turn
-// AgentSync into a code sync tool (BR-08).
+// CtxHop into a code sync tool (BR-08).
 type Fingerprint struct {
 	Head    string            `json:"head"`
 	Branch  string            `json:"branch"`

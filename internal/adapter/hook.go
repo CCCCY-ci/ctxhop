@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CCCCY-ci/agentsync/internal/atomicfile"
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 	"runtime"
 	"strings"
 )
@@ -21,7 +21,7 @@ import (
 // renamed - and it never mistakes a hook the user wrote for one of ours. The
 // flag is also meaningful: it tells `push` it was invoked automatically, so it
 // can stay quiet.
-const hookMarker = "--agentsync-hook"
+const hookMarker = "--ctxhop-hook"
 
 // hookEvent is the agent's session lifecycle event we attach to. Confirmed
 // against the agent's own list of recognised events.
@@ -72,7 +72,7 @@ func (l Layout) SettingsPath() string {
 	return filepath.Join(l.Home, "settings.json")
 }
 
-// InstallHook registers a SessionEnd hook that runs `agentsync push`.
+// InstallHook registers a SessionEnd hook that runs `ctxhop push`.
 //
 // Idempotent: a second call updates the command if the executable moved and
 // otherwise changes nothing. Hooks belonging to anyone else are preserved

@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 )
 
 // ErrNotInstalled is returned by Detect when the agent is absent from this
@@ -24,22 +26,22 @@ import (
 // produce an error message or affect any other agent (§9.2).
 var ErrNotInstalled = errors.New("adapter: agent not installed")
 
-// Compatibility expresses how far we trust ourselves with a given agent
-// version. Agents ship frequently, so an unknown version must not stop the tool
-// entirely — it only restricts the operations that could damage data (§9.9,
-// BR-12).
+// Compatibility expresses whether the adapter can safely handle the session
+// structure it actually observed. Agent versions are diagnostic metadata only;
+// a release is not limited merely because its version is new or unrecognised.
 type Compatibility int
 
 const (
 	// CompatUnknown means compatibility has not been evaluated yet.
 	CompatUnknown Compatibility = iota
 
-	// CompatFull means this agent version is verified. All operations allowed.
+	// CompatFull means the observed session fields are understood. All
+	// operations are allowed.
 	CompatFull
 
-	// CompatLimited means the version is unrecognised but sessions still parse.
-	// Pushing and backup continue; restoring requires explicit user
-	// confirmation because writing is the operation that can destroy data.
+	// CompatLimited means the adapter has only partial structural evidence.
+	// Backup may continue, but restoring requires explicit user confirmation
+	// because writing is the operation that can destroy data.
 	CompatLimited
 
 	// CompatStopped means sessions cannot be parsed or fail validation. The
@@ -50,17 +52,24 @@ const (
 
 // Installation describes a detected agent on the local machine.
 type Installation struct {
-	// Version is the agent's reported version, empty if it could not be read.
+	// Version is the agent version observed in its local session records, empty
+	// if no record exposed one. It is diagnostic metadata only; it never decides
+	// compatibility.
 	Version string
+
+	// VersionSource explains where Version came from. Adapters must not run an
+	// agent executable just to obtain a version, so the built-in adapters use
+	// "session-record" or "unavailable" here.
+	VersionSource string
 
 	// DataDir is the root directory holding the agent's local state.
 	DataDir string
 
-	// Compatibility is the level this version was classified into.
+	// Compatibility is the level determined from the observed session fields.
 	Compatibility Compatibility
 
 	// CompatibilityReason explains the classification in user-facing terms and
-	// is surfaced by `agentsync doctor`. It must never contain paths, project
+	// is surfaced by `ctxhop doctor`. It must never contain paths, project
 	// names or session content, so that users can paste diagnostics into public
 	// issues (§9.9, BR-09).
 	CompatibilityReason string
@@ -71,6 +80,10 @@ type Installation struct {
 // Discovery is deliberately cheap: listing sessions must not require reading or
 // decrypting session bodies.
 type SessionRef struct {
+	// Agent is the stable adapter name that owns this session, for example
+	// "claude-code" or "codex". It is empty in legacy local/test values.
+	Agent string
+
 	// NativeID is the agent's own identifier for this session.
 	NativeID string
 
@@ -90,12 +103,16 @@ type SessionRef struct {
 
 	// Size is the on-disk size of the session in bytes.
 	Size int64
+
+	// localPath is populated only by local discovery. It is intentionally
+	// private so machine-specific paths cannot cross the metadata boundary.
+	localPath string
 }
 
 // Adapter is the contract every supported agent implementation satisfies.
 //
 // Implementations must never lock, move or modify files the agent is using, and
-// must leave the agent fully functional if AgentSync is removed (§4 P2, P5,
+// must leave the agent fully functional if CtxHop is removed (§4 P2, P5,
 // BR-06, BR-13).
 type Adapter interface {
 	// Name returns a short, stable identifier such as "claude-code".
@@ -149,6 +166,33 @@ type Adapter interface {
 	TouchedFiles(ctx context.Context, session []byte) ([]string, error)
 }
 
+// SessionLayout is the command-facing contract for an installed coding agent.
+//
+// The syncflow package only needs a small set of operations: discover local
+// sessions, read one complete snapshot, and install a localised snapshot.
+// Keeping this separate from Adapter preserves the richer compatibility
+// contract above while allowing the CLI to support more than one agent without
+// coupling it to a particular on-disk layout.
+type SessionLayout interface {
+	Name() string
+	Detect(context.Context) (Installation, error)
+	DiscoverSessions(projectRoot string) ([]SessionRef, error)
+	ReadSession(SessionRef) (SessionData, error)
+	WriteSession(projectRoot, sessionID string, records [][]byte) error
+	ReplaceSession(projectRoot, sessionID string, records [][]byte) error
+	TouchedFiles(records [][]byte, projectRoot string) []FileAccess
+}
+
+// AgentSessions pairs an installed agent with the sessions it owns for one
+// project. Sessions from different agents remain separate at this boundary;
+// the remote summary carries the agent name so resume can select the same
+// layout on another device.
+type AgentSessions struct {
+	Layout       SessionLayout
+	Installation Installation
+	Sessions     []SessionRef
+}
+
 // ProjectPaths pairs a project's root directory with the identity the agent
 // uses to refer to it, so Rewrite can map one machine's view onto another's.
 type ProjectPaths struct {
@@ -165,16 +209,38 @@ type ProjectPaths struct {
 //
 // Where available, a hook is preferred over filesystem watching: it fires at a
 // well-defined moment, needs no resident process, and the user can remove it to
-// uninstall AgentSync completely (§8.5, §4 P5).
+// uninstall CtxHop completely (spec §8.5, §4 P5).
 type HookInstaller interface {
-	// InstallHook registers a hook that runs `agentsync push` when a session
+	// InstallHook registers a hook that runs `ctxhop push` when a session
 	// ends. It must be idempotent and must not disturb hooks installed by
 	// anyone else.
-	InstallHook(ctx context.Context, executable string) error
+	InstallHook(executable string) error
 
 	// RemoveHook removes only the hook this tool installed.
-	RemoveHook(ctx context.Context) error
+	RemoveHook() error
 
 	// HookInstalled reports whether our hook is currently registered.
-	HookInstalled(ctx context.Context) (bool, error)
+	HookInstalled() (bool, error)
+}
+
+// EnvironmentCapable is an optional Adapter capability. Core session,
+// workspace, Git, and no-Git synchronization never requires it; it is only
+// used for environment components whose on-disk format belongs to one Agent.
+type EnvironmentCapable interface {
+	Environment() environment.Provider
+}
+
+// EnvironmentFor returns the environment provider owned by a layout. Layouts
+// that do not expose one receive a fail-closed provider instead of causing the
+// command layer to branch on an Agent name.
+func EnvironmentFor(layout SessionLayout) environment.Provider {
+	if layout != nil {
+		if capable, ok := layout.(EnvironmentCapable); ok {
+			if provider := capable.Environment(); provider != nil {
+				return provider
+			}
+		}
+		return environment.UnsupportedProvider{Agent: layout.Name()}
+	}
+	return environment.UnsupportedProvider{}
 }

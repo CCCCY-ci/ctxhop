@@ -1,19 +1,35 @@
 # === Build output ===
-# Anchored to the repository root: a bare "agentsync" would also match the
-# cmd/agentsync source directory.
+# Anchored to the repository root: bare command names would also match the
+# cmd/ctxhop source directory.
 /dist/
 /build/
-/agentsync
-/agentsync.exe
+/ctxhop
+/ctxhop.exe
 *.exe
 *.dll
 *.so
 *.dylib
 *.a
+.claude/
+# Keep release and CI workflows versioned; other generated GitHub metadata may
+# remain local unless it is explicitly added later.
+.github/*
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+docs/
+# Keep only the build and release entry points versioned. Ad-hoc local scripts
+# remain ignored.
+scripts/*
+!scripts/
+!scripts/build.sh
+!scripts/build.ps1
+!scripts/release.sh
+!scripts/render-packages.sh
+examples/
 
 # === Test code and data ===
-# Tests stay local and are never committed.
-**/*_test.go
+# Repository regression tests are versioned; local fixtures remain ignored.
 **/testdata/
 **/__snapshots__/
 *.test
@@ -43,6 +59,9 @@ config.local.*
 *.credentials.json
 *credentials*
 *secret*
+# The encrypted local secret-storage implementation is versioned source, not user data.
+!internal/config/secrets.go
+!internal/config/secrets_test.go
 *.pem
 *.key
 *.p12
@@ -57,6 +76,7 @@ id_rsa*
 *.jsonl
 /scratch/
 /tmp/
+/.test-tmp/
 
 # === Editors and OS ===
 .idea/

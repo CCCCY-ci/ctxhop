@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: VERSION="${GITHUB_REF_NAME#v}" bash ./scripts/release.sh
+      - name: publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_args=(
+            "${GITHUB_REF_NAME}"
+            dist/release/CtxHop-Setup_*
+            dist/release/ctxhop_*.zip
+            dist/release/checksums.txt
+            dist/release/packages/*
+            --verify-tag
+            --generate-notes
+          )
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "${release_args[@]}"

@@ -1,0 +1,34 @@
+class Ctxhop < Formula
+  desc "Encrypted cross-device sync for AI coding agent sessions"
+  homepage "https://github.com/CCCCY-ci/ctxhop"
+  version "@VERSION@"
+  license "Apache-2.0"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/CCCCY-ci/ctxhop/releases/download/v@VERSION@/ctxhop_@VERSION@_darwin_arm64.zip"
+      sha256 "@DARWIN_ARM64_ARCHIVE_SHA256@"
+    else
+      url "https://github.com/CCCCY-ci/ctxhop/releases/download/v@VERSION@/ctxhop_@VERSION@_darwin_amd64.zip"
+      sha256 "@DARWIN_AMD64_ARCHIVE_SHA256@"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/CCCCY-ci/ctxhop/releases/download/v@VERSION@/ctxhop_@VERSION@_linux_arm64.zip"
+      sha256 "@LINUX_ARM64_ARCHIVE_SHA256@"
+    else
+      url "https://github.com/CCCCY-ci/ctxhop/releases/download/v@VERSION@/ctxhop_@VERSION@_linux_amd64.zip"
+      sha256 "@LINUX_AMD64_ARCHIVE_SHA256@"
+    end
+  end
+
+  def install
+		bin.install "ctxhop"
+  end
+
+  test do
+		assert_match "ctxhop", shell_output("#{bin}/ctxhop version")
+  end
+end
