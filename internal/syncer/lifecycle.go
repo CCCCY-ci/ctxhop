@@ -6,8 +6,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
+)
+
+const (
+	remoteDeleteWorkers  = 8
+	remoteDeleteAttempts = 3
+	remoteDeleteBackoff  = 250 * time.Millisecond
 )
 
 // ProjectRemotePrefix returns the slash-terminated namespace for one project.
@@ -115,15 +123,122 @@ func deleteRemotePrefix(ctx context.Context, store remote.Remote, prefix string)
 	}
 	sort.Strings(ordered)
 
+	return deleteRemoteObjects(ctx, store, ordered)
+}
+
+func deleteRemoteObjects(ctx context.Context, store remote.Remote, keys []string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("syncer: delete remote objects: %w", err)
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	deleteCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	workers := remoteDeleteWorkers
+	if len(keys) < workers {
+		workers = len(keys)
+	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	var stateMu sync.Mutex
 	removed := 0
-	for _, key := range ordered {
-		if err := ctx.Err(); err != nil {
-			return removed, fmt.Errorf("syncer: delete remote objects: %w", err)
+	var firstErr error
+
+	worker := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-deleteCtx.Done():
+				return
+			case key, ok := <-jobs:
+				if !ok {
+					return
+				}
+				if err := deleteRemoteObject(deleteCtx, store, key); err != nil {
+					stateMu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("syncer: delete remote object %q: %w", key, err)
+						cancel()
+					}
+					stateMu.Unlock()
+					continue
+				}
+				stateMu.Lock()
+				removed++
+				stateMu.Unlock()
+			}
 		}
-		if err := store.Delete(ctx, key); err != nil {
-			return removed, fmt.Errorf("syncer: delete remote object %q: %w", key, err)
+	}
+
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+
+	for _, key := range keys {
+		select {
+		case jobs <- key:
+		case <-deleteCtx.Done():
+			break
 		}
-		removed++
+		if deleteCtx.Err() != nil {
+			break
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if firstErr != nil {
+		return removed, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return removed, fmt.Errorf("syncer: delete remote objects: %w", err)
 	}
 	return removed, nil
+}
+
+func deleteRemoteObject(ctx context.Context, store remote.Remote, key string) error {
+	var lastErr error
+	for attempt := 0; attempt < remoteDeleteAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := store.Delete(ctx, key)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt+1 == remoteDeleteAttempts || !retryableDeleteError(ctx, err) {
+			return err
+		}
+		if err := waitForDeleteRetry(ctx, remoteDeleteBackoff*time.Duration(1<<attempt)); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func retryableDeleteError(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	return errors.Is(err, remote.ErrNetwork) ||
+		errors.Is(err, remote.ErrTransient) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func waitForDeleteRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
