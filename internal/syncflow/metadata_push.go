@@ -66,7 +66,7 @@ func (p QueuedPusher) PushWithMetadataAt(ctx context.Context, key syncer.QueueKe
 	if err := executor.PublishMetadata(ctx, next, payload); err != nil {
 		return next, p.recordMetadataPushFailure(ctx, key, err, now)
 	}
-	if err := p.queue.Complete(ctx, key); err != nil {
+	if err := completeQueueTask(ctx, p.queue, key); err != nil {
 		return next, fmt.Errorf("%w: complete task: %w", ErrQueueUpdate, err)
 	}
 	return next, nil

@@ -48,10 +48,10 @@ type pushSummary struct {
 }
 
 func (s *pushSummary) fail(stage string, err error) {
-	s.failContext("", "", stage, err)
+	s.failContext("", stage, err)
 }
 
-func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
+func (s *pushSummary) failContext(agent, stage string, err error) {
 	s.Failed++
 	if errors.Is(err, syncer.ErrQueueItemBlocked) {
 		stage = "queue-blocked"
@@ -79,7 +79,7 @@ func (s *pushSummary) failContext(agent, sessionID, stage string, err error) {
 		s.failureDetails += "\n"
 	}
 	s.failureDetails += detail
-	logPushFailure(agent, sessionID, stage, classText, err)
+	logPushFailure(agent, stage, classText, err)
 }
 
 func pushFailureStageHasClass(stage string) bool {
@@ -391,10 +391,10 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, ref adapter.SessionRef, options pushSessionOptions) (summary pushSummary) {
 	started := time.Now()
 	defer func() {
-		logPushSessionFinished(layout.Name(), ref.NativeID, summary, time.Since(started))
+		logPushSessionFinished(layout.Name(), summary, time.Since(started))
 	}()
 	fail := func(stage string, err error) {
-		summary.failContext(layout.Name(), ref.NativeID, stage, err)
+		summary.failContext(layout.Name(), stage, err)
 	}
 	if err := ctx.Err(); err != nil {
 		fail("context", err)

@@ -67,14 +67,19 @@ func TestLoggerDoesNotCreateFilesBeforeFirstRecord(t *testing.T) {
 }
 
 func TestSanitizeErrorRedactsSensitiveValuesAndBoundsOutput(t *testing.T) {
-	err := &testError{message: `request failed Access key ID=abc SecretAccessKey: "def" Session-Token=ghi password=secret`}
+	err := &testError{message: `request failed Access key ID=abc SecretAccessKey: "def" Session-Token=ghi password=secret Delete "https://secret.example.test/a/b": path D:\\private\\project\\file quoted "C:\\private folder\\file" /home/private/project/file`}
 	got := SanitizeError(err)
-	for _, secret := range []string{"abc", "def", "ghi", "secret"} {
+	for _, secret := range []string{"abc", "def", "ghi", "secret", "secret.example.test", "D:\\private\\project", "private folder", "/home/private/project"} {
 		if strings.Contains(got, secret) {
 			t.Errorf("sanitized error contains secret %q: %s", secret, got)
 		}
 	}
-	if !strings.Contains(got, "<redacted>") {
+	for _, marker := range []string{"<redacted>", "<redacted-url>", "<redacted-path>"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("sanitized error does not show %s: %s", marker, got)
+		}
+	}
+	if strings.Contains(got, "https://") || strings.Contains(got, "http://") {
 		t.Fatalf("sanitized error does not show redaction: %s", got)
 	}
 	if len(got) > maxErrorBytes+3 {

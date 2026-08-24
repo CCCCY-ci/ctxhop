@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
@@ -413,8 +412,8 @@ func (p RetryPolicy) Delay(attempt uint32) (time.Duration, error) {
 
 // QueueStore persists queue metadata below a local configuration root.
 type QueueStore struct {
-	root string
-	mu   *sync.Mutex
+	root        string
+	processLock chan struct{}
 }
 
 // NewQueueStore validates a local queue root.
@@ -426,7 +425,9 @@ func NewQueueStore(root string) (QueueStore, error) {
 	if err != nil {
 		return QueueStore{}, fmt.Errorf("syncer: resolve queue state root: %w", err)
 	}
-	return QueueStore{root: abs, mu: &sync.Mutex{}}, nil
+	processLock := make(chan struct{}, 1)
+	processLock <- struct{}{}
+	return QueueStore{root: abs, processLock: processLock}, nil
 }
 
 func (s QueueStore) acquire(ctx context.Context) (func(), error) {
@@ -434,9 +435,13 @@ func (s QueueStore) acquire(ctx context.Context) (func(), error) {
 		return nil, errors.New("syncer: context is required")
 	}
 	unlockProcess := func() {}
-	if s.mu != nil {
-		s.mu.Lock()
-		unlockProcess = s.mu.Unlock
+	if s.processLock != nil {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("syncer: acquire queue process lock: %w", ctx.Err())
+		case <-s.processLock:
+			unlockProcess = func() { s.processLock <- struct{}{} }
+		}
 	}
 	_, err := s.filePath()
 	if err != nil {

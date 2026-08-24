@@ -27,6 +27,10 @@ const (
 )
 
 var sensitiveValuePattern = regexp.MustCompile(`(?i)\b(access[_ -]?key(?:[_ -]?id)?|secret[_ -]?access[_ -]?key|session[_ -]?token|passphrase|password|authorization|x-amz-security-token)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)`)
+var quotedLocalPathPattern = regexp.MustCompile(`(?i)(?:"(?:[a-z]:[\\/]|\\\\|/)[^"]*"|'(?:[a-z]:[\\/]|\\\\|/)[^']*')`)
+var remoteURLPattern = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>]+`)
+var windowsPathPattern = regexp.MustCompile(`(?i)(?:[a-z]:[\\/]|\\\\)[^\s"'<>]+`)
+var unixPathPattern = regexp.MustCompile(`(?i)(^|[\s("'=:/])/(?:[^/\s"'<>]+/)*[^/\s"'<>]+`)
 
 // Logger writes one-line structured records to the current local-day file.
 // Logging is best effort: a filesystem problem must never change the result
@@ -114,8 +118,13 @@ func SanitizeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	value := strings.Join(strings.Fields(err.Error()), " ")
+	value := err.Error()
 	value = sensitiveValuePattern.ReplaceAllString(value, `${1}${2}<redacted>`)
+	value = quotedLocalPathPattern.ReplaceAllString(value, "<redacted-path>")
+	value = remoteURLPattern.ReplaceAllString(value, "<redacted-url>")
+	value = windowsPathPattern.ReplaceAllString(value, "<redacted-path>")
+	value = unixPathPattern.ReplaceAllString(value, `${1}<redacted-path>`)
+	value = strings.Join(strings.Fields(value), " ")
 	if len(value) > maxErrorBytes {
 		value = value[:maxErrorBytes] + "..."
 	}

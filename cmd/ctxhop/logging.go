@@ -36,7 +36,7 @@ func finishCommandLogging(args []string, err error) {
 	)
 }
 
-func logPushFailure(agent, sessionID, stage, class string, err error) {
+func logPushFailure(agent, stage, class string, err error) {
 	if commandLogger == nil {
 		return
 	}
@@ -47,9 +47,6 @@ func logPushFailure(agent, sessionID, stage, class string, err error) {
 	}
 	if agent != "" {
 		args = append(args, "agent", agent)
-	}
-	if sessionID != "" {
-		args = append(args, "session_id", sessionID)
 	}
 	commandLogger.Error("push_failure", args...)
 }
@@ -73,7 +70,7 @@ func logPushFinished(summary pushSummary, workspace bool) {
 	)
 }
 
-func logPushSessionFinished(agent, sessionID string, summary pushSummary, duration time.Duration) {
+func logPushSessionFinished(agent string, summary pushSummary, duration time.Duration) {
 	if commandLogger == nil {
 		return
 	}
@@ -84,7 +81,6 @@ func logPushSessionFinished(agent, sessionID string, summary pushSummary, durati
 	commandLogger.Info(
 		"session_push_finished",
 		"agent", agent,
-		"session_id", sessionID,
 		"result", result,
 		"duration_ms", duration.Milliseconds(),
 	)

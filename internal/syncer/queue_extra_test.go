@@ -166,6 +166,32 @@ func TestQueueStoreWrapperErrorsAndReadFailures(t *testing.T) {
 	}
 }
 
+func TestQueueStoreAcquireHonorsContextWhileProcessLockIsHeld(t *testing.T) {
+	store, err := NewQueueStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := store.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := store.acquire(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		release()
+		t.Fatalf("blocked acquire error = %v, want context.DeadlineExceeded", err)
+	}
+	release()
+
+	secondRelease, err := store.acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	secondRelease()
+}
+
 func TestQueueSnapshotReopensOnlyExcludedFailures(t *testing.T) {
 	key, err := NewQueueKey("p", "s", "d")
 	if err != nil {

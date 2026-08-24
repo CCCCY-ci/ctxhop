@@ -170,3 +170,28 @@ func TestQueuedPusherTreatsAlreadyCompletedQueueTaskAsSuccess(t *testing.T) {
 		t.Fatalf("queue after idempotent completion = %+v", snapshot.Items)
 	}
 }
+
+func TestQueuedPusherWithMetadataTreatsAlreadyCompletedQueueTaskAsSuccess(t *testing.T) {
+	fixture := newQueueUpdateFixture(t)
+	completed := false
+	fixture.remote.after = func() {
+		if completed {
+			return
+		}
+		completed = true
+		if err := fixture.queue.Complete(context.Background(), fixture.key); err != nil {
+			t.Fatalf("concurrent queue completion: %v", err)
+		}
+	}
+	now := time.Date(2026, time.August, 14, 0, 0, 0, 0, time.UTC)
+	if _, err := fixture.pusher.PushWithMetadataAt(context.Background(), fixture.key, fixture.stream, fixture.executor, fixture.cursor, []byte(`{"fingerprint":"opaque"}`), now); err != nil {
+		t.Fatalf("PushWithMetadataAt: %v", err)
+	}
+	snapshot, err := fixture.queue.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Items) != 0 {
+		t.Fatalf("queue after idempotent metadata completion = %+v", snapshot.Items)
+	}
+}
