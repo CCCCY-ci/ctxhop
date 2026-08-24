@@ -35,7 +35,7 @@ func TestInstallerWelcomeEnvironmentFindsInstalledCommand(t *testing.T) {
 
 func TestInstallerWelcomeCommandQuotesPathsWithSpaces(t *testing.T) {
 	targetPath := filepath.Join(`C:\Users\Ctx Hop`, ".ctxhop", "bin", "ctxhop.exe")
-	want := `""` + targetPath + `" --installer-welcome"`
+	want := `mode con: cols=120 lines=32 >nul 2>&1 & "` + targetPath + `" --installer-welcome`
 	if got := installerWelcomeCommandLine(targetPath); got != want {
 		t.Fatalf("welcome command = %q, want %q", got, want)
 	}

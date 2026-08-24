@@ -184,7 +184,7 @@ func launchInstallerWelcome(targetPath string) error {
 }
 
 func installerWelcomeCommandLine(targetPath string) string {
-	return fmt.Sprintf(`""%s" --installer-welcome"`, targetPath)
+	return fmt.Sprintf(`mode con: cols=120 lines=32 >nul 2>&1 & "%s" --installer-welcome`, targetPath)
 }
 
 func installerWelcomeEnvironment(targetPath string) []string {
