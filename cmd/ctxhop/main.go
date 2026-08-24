@@ -74,6 +74,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) == 1 && args[0] == installerWelcomeArgument {
+		return writeInstallerWelcome(os.Stdout)
+	}
 	if len(args) == 0 {
 		return runDefaultEntry()
 	}
