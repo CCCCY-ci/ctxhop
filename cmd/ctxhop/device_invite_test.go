@@ -16,6 +16,7 @@ func TestDeviceInviteInitializesSecondDeviceInSameDomain(t *testing.T) {
 	firstConfig := t.TempDir()
 	invitePath := filepath.Join(t.TempDir(), "ctxhop-invite.json")
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
 
 	firstInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
@@ -86,6 +87,7 @@ func TestDeviceInviteTamperingDoesNotSaveSecondConfiguration(t *testing.T) {
 	firstConfig := t.TempDir()
 	invitePath := filepath.Join(t.TempDir(), "ctxhop-invite.json")
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
 
 	firstInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")

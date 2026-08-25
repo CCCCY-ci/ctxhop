@@ -61,6 +61,50 @@ func TestConfigRoundTrip(t *testing.T) {
 	if got.Agents["claude-code"] != want.Agents["claude-code"] {
 		t.Errorf("agents = %+v", got.Agents)
 	}
+	if got.HookScope != want.HookScope {
+		t.Errorf("hook scope = %q, want %q", got.HookScope, want.HookScope)
+	}
+	if got.SyncConfig != want.SyncConfig {
+		t.Errorf("sync config = %q, want %q", got.SyncConfig, want.SyncConfig)
+	}
+}
+
+func TestConfigSyncModeRoundTripAndLegacyDefault(t *testing.T) {
+	dir := t.TempDir()
+	want := fullConfig()
+	want.SyncConfig = ConfigSyncDisabled
+	if err := want.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SyncConfig != ConfigSyncDisabled || got.SyncConfigEnabled() {
+		t.Fatalf("disabled sync config = %q, enabled=%v", got.SyncConfig, got.SyncConfigEnabled())
+	}
+
+	legacy := filepath.Join(t.TempDir(), configFile)
+	if err := os.WriteFile(legacy, []byte(`{"version":1,"remote":{"type":"dir","path":"remote"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyConfig, err := Load(filepath.Dir(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyConfig.SyncConfigEnabled() == false {
+		t.Fatal("legacy configuration unexpectedly disabled filtered Agent configuration")
+	}
+}
+
+func TestConfigRejectsUnknownSyncMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, configFile), []byte(`{"version":1,"remote":{"type":"dir","path":"remote"},"syncConfig":"unexpected"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "unsupported config sync mode") {
+		t.Fatalf("Load error = %v", err)
+	}
 }
 
 // TestTheConfigFileHoldsNoSecret is the single most important assertion in this

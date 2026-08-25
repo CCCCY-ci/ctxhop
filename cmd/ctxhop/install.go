@@ -221,6 +221,24 @@ func retryInstallFile(operation func() error) error {
 	return err
 }
 
+// removeInstallDirectory removes a CtxHop-owned local directory. The bounded
+// retry absorbs short Windows Defender/file-indexer locks without turning an
+// uninstall into an unbounded wait.
+func removeInstallDirectory(path string) error {
+	err := os.RemoveAll(path)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	for _, delay := range []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 1600 * time.Millisecond} {
+		time.Sleep(delay)
+		err = os.RemoveAll(path)
+		if err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
 func sameInstallPath(first, second string) bool {
 	first, _ = filepath.Abs(first)
 	second, _ = filepath.Abs(second)

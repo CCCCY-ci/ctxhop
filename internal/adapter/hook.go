@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 	"runtime"
 	"strings"
+
+	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
 
 // hookMarker identifies the hook entry belonging to this tool.
@@ -27,7 +27,7 @@ const hookMarker = "--ctxhop-hook"
 // against the agent's own list of recognised events.
 const hookEvent = "SessionEnd"
 
-// hookCommand builds the shell command line the agent will run.
+// hookCommand builds the session-only shell command line the agent will run.
 //
 // The path is wrapped in double quotes so a directory containing a space does
 // not split into two arguments. It must be shell quoting, not Go quoting: %q
@@ -44,6 +44,12 @@ const hookEvent = "SessionEnd"
 // because the escaping rules differ between shells and a command line we cannot
 // be sure of is worse than no hook at all.
 func hookCommand(executable string) (string, error) {
+	return hookCommandWithWorkspace(executable, false)
+}
+
+// hookCommandWithWorkspace adds the explicit workspace flag used by an
+// automatic hook configured for session-plus-workspace synchronization.
+func hookCommandWithWorkspace(executable string, includeWorkspace bool) (string, error) {
 	executable = strings.TrimSpace(executable)
 	if executable == "" {
 		return "", errors.New("adapter: no executable path for the hook")
@@ -56,7 +62,11 @@ func hookCommand(executable string) (string, error) {
 		return "", fmt.Errorf("adapter: executable path cannot be quoted safely: %q", executable)
 	}
 
-	command := `"` + executable + `" push ` + hookMarker
+	arguments := "push " + hookMarker
+	if includeWorkspace {
+		arguments = "push --workspace " + hookMarker
+	}
+	command := `"` + executable + `" ` + arguments
 	if runtime.GOOS == "windows" {
 		command = "& " + command
 	}
@@ -77,8 +87,8 @@ func (l Layout) SettingsPath() string {
 // Idempotent: a second call updates the command if the executable moved and
 // otherwise changes nothing. Hooks belonging to anyone else are preserved
 // untouched - this is the user's file, and we are a guest in it (spec §4.9).
-func (l Layout) InstallHook(executable string) error {
-	command, err := hookCommand(executable)
+func (l Layout) InstallHook(executable string, includeWorkspace ...bool) error {
+	command, err := hookCommandWithWorkspace(executable, hookIncludesWorkspace(includeWorkspace))
 	if err != nil {
 		return err
 	}
@@ -114,6 +124,10 @@ func (l Layout) InstallHook(executable string) error {
 	})
 	setHookGroups(settings, groups)
 	return l.saveSettings(settings)
+}
+
+func hookIncludesWorkspace(value []bool) bool {
+	return len(value) > 0 && value[0]
 }
 
 // RemoveHook deletes only the entry this tool installed, leaving the rest of
@@ -352,7 +366,8 @@ func looksGenerated(item map[string]any) bool {
 	if end < 0 {
 		return false
 	}
-	return command[end+2:] == " push "+hookMarker
+	suffix := command[end+2:]
+	return suffix == " push "+hookMarker || suffix == " push --workspace "+hookMarker
 }
 
 // withoutOurCommand strips our entries, dropping groups left empty.

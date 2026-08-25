@@ -183,13 +183,6 @@ func readCodexConfigSettings(path string) (map[string]string, bool, bool) {
 	return values, len(values) != 0, true
 }
 
-func readCodexConfigFileSettings(root string) (map[string]string, bool, bool) {
-	if strings.TrimSpace(root) == "" {
-		return nil, false, true
-	}
-	return readCodexSettingsFile(filepath.Join(root, "config.toml"))
-}
-
 func readCodexProjectSettings(root string) (map[string]string, bool, bool) {
 	if strings.TrimSpace(root) == "" {
 		return nil, false, true
@@ -225,16 +218,17 @@ func safeCodexSettingValue(value string) bool {
 }
 
 // CaptureSessionSettings records only the small set of Codex settings that is
-// already present in structured session metadata. Without local config paths it
-// keeps the component project-scoped, not a copy of config.toml or an apply plan.
+// already present in structured session metadata. These settings belong to the
+// user's Codex installation, so the resulting component is always global.
 func CaptureSessionSettings(agent string, records [][]byte, projectID string) []ComponentContent {
 	return CaptureSessionSettingsWithSources(agent, "", "", records, projectID)
 }
 
 // CaptureSessionSettingsWithSources records the observed allowlisted settings
-// and chooses the narrowest useful scope. If the observed values are already
-// provided by the global config and the project config does not override one
-// of them, the component remains global. Otherwise it stays project-scoped.
+// as a global component. The project root is still accepted because the
+// environment provider also captures project-scoped MCP data, but a Codex
+// session's config.toml is user-level state and must not be copied into a
+// project's environment namespace.
 func CaptureSessionSettingsWithSources(agent, agentHome, projectRoot string, records [][]byte, projectID string) []ComponentContent {
 	if agent != "codex" || strings.TrimSpace(projectID) == "" {
 		return nil
@@ -247,39 +241,11 @@ func CaptureSessionSettingsWithSources(agent, agentHome, projectRoot string, rec
 	if err != nil {
 		return nil
 	}
-	scope, componentProjectID := codexSessionSettingsScope(values, agentHome, projectRoot, projectID)
-	component, err := NewComponentContent("settings", codexSessionSettingsName, scope, componentProjectID, "platform-specific", "application/json", payload)
+	component, err := NewComponentContent("settings", codexSessionSettingsName, "global", "", "platform-specific", "application/json", payload)
 	if err != nil {
 		return nil
 	}
 	return []ComponentContent{component}
-}
-
-func codexSessionSettingsScope(values map[string]string, agentHome, projectRoot, projectID string) (string, string) {
-	global, globalFound, globalSafe := readCodexConfigFileSettings(agentHome)
-	if !globalSafe || !globalFound || len(values) == 0 {
-		return "project", projectID
-	}
-	if len(global) != len(values) {
-		return "project", projectID
-	}
-	for key, value := range values {
-		if global[key] != value {
-			return "project", projectID
-		}
-	}
-	project, projectFound, projectSafe := readCodexProjectSettings(projectRoot)
-	if !projectSafe {
-		return "project", projectID
-	}
-	if projectFound {
-		for key, value := range project {
-			if observed, ok := values[key]; ok && observed != value {
-				return "project", projectID
-			}
-		}
-	}
-	return "global", ""
 }
 
 func hasObservedCodexSessionSettings(records [][]byte) bool {

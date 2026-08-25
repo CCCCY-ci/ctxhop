@@ -33,8 +33,11 @@ func removeUserPath(string) (bool, error) {
 	return false, nil
 }
 
-func removeInstalledExecutable(path string, _ bool) (bool, error) {
-	return false, os.Remove(path)
+func removeInstalledExecutable(path, configDir string, _ bool) (bool, error) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	return false, removeInstallDirectory(configDir)
 }
 
 func installPathMessage(dir string, pathReady bool) string {

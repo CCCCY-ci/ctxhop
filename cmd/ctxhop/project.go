@@ -377,6 +377,9 @@ func bindProject(c *config.Config, identity, root string) (bool, error) {
 	}
 	root = filepath.Clean(root)
 	for _, binding := range c.Projects.Bindings {
+		if binding.Identity == identity && strings.HasPrefix(identity, "manual:") && !sameProjectRoot(binding.LocalRoot, root) {
+			return false, errors.New("project bind: manual identity is already bound to another local root; use a unique --name for each project")
+		}
 		if !sameProjectRoot(binding.LocalRoot, root) {
 			continue
 		}

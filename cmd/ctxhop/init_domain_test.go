@@ -15,6 +15,7 @@ func TestInitDisplaysAndChecksDomainFingerprint(t *testing.T) {
 	firstConfig := t.TempDir()
 	claudeHome := filepath.Join(t.TempDir(), "missing-claude")
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
 
 	var firstOutput bytes.Buffer

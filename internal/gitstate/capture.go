@@ -730,7 +730,7 @@ func sensitivePath(value string) bool {
 	value = strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
 	for _, part := range strings.Split(value, "/") {
 		part = strings.TrimSpace(part)
-		if part == ".git" || part == ".env" || strings.HasPrefix(part, ".env.") || part == "credentials" || part == "secrets" || part == "cookies" || part == "token" || part == "tokens" {
+		if part == ".git" || part == ".env" || strings.HasPrefix(part, ".env.") || part == ".claude" || part == ".codex" || part == "credentials" || part == "secrets" || part == "cookies" || part == "token" || part == "tokens" {
 			return true
 		}
 		if strings.HasPrefix(part, "id_rsa") || strings.HasPrefix(part, "id_ed25519") {
@@ -741,6 +741,10 @@ func sensitivePath(value string) bool {
 				return true
 			}
 		}
+	}
+	base := filepath.Base(value)
+	if base == ".credentials.json" || base == "credentials.json" || base == ".auth.json" || base == "auth.json" || base == ".oauth.json" || base == "oauth.json" || base == ".claude.json" {
+		return true
 	}
 	return false
 }
@@ -757,22 +761,39 @@ func containsSensitiveContent(data []byte) bool {
 		"private_key",
 		"api_key",
 		"access_token",
+		"accesstoken",
 		"refresh_token",
+		"refreshtoken",
 		"session_token",
+		"sessiontoken",
+		"oauth_token",
+		"oauth_access_token",
+		"oauth_refresh_token",
+		"oauth_client_secret",
 	} {
 		if strings.Contains(text, marker) {
 			return true
 		}
 	}
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(line, "+"))
-		for _, key := range []string{"password", "passwd", "secret", "token", "authorization"} {
-			if strings.HasPrefix(line, key+"=") || strings.HasPrefix(line, key+":") || strings.HasPrefix(line, "\""+key+"\"") {
+		for _, key := range []string{"password", "passwd", "secret", "token", "authorization", "oauth", "credential", "credentials"} {
+			if sensitiveAssignment(line, key) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func sensitiveAssignment(line, key string) bool {
+	line = strings.TrimSpace(strings.TrimLeft(line, "+-"))
+	line = strings.TrimSpace(strings.TrimLeft(line, "{["))
+	if strings.HasPrefix(line, key+"=") || strings.HasPrefix(line, key+":") {
+		return true
+	}
+	quotedKey := `"` + key + `"`
+	remainder := strings.TrimSpace(strings.TrimPrefix(line, quotedKey))
+	return remainder != line && strings.HasPrefix(remainder, ":")
 }
 
 func sanitizeSubject(value string) string {

@@ -455,7 +455,9 @@ func unsafeFilePath(path string) bool {
 		}
 	}
 	base := filepath.Base(normalized)
-	if base == "credentials" || base == "secrets" || base == "cookies" || base == "cookie" {
+	if base == "credentials" || base == "secrets" || base == "cookies" || base == "cookie" ||
+		base == ".credentials.json" || base == "credentials.json" || base == ".auth.json" ||
+		base == "auth.json" || base == ".oauth.json" || base == "oauth.json" || base == ".claude.json" {
 		return true
 	}
 	for _, suffix := range []string{".pem", ".key", ".p12", ".pfx", ".kdbx"} {

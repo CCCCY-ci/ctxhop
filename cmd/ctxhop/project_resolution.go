@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -53,6 +54,9 @@ func resolveCurrentProject(ctx context.Context, c *config.Config, dir string) (p
 	if boundValue == "" {
 		return current, nil
 	}
+	if manualIdentityHasMultipleRoots(c, boundValue) {
+		return project.Project{}, fmt.Errorf("project: manual identity %q is bound to multiple local roots; unbind the duplicate or use a unique --name for each project", boundValue)
+	}
 
 	identity, err := project.IdentityFromValue(boundValue)
 	if err != nil {
@@ -61,6 +65,27 @@ func resolveCurrentProject(ctx context.Context, c *config.Config, dir string) (p
 	current.Identity = identity
 	current.Reason = ""
 	return current, nil
+}
+
+func manualIdentityHasMultipleRoots(c *config.Config, identity string) bool {
+	if c == nil || !strings.HasPrefix(identity, "manual:") {
+		return false
+	}
+	roots := make(map[string]struct{})
+	for _, binding := range c.Projects.Bindings {
+		if binding.Identity != identity {
+			continue
+		}
+		root := normalizedProjectRoot(binding.LocalRoot)
+		if root == "" {
+			continue
+		}
+		if filepath.VolumeName(root) != "" {
+			root = strings.ToLower(root)
+		}
+		roots[root] = struct{}{}
+	}
+	return len(roots) > 1
 }
 
 func projectBindingContains(bindingRoot, currentRoot string) bool {

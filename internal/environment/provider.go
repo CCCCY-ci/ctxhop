@@ -11,6 +11,34 @@ type CaptureResult struct {
 	Components []ComponentContent
 }
 
+// WithoutConfig removes Agent configuration from a capture while preserving
+// the session's other dependency evidence and portable components. In v1,
+// configuration means filtered settings and MCP transport intent; it never
+// means copying a raw config.toml or another complete user configuration file.
+func (r CaptureResult) WithoutConfig() CaptureResult {
+	filtered := CaptureResult{
+		References: make([]Reference, 0, len(r.References)),
+		Components: make([]ComponentContent, 0, len(r.Components)),
+	}
+	for _, reference := range r.References {
+		if isConfigKind(reference.Kind) {
+			continue
+		}
+		filtered.References = append(filtered.References, reference)
+	}
+	for _, component := range r.Components {
+		if isConfigKind(component.Component.Kind) {
+			continue
+		}
+		filtered.Components = append(filtered.Components, component)
+	}
+	return filtered
+}
+
+func isConfigKind(kind string) bool {
+	return kind == "mcp" || kind == "settings"
+}
+
 // Provider is the optional environment capability of an Agent adapter.
 //
 // Session, Git, and workspace synchronization remain Core capabilities and do

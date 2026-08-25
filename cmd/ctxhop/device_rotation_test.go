@@ -22,6 +22,7 @@ func TestDeviceRemoveRotatesKeyAndRevokesDevice(t *testing.T) {
 	remoteRoot := t.TempDir()
 	claudeHome := filepath.Join(t.TempDir(), "missing-claude")
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 
 	firstConfig := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
@@ -41,7 +42,7 @@ func TestDeviceRemoveRotatesKeyAndRevokesDevice(t *testing.T) {
 
 	secondConfig := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", secondConfig)
-	secondInput := strings.NewReader(oldPass + line + oldPass + line)
+	secondInput := strings.NewReader(oldPass + line + oldPass + line + "yes" + line)
 	if err := runInitWithIO([]string{"--invite", invitePath, "--device-name", "second", "--no-hook"}, secondInput, ioDiscard{}, "test-ctxhop"); err != nil {
 		t.Fatalf("second init: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestDeviceRemoveRotatesKeyAndRevokesDevice(t *testing.T) {
 	}
 	thirdConfig := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", thirdConfig)
-	thirdInput := strings.NewReader(newPass + line + newPass + line)
+	thirdInput := strings.NewReader(newPass + line + newPass + line + "yes" + line)
 	if err := runInitWithIO([]string{"--invite", invitePath, "--device-name", "third", "--no-hook"}, thirdInput, ioDiscard{}, "test-ctxhop"); err != nil {
 		t.Fatalf("third init after rotation: %v", err)
 	}
