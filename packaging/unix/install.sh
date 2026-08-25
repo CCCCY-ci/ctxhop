@@ -39,6 +39,11 @@ chmod 755 "$temporary_path"
 mv -f "$temporary_path" "$install_dir/ctxhop"
 trap - 0 1 2 3 15
 
+# Keep the Unix installation experience consistent with the Windows installer.
+# The welcome page is rendered by the installed binary so it uses the same
+# branding and version metadata on every supported platform.
+"$install_dir/ctxhop" --installer-welcome
+
 case ":${PATH-}:" in
 	*":$install_dir:"*)
 		printf 'CtxHop was installed at %s/ctxhop\n' "$install_dir"
