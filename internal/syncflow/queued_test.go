@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -53,7 +54,9 @@ func newQueuedFixture(t *testing.T, classify FailureClassifier) queuedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := remote.NewDir(t.TempDir())
+	backendRoot := t.TempDir()
+	cleanupQueuedTempRoot(t, backendRoot)
+	backend, err := remote.NewDir(backendRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +65,9 @@ func newQueuedFixture(t *testing.T, classify FailureClassifier) queuedFixture {
 		failures: 1,
 		err:      errors.New("remote unavailable"),
 	}
-	state, err := syncer.NewCursorStore(t.TempDir(), layout)
+	stateRoot := t.TempDir()
+	cleanupQueuedTempRoot(t, stateRoot)
+	state, err := syncer.NewCursorStore(stateRoot, layout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +81,9 @@ func newQueuedFixture(t *testing.T, classify FailureClassifier) queuedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queue, err := syncer.NewQueueStore(t.TempDir())
+	queueRoot := t.TempDir()
+	cleanupQueuedTempRoot(t, queueRoot)
+	queue, err := syncer.NewQueueStore(queueRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +104,21 @@ func newQueuedFixture(t *testing.T, classify FailureClassifier) queuedFixture {
 		remote:   failing,
 		cursor:   cursor,
 	}
+}
+
+func cleanupQueuedTempRoot(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			lastErr = os.RemoveAll(root)
+			if lastErr == nil || errors.Is(lastErr, os.ErrNotExist) {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Errorf("remove queued test temp root: %v", lastErr)
+	})
 }
 
 func TestQueuedPusherBackoffShortCircuitAndSuccessfulCleanup(t *testing.T) {

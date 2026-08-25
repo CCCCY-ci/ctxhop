@@ -413,6 +413,12 @@ func safeClaudeMCPURL(value string) (string, bool) {
 }
 
 func readClaudeJSONFile(path string) (map[string]json.RawMessage, bool, bool) {
+	// Claude Code stores login material separately from its user/project
+	// configuration. Never accept a credentials/auth file as a configuration
+	// source, even if a future caller supplies such a path accidentally.
+	if isClaudeAuthenticationFile(path) {
+		return nil, true, false
+	}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, false, true
@@ -429,6 +435,15 @@ func readClaudeJSONFile(path string) (map[string]json.RawMessage, bool, bool) {
 		return nil, true, false
 	}
 	return document, true, true
+}
+
+func isClaudeAuthenticationFile(path string) bool {
+	switch strings.ToLower(filepath.Base(filepath.Clean(path))) {
+	case ".credentials.json", "credentials.json", ".auth.json", "auth.json", ".oauth.json", "oauth.json":
+		return true
+	default:
+		return false
+	}
 }
 
 func claudeMCPServers(document map[string]json.RawMessage) (map[string]json.RawMessage, bool, bool) {

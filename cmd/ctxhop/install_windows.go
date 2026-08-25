@@ -86,21 +86,26 @@ func removeUserPath(dir string) (bool, error) {
 	return true, nil
 }
 
-func removeInstalledExecutable(path string, running bool) (bool, error) {
+func removeInstalledExecutable(path, configDir string, running bool) (bool, error) {
 	if !running {
-		return false, retryInstallFile(func() error { return os.Remove(path) })
+		if err := retryInstallFile(func() error { return os.Remove(path) }); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		return false, removeInstallDirectory(configDir)
 	}
 
 	// Windows keeps the running executable open. Start a detached cmd helper
 	// that waits for this process to exit, removes the exact executable path,
-	// and then removes its own temporary script.
+	// removes the entire local CtxHop directory, and then removes its own
+	// temporary script.
 	script := strings.Join([]string{
 		"@echo off",
 		"setlocal EnableExtensions DisableDelayedExpansion",
 		"set /a attempts=0",
 		":retry",
 		"del /f /q \"%CTXHOP_UNINSTALL_TARGET%\" >nul 2>&1",
-		"if not exist \"%CTXHOP_UNINSTALL_TARGET%\" goto cleanup",
+		"rmdir /s /q \"%CTXHOP_UNINSTALL_CONFIG_DIR%\" >nul 2>&1",
+		"if not exist \"%CTXHOP_UNINSTALL_TARGET%\" if not exist \"%CTXHOP_UNINSTALL_CONFIG_DIR%\" goto cleanup",
 		"set /a attempts+=1",
 		"if %attempts% GEQ 20 goto cleanup",
 		"ping 127.0.0.1 -n 2 >nul",
@@ -130,12 +135,14 @@ func removeInstalledExecutable(path string, running bool) (bool, error) {
 
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(strings.ToUpper(entry), "CTXHOP_UNINSTALL_TARGET=") {
+		upper := strings.ToUpper(entry)
+		if strings.HasPrefix(upper, "CTXHOP_UNINSTALL_TARGET=") || strings.HasPrefix(upper, "CTXHOP_UNINSTALL_CONFIG_DIR=") {
 			continue
 		}
 		env = append(env, entry)
 	}
 	env = append(env, "CTXHOP_UNINSTALL_TARGET="+path)
+	env = append(env, "CTXHOP_UNINSTALL_CONFIG_DIR="+configDir)
 	command := exec.Command("cmd.exe", "/d", "/c", "call", temporaryPath)
 	command.Env = env
 	command.Stdout = io.Discard

@@ -64,6 +64,76 @@ type AgentState struct {
 	HookInstalled bool `json:"hookInstalled"`
 }
 
+// HookScope controls how much data an automatic SessionEnd push includes.
+//
+// Session is the safe default and preserves the historical hook behaviour:
+// the session and its filtered environment are uploaded. Workspace adds the
+// project files and Git state to that automatic push.
+type HookScope string
+
+const (
+	HookScopeSession   HookScope = "session"
+	HookScopeWorkspace HookScope = "workspace"
+)
+
+// Effective returns the backward-compatible value for configurations written
+// before hookScope existed.
+func (s HookScope) Effective() HookScope {
+	if s == HookScopeWorkspace {
+		return HookScopeWorkspace
+	}
+	return HookScopeSession
+}
+
+// Validate rejects a value that this build cannot use.
+func (s HookScope) Validate() error {
+	if s == "" {
+		return nil
+	}
+	if s != HookScopeSession && s != HookScopeWorkspace {
+		return fmt.Errorf("config: unsupported hook scope %q; expected session or workspace", s)
+	}
+	return nil
+}
+
+// ConfigSyncMode controls whether an adapter's filtered Agent configuration
+// components are included with a Session push. This is not a raw config.toml
+// switch: adapters still decide which settings and MCP transport intents are
+// safe to capture, and sensitive values are rejected before encryption.
+type ConfigSyncMode string
+
+const (
+	ConfigSyncEnabled  ConfigSyncMode = "enabled"
+	ConfigSyncDisabled ConfigSyncMode = "disabled"
+)
+
+// Effective returns the backward-compatible value for configurations written
+// before the config sync choice existed. An omitted value keeps the historical
+// behaviour and includes filtered Agent configuration.
+func (m ConfigSyncMode) Effective() ConfigSyncMode {
+	if m == ConfigSyncDisabled {
+		return ConfigSyncDisabled
+	}
+	return ConfigSyncEnabled
+}
+
+// Validate rejects a value that this build cannot use.
+func (m ConfigSyncMode) Validate() error {
+	if m == "" {
+		return nil
+	}
+	if m != ConfigSyncEnabled && m != ConfigSyncDisabled {
+		return fmt.Errorf("config: unsupported config sync mode %q; expected enabled or disabled", m)
+	}
+	return nil
+}
+
+// SyncConfigEnabled reports whether filtered Agent configuration should be
+// included in the next push.
+func (c *Config) SyncConfigEnabled() bool {
+	return c != nil && c.SyncConfig.Effective() == ConfigSyncEnabled
+}
+
 // Config is everything that survives between runs, minus the secrets.
 type Config struct {
 	Version int    `json:"version"`
@@ -84,6 +154,8 @@ type Config struct {
 	DomainGeneration uint64                `json:"domainGeneration,omitempty"`
 	Projects         Projects              `json:"projects"`
 	Agents           map[string]AgentState `json:"agents,omitempty"`
+	HookScope        HookScope             `json:"hookScope,omitempty"`
+	SyncConfig       ConfigSyncMode        `json:"syncConfig,omitempty"`
 }
 
 // Load reads the configuration from dir.
@@ -135,6 +207,12 @@ func (c *Config) check() error {
 	if err := c.Device.Mode.Validate(); err != nil {
 		return err
 	}
+	if err := c.HookScope.Validate(); err != nil {
+		return err
+	}
+	if err := c.SyncConfig.Validate(); err != nil {
+		return err
+	}
 	if c.Remote.Type == "" {
 		return errors.New("config: the configuration names no storage backend; run 'ctxhop init'")
 	}
@@ -167,5 +245,10 @@ func (c *Config) Save(dir string) error {
 
 // New returns a configuration with this build's version set.
 func New() *Config {
-	return &Config{Version: configVersion, Agents: map[string]AgentState{}}
+	return &Config{
+		Version:    configVersion,
+		Agents:     map[string]AgentState{},
+		HookScope:  HookScopeSession,
+		SyncConfig: ConfigSyncEnabled,
+	}
 }

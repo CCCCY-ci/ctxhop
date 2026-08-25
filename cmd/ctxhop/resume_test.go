@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +77,7 @@ func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupResumeRemoteRoot(t, remoteRoot)
 
 	keyfile, recovery, err := crypto.NewKeyfile("passphrase")
 	if err != nil || recovery == "" {
@@ -181,6 +185,206 @@ func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 	if !bytes.Contains(restored, []byte(`"content":"resume"`)) {
 		t.Fatalf("restored session = %s", restored)
 	}
+}
+
+func cleanupResumeRemoteRoot(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			lastErr = os.RemoveAll(root)
+			if lastErr == nil || errors.Is(lastErr, os.ErrNotExist) {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Errorf("remove resume test remote root: %v", lastErr)
+	})
+}
+
+func TestCollectResumeRoundTripsCodexContinuationBackToOriginalDevice(t *testing.T) {
+	projectA := t.TempDir()
+	projectB := t.TempDir()
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+	configA := t.TempDir()
+	configB := t.TempDir()
+	remoteRoot := t.TempDir()
+	store, err := remote.NewDir(remoteRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyfile, recovery, err := crypto.NewKeyfile("passphrase")
+	if err != nil || recovery == "" {
+		t.Fatalf("new keyfile = %v, recovery empty=%v", err, recovery == "")
+	}
+	if err := syncer.PublishKeyfile(context.Background(), store, keyfile); err != nil {
+		t.Fatal(err)
+	}
+	dataKey, err := keyfile.UnlockWithPassphrase("passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataKey.Close()
+	public, err := keyfile.IdentityPublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifierKey, err := dataKey.IdentifierKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const identity = "manual:codex-roundtrip"
+	cA := newCodexRoundTripConfig(t, configA, remoteRoot, public, identifierKey, "devicea", projectA, identity)
+	cB := newCodexRoundTripConfig(t, configB, remoteRoot, public, identifierKey, "deviceb", projectB, identity)
+	projectID, err := crypto.ProjectID(identifierKey, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const nativeID = "codex-roundtrip-session"
+	layoutA := adapter.CodexLayout{Home: homeA}
+	initial := [][]byte{
+		codexRoundTripRecord(t, "2026-08-25T10:00:00Z", "session_meta", map[string]any{
+			"id": nativeID, "cwd": projectA, "cli_version": "0.149.0",
+		}),
+		codexRoundTripRecord(t, "2026-08-25T10:01:00Z", "event_msg", map[string]any{"text": "from-a"}),
+	}
+	writeCodexRoundTripSession(t, layoutA, projectA, nativeID, initial)
+
+	installationA := adapter.Installation{DataDir: homeA, Version: "0.149.0", Compatibility: adapter.CompatFull}
+	spaceA := adapter.PathSpace{ProjectRoot: projectA, AgentHome: homeA}
+	pusherA := newCodexRoundTripPusher(t, configA)
+	refsA, err := layoutA.DiscoverSessions(projectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary := pushDiscoveredSessions(context.Background(), cA.Device.ID, identifierKey, projectID, layoutA, installationA, spaceA, store, public, pusherA, configA, projectA, refsA); summary.Pushed != 1 || summary.Failed != 0 {
+		t.Fatalf("device A initial push = %+v", summary)
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", homeB)
+	if _, err := collectResume(context.Background(), cB, configB, projectB, resumeOptions{session: nativeID, allowDivergent: true}, strings.NewReader("passphrase\n"), io.Discard); err != nil {
+		t.Fatalf("device B resume: %v", err)
+	}
+
+	layoutB := adapter.CodexLayout{Home: homeB}
+	installationB := adapter.Installation{DataDir: homeB, Version: "0.149.0", Compatibility: adapter.CompatFull}
+	spaceB := adapter.PathSpace{ProjectRoot: projectB, AgentHome: homeB}
+	appendAndPushCodexRoundTripSession(t, layoutB, projectB, nativeID, "2026-08-25T10:02:00Z", "from-b", cB, identifierKey, projectID, installationB, spaceB, store, public, configB)
+
+	t.Setenv("CODEX_HOME", homeA)
+	reportA, err := collectResume(context.Background(), cA, configA, projectA, resumeOptions{session: nativeID, allowDivergent: true}, strings.NewReader("passphrase\n"), io.Discard)
+	if err != nil {
+		t.Fatalf("device A second resume: %v", err)
+	}
+	if !reportA.Merged && !reportA.Replaced {
+		t.Fatalf("device A did not update its existing session: %+v", reportA)
+	}
+	appendAndPushCodexRoundTripSession(t, layoutA, projectA, nativeID, "2026-08-25T10:03:00Z", "from-a-2", cA, identifierKey, projectID, installationA, spaceA, store, public, configA)
+
+	t.Setenv("CODEX_HOME", homeB)
+	if _, err := collectResume(context.Background(), cB, configB, projectB, resumeOptions{session: nativeID, allowDivergent: true}, strings.NewReader("passphrase\n"), io.Discard); err != nil {
+		t.Fatalf("device B second resume: %v", err)
+	}
+	appendAndPushCodexRoundTripSession(t, layoutB, projectB, nativeID, "2026-08-25T10:04:00Z", "from-b-2", cB, identifierKey, projectID, installationB, spaceB, store, public, configB)
+
+	t.Setenv("CODEX_HOME", homeA)
+	reportA, err = collectResume(context.Background(), cA, configA, projectA, resumeOptions{session: nativeID, allowDivergent: true}, strings.NewReader("passphrase\n"), io.Discard)
+	if err != nil {
+		t.Fatalf("device A third resume: %v", err)
+	}
+	if !reportA.Merged && !reportA.Replaced {
+		t.Fatalf("device A did not update its session after multiple round trips: %+v", reportA)
+	}
+	dataA, err := layoutA.ReadSession(adapter.SessionRef{NativeID: nativeID, ProjectPath: projectA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := bytes.Join(dataA.Records, []byte("\n"))
+	for _, marker := range []string{"from-a", "from-b", "from-a-2", "from-b-2"} {
+		if !bytes.Contains(joined, []byte(marker)) {
+			t.Fatalf("device A lost %s after multiple round trips: %s", marker, joined)
+		}
+	}
+}
+
+func appendAndPushCodexRoundTripSession(t *testing.T, layout adapter.CodexLayout, projectRoot, nativeID, timestamp, text string, c *config.Config, identifierKey []byte, projectID string, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, stateRoot string) {
+	t.Helper()
+	data, err := layout.ReadSession(adapter.SessionRef{NativeID: nativeID, ProjectPath: projectRoot})
+	if err != nil {
+		t.Fatalf("read %s session before append: %v", text, err)
+	}
+	continued := append(append([][]byte(nil), data.Records...), codexRoundTripRecord(t, timestamp, "event_msg", map[string]any{"text": text}))
+	if err := layout.ReplaceSession(projectRoot, nativeID, continued); err != nil {
+		t.Fatalf("append %s conversation: %v", text, err)
+	}
+	pusher := newCodexRoundTripPusher(t, stateRoot)
+	refs, err := layout.DiscoverSessions(projectRoot)
+	if err != nil {
+		t.Fatalf("discover %s session: %v", text, err)
+	}
+	summary := pushDiscoveredSessions(context.Background(), c.Device.ID, identifierKey, projectID, layout, installation, space, store, public, pusher, stateRoot, projectRoot, refs)
+	if summary.Pushed != 1 || summary.Failed != 0 {
+		t.Fatalf("push %s continuation = %+v", text, summary)
+	}
+}
+
+func newCodexRoundTripConfig(t *testing.T, dir, remoteRoot string, public *ecdh.PublicKey, identifierKey []byte, deviceID, projectRoot, identity string) *config.Config {
+	t.Helper()
+	c := config.New()
+	c.Device = config.Device{ID: deviceID, Name: deviceID}
+	c.Remote = config.Remote{Type: "dir", Path: remoteRoot}
+	c.IdentityPublic = public.Bytes()
+	c.Projects.Bindings = []config.Binding{{Identity: identity, LocalRoot: projectRoot}}
+	if err := config.SaveSecrets(dir, &config.Secrets{IdentifierKey: identifierKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func newCodexRoundTripPusher(t *testing.T, stateRoot string) syncflow.QueuedPusher {
+	t.Helper()
+	queue, err := syncer.NewQueueStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pusher, err := syncflow.NewQueuedPusher(queue, syncer.DefaultRetryPolicy(), classifyPushFailure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pusher
+}
+
+func writeCodexRoundTripSession(t *testing.T, layout adapter.CodexLayout, projectRoot, sessionID string, records [][]byte) {
+	t.Helper()
+	path := filepath.Join(layout.Home, "sessions", "2026", "08", "25", "rollout-2026-08-25-10-00-00-"+sessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var data bytes.Buffer
+	for _, record := range records {
+		data.Write(record)
+		data.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, data.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func codexRoundTripRecord(t *testing.T, timestamp, recordType string, payload map[string]any) []byte {
+	t.Helper()
+	record, err := json.Marshal(map[string]any{"timestamp": timestamp, "type": recordType, "payload": payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
 }
 
 func runResumeGit(t *testing.T, dir string, args ...string) {

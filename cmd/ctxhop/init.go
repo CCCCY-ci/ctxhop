@@ -79,14 +79,14 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	if err != nil {
 		return err
 	}
-	if err := refuseExistingConfig(configDir); err != nil {
-		return err
-	}
 
 	prompter := &initPrompter{
 		input:       bufio.NewReader(input),
 		secretInput: input,
 		output:      output,
+	}
+	if err := prepareInitConfig(configDir, prompter); err != nil {
+		return err
 	}
 	if err := options.complete(prompter); err != nil {
 		return err
@@ -233,6 +233,27 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		}
 	}
 
+	// Ask about filtered Agent configuration only after the Hook step. The
+	// question is relevant when Claude Code or Codex is present; an installation
+	// without either supported Agent should not ask the user to configure data
+	// that cannot be discovered yet.
+	configSyncStatus := "skipped (no supported Agent detected)"
+	supportedAgent, err := supportedAgentInstalled()
+	if err != nil {
+		return fmt.Errorf("init: inspect supported Agents: %w", err)
+	}
+	if supportedAgent {
+		syncConfig, err := promptConfigSync(c, prompter)
+		if err != nil {
+			return err
+		}
+		c.SyncConfig = syncConfig
+		if err := c.Save(configDir); err != nil {
+			return fmt.Errorf("init: save configuration sync preference: %w", err)
+		}
+		configSyncStatus = configSyncLabel(c.SyncConfig)
+	}
+
 	if created {
 		if _, err := fmt.Fprintln(output, "remote keyfile: created"); err != nil {
 			return err
@@ -249,6 +270,9 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 		}
 	}
 	if _, err := fmt.Fprintln(output, "config directory:", configDir); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "filtered Agent configuration sync:", configSyncStatus); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(output, "ctxhop initialization complete")
@@ -520,15 +544,36 @@ func maybeInstallInitHook(c *config.Config, configDir string, p *initPrompter, e
 	if installationErr != nil && !errors.Is(installationErr, adapter.ErrNotInstalled) {
 		return fmt.Errorf("init: inspect Claude Code: %w", installationErr)
 	}
-	if installationErr == nil {
-		if err := installClaudeHook(c, configDir, p, executable, layout); err != nil {
+	claudeInstalled := installationErr == nil
+	codexInstalled, err := codexInstallationAvailable()
+	if err != nil {
+		return fmt.Errorf("init: inspect Codex: %w", err)
+	}
+	if !claudeInstalled && !codexInstalled {
+		return nil
+	}
+
+	hookScope, err := promptHookScope(c, p)
+	if err != nil {
+		return err
+	}
+	c.HookScope = hookScope
+	if err := c.Save(configDir); err != nil {
+		return fmt.Errorf("init: save automatic hook scope: %w", err)
+	}
+
+	if claudeInstalled {
+		if err := installClaudeHook(c, configDir, p, executable, layout, hookScope); err != nil {
 			return err
 		}
 	}
-	return maybeInstallCodexHook(c, configDir, p, executable)
+	if !codexInstalled {
+		return nil
+	}
+	return installCodexHook(c, configDir, p, executable, hookScope)
 }
 
-func installClaudeHook(c *config.Config, configDir string, p *initPrompter, executable string, layout adapter.Layout) error {
+func installClaudeHook(c *config.Config, configDir string, p *initPrompter, executable string, layout adapter.Layout, hookScope config.HookScope) error {
 	if c.Agents == nil {
 		c.Agents = map[string]config.AgentState{}
 	}
@@ -543,18 +588,50 @@ func installClaudeHook(c *config.Config, configDir string, p *initPrompter, exec
 			return errors.New("init: cannot locate the ctxhop executable for the hook")
 		}
 	}
-	if err := layout.InstallHook(executable); err != nil {
+	if err := layout.InstallHook(executable, hookScope == config.HookScopeWorkspace); err != nil {
 		return fmt.Errorf("init: configuration is complete but Claude Code hook installation failed: %w", err)
 	}
 	c.Agents["claude-code"] = config.AgentState{HookInstalled: true}
 	if err := c.Save(configDir); err != nil {
 		return fmt.Errorf("init: Claude Code hook installed but configuration update failed: %w", err)
 	}
-	_, err := fmt.Fprintln(p.output, "Claude Code SessionEnd hook: installed")
+	_, err := fmt.Fprintf(p.output, "Claude Code SessionEnd hook: installed (mode=%s)\n", hookScopeLabel(hookScope))
 	return err
 }
 
 func maybeInstallCodexHook(c *config.Config, configDir string, p *initPrompter, executable string) error {
+	available, err := codexInstallationAvailable()
+	if err != nil {
+		return fmt.Errorf("init: inspect Codex: %w", err)
+	}
+	if !available {
+		return nil
+	}
+	return installCodexHook(c, configDir, p, executable, c.HookScope.Effective())
+}
+
+func supportedAgentInstalled() (bool, error) {
+	layouts, err := adapter.DefaultLayouts()
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, layout := range layouts {
+		_, err := layout.Detect(ctx)
+		switch {
+		case errors.Is(err, adapter.ErrNotInstalled):
+			continue
+		case err != nil:
+			return false, fmt.Errorf("inspect %s: %w", layout.Name(), err)
+		default:
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func installCodexHook(c *config.Config, configDir string, p *initPrompter, executable string, hookScope config.HookScope) error {
 	home, err := adapter.DefaultCodexHome()
 	if err != nil {
 		return nil
@@ -581,26 +658,130 @@ func maybeInstallCodexHook(c *config.Config, configDir string, p *initPrompter, 
 			return errors.New("init: cannot locate the ctxhop executable for the hook")
 		}
 	}
-	if err := layout.InstallHook(executable); err != nil {
+	if err := layout.InstallHook(executable, hookScope == config.HookScopeWorkspace); err != nil {
 		return fmt.Errorf("init: configuration is complete but Codex hook installation failed: %w", err)
 	}
 	c.Agents["codex"] = config.AgentState{HookInstalled: true}
 	if err := c.Save(configDir); err != nil {
 		return fmt.Errorf("init: Codex hook installed but configuration update failed: %w", err)
 	}
-	_, err = fmt.Fprintln(p.output, "Codex SessionEnd hook: installed; restart Codex and trust it in /hooks")
+	_, err = fmt.Fprintf(p.output, "Codex SessionEnd hook: installed (mode=%s); restart Codex and trust it in /hooks\n", hookScopeLabel(hookScope))
 	return err
 }
-func refuseExistingConfig(dir string) error {
-	_, err := config.Load(dir)
+
+func codexInstallationAvailable() (bool, error) {
+	home, err := adapter.DefaultCodexHome()
+	if err != nil {
+		return false, err
+	}
+	layout := adapter.CodexLayout{Home: home}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = layout.Detect(ctx)
+	switch {
+	case errors.Is(err, adapter.ErrNotInstalled):
+		return false, nil
+	case err != nil:
+		return false, err
+	default:
+		return true, nil
+	}
+}
+
+func promptHookScope(c *config.Config, p *initPrompter) (config.HookScope, error) {
+	defaultScope := config.HookScopeSession
+	if c != nil {
+		defaultScope = c.HookScope.Effective()
+	}
+	fallback := "1"
+	if defaultScope == config.HookScopeWorkspace {
+		fallback = "2"
+	}
+	value, err := p.line("Automatic hook sync scope [1=session, 2=session+workspace] ("+fallback+"): ", fallback)
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "session", "sessions":
+		return config.HookScopeSession, nil
+	case "2", "workspace", "workspaces", "session+workspace", "session-and-workspace":
+		return config.HookScopeWorkspace, nil
+	default:
+		return "", errors.New("init: hook mode must be 1 (session) or 2 (session+workspace)")
+	}
+}
+
+func promptConfigSync(c *config.Config, p *initPrompter) (config.ConfigSyncMode, error) {
+	defaultMode := config.ConfigSyncEnabled
+	if c != nil {
+		defaultMode = c.SyncConfig.Effective()
+	}
+	fallback := "yes"
+	if defaultMode == config.ConfigSyncDisabled {
+		fallback = "no"
+	}
+	value, err := p.line("Sync filtered Agent configuration for detected Agent(s)? [Y/n]: ", fallback)
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "y", "yes", "on", "enabled":
+		return config.ConfigSyncEnabled, nil
+	case "n", "no", "off", "disabled":
+		return config.ConfigSyncDisabled, nil
+	default:
+		return "", errors.New("init: configuration sync must be yes or no")
+	}
+}
+
+func configSyncLabel(mode config.ConfigSyncMode) string {
+	if mode.Effective() == config.ConfigSyncDisabled {
+		return "disabled"
+	}
+	return "enabled"
+}
+
+func hookScopeLabel(scope config.HookScope) string {
+	if scope.Effective() == config.HookScopeWorkspace {
+		return "session+workspace"
+	}
+	return "session"
+}
+func prepareInitConfig(dir string, p *initPrompter) error {
+	current, err := config.Load(dir)
 	switch {
 	case err == nil:
-		return errors.New("init: this machine is already configured; refusing to replace it")
+		if p == nil {
+			return errors.New("init: cannot ask whether to leave the current sync domain")
+		}
+		if !p.confirm("Current sync domain is configured. Leave it and initialize a new one? This removes local configuration, device keys and CtxHop hooks; remote data is kept. [y/N]: ") {
+			return errors.New("init: current sync domain was kept; initialization cancelled")
+		}
+		if err := leaveCurrentDomain(dir, current); err != nil {
+			return fmt.Errorf("init: leave current sync domain: %w", err)
+		}
+		return nil
 	case errors.Is(err, config.ErrNotInitialised):
 		return nil
 	default:
 		return fmt.Errorf("init: existing configuration cannot be replaced: %w", err)
 	}
+}
+
+func leaveCurrentDomain(configDir string, c *config.Config) error {
+	if c == nil {
+		return errors.New("configuration is unavailable")
+	}
+	if configuredRemotePathOverlaps(configDir, c) {
+		return fmt.Errorf("the configured local sync directory overlaps %s; move the sync directory before leaving the current domain", configDir)
+	}
+	if err := removeInstalledAgentHooks(); err != nil {
+		return err
+	}
+	if err := removeInstallDirectory(configDir); err != nil {
+		return fmt.Errorf("remove local configuration directory: %w", err)
+	}
+	return nil
 }
 
 func (p *initPrompter) line(prompt, fallback string) (string, error) {

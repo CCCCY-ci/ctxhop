@@ -270,7 +270,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash})
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash, skipConfig: !c.SyncConfigEnabled()})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -321,6 +321,7 @@ type pushSessionOptions struct {
 	includeDirectoryWorkspace bool
 	includeGitTransfer        bool
 	gitStash                  string
+	skipConfig                bool
 	projectIdentity           string
 }
 
@@ -457,6 +458,9 @@ func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKe
 		return summary
 	}
 	environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
+	if options.skipConfig {
+		environmentCapture = environmentCapture.WithoutConfig()
+	}
 	if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
 		fail("environment-record", err)
 		return summary

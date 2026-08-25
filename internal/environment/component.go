@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -326,19 +327,65 @@ func containsSensitiveMaterial(content []byte) bool {
 			return true
 		}
 	}
+	if json.Valid(content) {
+		var value any
+		if json.Unmarshal(content, &value) == nil && sensitiveJSONValue(value) {
+			return true
+		}
+	}
 	return false
 }
 
 func sensitiveKey(key string) bool {
 	key = strings.TrimSpace(key)
+	compactKey := strings.NewReplacer("_", "", "-", "").Replace(key)
 	for _, marker := range []string{
 		"token", "secret", "password", "api_key", "api-key", "access_key", "access-key", "private_key", "private-key", "authorization", "cookie",
+		"credential", "credentials", "oauth", "auth",
 	} {
-		if key == marker || strings.HasSuffix(key, "_"+marker) || strings.HasSuffix(key, "-"+marker) {
+		compactMarker := strings.NewReplacer("_", "", "-", "").Replace(marker)
+		oauthPrefix := compactMarker == "oauth" && strings.HasPrefix(compactKey, compactMarker)
+		if key == marker || compactKey == compactMarker || strings.HasSuffix(key, "_"+marker) || strings.HasSuffix(key, "-"+marker) || strings.HasSuffix(compactKey, compactMarker) || oauthPrefix {
 			return true
 		}
 	}
 	return false
+}
+
+func sensitiveJSONValue(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if sensitiveKey(key) && jsonValueHasMaterial(child) {
+				return true
+			}
+			if sensitiveJSONValue(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if sensitiveJSONValue(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonValueHasMaterial(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		return len(typed) != 0
+	case map[string]any:
+		return len(typed) != 0
+	default:
+		return true
+	}
 }
 
 func pathWithin(root, target string) bool {

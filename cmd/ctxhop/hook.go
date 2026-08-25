@@ -94,7 +94,7 @@ func installClaudeHookForCommand(c *config.Config, configDir string, p *initProm
 	} else if err != nil {
 		return fmt.Errorf("hook install: inspect Claude Code: %w", err)
 	}
-	return installClaudeHook(c, configDir, p, executable, layout)
+	return installClaudeHook(c, configDir, p, executable, layout, c.HookScope.Effective())
 }
 func parseHookOptions(args []string) (hookOptions, error) {
 	if len(args) == 0 {

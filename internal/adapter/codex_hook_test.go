@@ -62,6 +62,19 @@ func TestCodexHookInstallIsIdempotentAndPreservesUserHooks(t *testing.T) {
 		t.Fatalf("top-level settings changed: %+v", remaining)
 	}
 }
+
+func TestCodexHookCanIncludeWorkspace(t *testing.T) {
+	command, commandWindows, err := codexHookCommands(`C:\bin\ctxhop.exe`, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(command, "push --workspace "+hookMarker) {
+		t.Fatalf("workspace POSIX command = %q", command)
+	}
+	if !strings.Contains(commandWindows, "'push','--workspace','--ctxhop-hook'") {
+		t.Fatalf("workspace Windows command = %q", commandWindows)
+	}
+}
 func writeCodexHooksTestFile(t *testing.T, path string, value map[string]any) {
 	t.Helper()
 	data, err := json.Marshal(value)

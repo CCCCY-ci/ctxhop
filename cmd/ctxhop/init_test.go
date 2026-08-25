@@ -29,9 +29,10 @@ func TestInitCreatesDirectoryBackendWithoutLeakingSecrets(t *testing.T) {
 	t.Setenv("CTXHOP_SECRET_ACCESS_KEY", "")
 	t.Setenv("CTXHOP_SESSION_TOKEN", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 
 	var output bytes.Buffer
-	input := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
+	input := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\nyes\n")
 	if err := runInitWithIO([]string{
 		"--backend", "dir",
 		"--path", remoteRoot,
@@ -40,7 +41,7 @@ func TestInitCreatesDirectoryBackendWithoutLeakingSecrets(t *testing.T) {
 	}, input, &output, "test-ctxhop"); err != nil {
 		t.Fatalf("runInitWithIO: %v", err)
 	}
-	if !strings.Contains(output.String(), "Recovery Key") || !strings.Contains(output.String(), "initialization complete") {
+	if !strings.Contains(output.String(), "Recovery Key") || !strings.Contains(output.String(), "initialization complete") || !strings.Contains(output.String(), "filtered Agent configuration sync: enabled") {
 		t.Errorf("init output = %q", output.String())
 	}
 	if !strings.Contains(output.String(), "config directory: "+configDir) {
@@ -48,6 +49,9 @@ func TestInitCreatesDirectoryBackendWithoutLeakingSecrets(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Encryption password: ") || !strings.Contains(output.String(), "Repeat encryption password: ") {
 		t.Errorf("init password prompts = %q", output.String())
+	}
+	if recovery, configPrompt := strings.Index(output.String(), "Type 'saved'"), strings.Index(output.String(), "Sync filtered Agent configuration"); recovery < 0 || configPrompt < recovery {
+		t.Errorf("configuration prompt was not placed after recovery confirmation: %q", output.String())
 	}
 	if strings.Contains(output.String(), "Passphrase: ") || strings.Contains(output.String(), initTestPassphrase) {
 		t.Error("init output contains the passphrase")
@@ -65,6 +69,9 @@ func TestInitCreatesDirectoryBackendWithoutLeakingSecrets(t *testing.T) {
 	}
 	if len(c.IdentityPublic) == 0 {
 		t.Error("the public identity was not pinned")
+	}
+	if !c.SyncConfigEnabled() {
+		t.Errorf("sync config = %q, want enabled", c.SyncConfig)
 	}
 
 	secrets, err := config.LoadSecrets(configDir)
@@ -104,6 +111,7 @@ func TestInitDoesNotPublishBeforeRecoveryConfirmation(t *testing.T) {
 	remoteRoot := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 
 	input := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nno\n")
 	if err := runInitWithIO([]string{
@@ -131,6 +139,7 @@ func TestInitOpensAnExistingKeyfileWithoutReplacingIt(t *testing.T) {
 	firstConfig := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
 	firstInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
 	if err := runInitWithIO([]string{
 		"--backend", "dir",
@@ -144,7 +153,7 @@ func TestInitOpensAnExistingKeyfileWithoutReplacingIt(t *testing.T) {
 	secondConfig := t.TempDir()
 	t.Setenv("CTXHOP_CONFIG_DIR", secondConfig)
 	var output bytes.Buffer
-	secondInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\n")
+	secondInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nyes\n")
 	if err := runInitWithIO([]string{
 		"--backend", "dir",
 		"--path", remoteRoot,
@@ -155,6 +164,160 @@ func TestInitOpensAnExistingKeyfileWithoutReplacingIt(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "remote keyfile: opened") || strings.Contains(output.String(), "Recovery Key") {
 		t.Errorf("second init output = %q", output.String())
+	}
+}
+
+func TestInitCanLeaveCurrentDomainBeforeInitializingAnother(t *testing.T) {
+	configDir := t.TempDir()
+	oldRemoteRoot := t.TempDir()
+	newRemoteRoot := t.TempDir()
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+
+	oldInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
+	if err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", oldRemoteRoot,
+		"--device-name", "old-domain-device",
+		"--no-hook",
+	}, oldInput, ioDiscard{}, "test-ctxhop"); err != nil {
+		t.Fatalf("initial init: %v", err)
+	}
+
+	var output bytes.Buffer
+	newPassphrase := "new domain password"
+	newInput := strings.NewReader("y\n" + newPassphrase + "\n" + newPassphrase + "\nsaved\n")
+	if err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", newRemoteRoot,
+		"--device-name", "new-domain-device",
+		"--no-hook",
+	}, newInput, &output, "test-ctxhop"); err != nil {
+		t.Fatalf("re-init after leaving current domain: %v", err)
+	}
+	if !strings.Contains(output.String(), "Current sync domain is configured") || !strings.Contains(output.String(), "initialization complete") {
+		t.Fatalf("re-init output = %q", output.String())
+	}
+
+	c, err := config.Load(configDir)
+	if err != nil {
+		t.Fatalf("load new configuration: %v", err)
+	}
+	if c.Remote.Path != filepath.Clean(newRemoteRoot) || c.Device.Name != "new-domain-device" {
+		t.Fatalf("new configuration = %+v", c)
+	}
+	oldStore, err := remote.NewDir(oldRemoteRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncer.FetchKeyfile(t.Context(), oldStore); err != nil {
+		t.Fatalf("old remote keyfile was not preserved: %v", err)
+	}
+}
+
+func TestInitKeepsCurrentDomainWhenLeavingIsDeclined(t *testing.T) {
+	configDir := t.TempDir()
+	oldRemoteRoot := t.TempDir()
+	newRemoteRoot := t.TempDir()
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+
+	oldInput := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
+	if err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", oldRemoteRoot,
+		"--device-name", "old-domain-device",
+		"--no-hook",
+	}, oldInput, ioDiscard{}, "test-ctxhop"); err != nil {
+		t.Fatalf("initial init: %v", err)
+	}
+
+	err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", newRemoteRoot,
+		"--device-name", "new-domain-device",
+		"--no-hook",
+	}, strings.NewReader("n\n"), ioDiscard{}, "test-ctxhop")
+	if err == nil || !strings.Contains(err.Error(), "current sync domain was kept") {
+		t.Fatalf("declined re-init error = %v", err)
+	}
+	c, err := config.Load(configDir)
+	if err != nil {
+		t.Fatalf("load preserved configuration: %v", err)
+	}
+	if c.Remote.Path != filepath.Clean(oldRemoteRoot) {
+		t.Fatalf("preserved configuration remote = %q, want %q", c.Remote.Path, filepath.Clean(oldRemoteRoot))
+	}
+	newStore, err := remote.NewDir(newRemoteRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncer.FetchKeyfile(t.Context(), newStore); !errors.Is(err, syncer.ErrNoRemoteKeyfile) {
+		t.Fatalf("declined re-init created new remote keyfile: %v", err)
+	}
+}
+
+func TestInitSkipsConfigSyncQuestionWithoutSupportedAgent(t *testing.T) {
+	configDir := t.TempDir()
+	remoteRoot := t.TempDir()
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "missing-claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+
+	var output bytes.Buffer
+	input := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n")
+	if err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", remoteRoot,
+		"--device-name", "test-device",
+		"--no-hook",
+	}, input, &output, "test-ctxhop"); err != nil {
+		t.Fatalf("runInitWithIO: %v", err)
+	}
+	if strings.Contains(output.String(), "Sync filtered Agent configuration") {
+		t.Fatalf("configuration sync prompt was shown without an Agent: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "filtered Agent configuration sync: skipped (no supported Agent detected)") {
+		t.Fatalf("init output = %q", output.String())
+	}
+}
+
+func TestInitAsksConfigSyncAfterHookSetup(t *testing.T) {
+	configDir := t.TempDir()
+	remoteRoot := t.TempDir()
+	claudeHome := filepath.Join(t.TempDir(), "claude-home")
+	if err := os.MkdirAll(claudeHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "missing-codex"))
+
+	var output bytes.Buffer
+	input := strings.NewReader(initTestPassphrase + "\n" + initTestPassphrase + "\nsaved\n1\ny\nno\n")
+	if err := runInitWithIO([]string{
+		"--backend", "dir",
+		"--path", remoteRoot,
+		"--device-name", "test-device",
+	}, input, &output, filepath.Join(t.TempDir(), "ctxhop")); err != nil {
+		t.Fatalf("runInitWithIO: %v", err)
+	}
+	hookDone := strings.Index(output.String(), "Claude Code SessionEnd hook: installed")
+	configPrompt := strings.Index(output.String(), "Sync filtered Agent configuration")
+	if hookDone < 0 || configPrompt < 0 || configPrompt < hookDone {
+		t.Fatalf("configuration prompt was not placed after Hook setup: %q", output.String())
+	}
+	if strings.Contains(output.String(), "Codex config.toml") || !strings.Contains(output.String(), "for detected Agent(s)") {
+		t.Fatalf("configuration prompt is Agent-specific or unclear: %q", output.String())
+	}
+	c, err := config.Load(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SyncConfigEnabled() {
+		t.Fatalf("sync config = %q, want disabled", c.SyncConfig)
 	}
 }
 
@@ -241,5 +404,43 @@ func TestMaybeInstallCodexHookRegistersSessionEndHook(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "restart Codex") || !strings.Contains(output.String(), "/hooks") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestPromptHookScopeAcceptsWorkspaceMode(t *testing.T) {
+	c := config.New()
+	var output bytes.Buffer
+	p := &initPrompter{
+		input:  bufio.NewReader(strings.NewReader("2\n")),
+		output: &output,
+	}
+	scope, err := promptHookScope(c, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope != config.HookScopeWorkspace {
+		t.Fatalf("scope = %q, want workspace", scope)
+	}
+	if !strings.Contains(output.String(), "1=session, 2=session+workspace") {
+		t.Fatalf("prompt = %q", output.String())
+	}
+}
+
+func TestPromptConfigSyncAcceptsDisabledMode(t *testing.T) {
+	c := config.New()
+	var output bytes.Buffer
+	p := &initPrompter{
+		input:  bufio.NewReader(strings.NewReader("no\n")),
+		output: &output,
+	}
+	mode, err := promptConfigSync(c, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != config.ConfigSyncDisabled {
+		t.Fatalf("mode = %q, want disabled", mode)
+	}
+	if !strings.Contains(output.String(), "for detected Agent(s)") || strings.Contains(output.String(), "Codex config.toml") {
+		t.Fatalf("prompt = %q", output.String())
 	}
 }

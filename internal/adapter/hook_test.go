@@ -80,6 +80,22 @@ func TestInstallHookIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstallHookUpdatesTheAutomaticWorkspaceScope(t *testing.T) {
+	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`); err != nil {
+		t.Fatalf("InstallHook: %v", err)
+	}
+	if err := l.InstallHook(`C:\bin\ctxhop.exe`, true); err != nil {
+		t.Fatalf("InstallHook workspace: %v", err)
+	}
+	settings := readSettings(t, l)
+	groups := settings["hooks"].(map[string]any)[hookEvent].([]any)
+	command := groups[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
+	if !strings.Contains(command, "push --workspace "+hookMarker) {
+		t.Fatalf("workspace hook command = %q", command)
+	}
+}
+
 func TestInstallHookUpdatesAMovedExecutable(t *testing.T) {
 	l := Layout{Home: filepath.Join(t.TempDir(), ".claude")}
 
@@ -452,8 +468,9 @@ func TestRemoveHookDeletesASettingsFileWeCreated(t *testing.T) {
 
 func TestLooksGenerated(t *testing.T) {
 	tests := map[string]bool{
-		`"C:\bin\ctxhop.exe" push --ctxhop-hook`:   true,
-		`& "C:\bin\ctxhop.exe" push --ctxhop-hook`: true,
+		`"C:\bin\ctxhop.exe" push --ctxhop-hook`:             true,
+		`"C:\bin\ctxhop.exe" push --workspace --ctxhop-hook`: true,
+		`& "C:\bin\ctxhop.exe" push --ctxhop-hook`:           true,
 		// Anything else carrying the marker is somebody's own command.
 		`nohup "x" push --ctxhop-hook`:            false,
 		`"C:\bin\x.exe" push --ctxhop-hook --now`: false,

@@ -21,8 +21,8 @@ func TestDiscoverAndCaptureSessionSettingsUseOnlyAllowlistedMetadata(t *testing.
 	if len(components) != 1 {
 		t.Fatalf("components = %#v, want one component", components)
 	}
-	if components[0].Component.Scope != "project" || components[0].Component.ProjectID != "project-one" {
-		t.Fatalf("component = %#v", components[0].Component)
+	if components[0].Component.Scope != "global" || components[0].Component.ProjectID != "" {
+		t.Fatalf("component = %#v, want global Codex settings", components[0].Component)
 	}
 	var values map[string]string
 	if err := json.Unmarshal(components[0].Content, &values); err != nil {

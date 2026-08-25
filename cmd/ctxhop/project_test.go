@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,34 @@ func TestProjectBindingAndModes(t *testing.T) {
 	removed, err = unbindProject(c, "github.com/example/app", "")
 	if err != nil || removed != 1 {
 		t.Fatalf("unbind identity = %d, %v", removed, err)
+	}
+}
+
+func TestManualProjectBindingCannotMergeDifferentRoots(t *testing.T) {
+	c := config.New()
+	first := t.TempDir()
+	second := t.TempDir()
+
+	if changed, err := bindProject(c, "manual:todo", first); err != nil || !changed {
+		t.Fatalf("first manual bind = %v, %v", changed, err)
+	}
+	if _, err := bindProject(c, "manual:todo", second); err == nil || !strings.Contains(err.Error(), "unique --name") {
+		t.Fatalf("second manual bind error = %v, want identity collision", err)
+	}
+}
+
+func TestResolveCurrentProjectRejectsAmbiguousManualIdentity(t *testing.T) {
+	c := config.New()
+	first := t.TempDir()
+	second := t.TempDir()
+	if _, err := bindProject(c, "manual:todo", first); err != nil {
+		t.Fatal(err)
+	}
+	// Build the legacy shape directly to verify that an existing ambiguous
+	// configuration fails closed instead of silently merging two projects.
+	c.Projects.Bindings = append(c.Projects.Bindings, config.Binding{Identity: "manual:todo", LocalRoot: second})
+	if _, err := resolveCurrentProject(context.Background(), c, first); err == nil || !strings.Contains(err.Error(), "multiple local roots") {
+		t.Fatalf("resolve error = %v, want ambiguous manual identity", err)
 	}
 }
 

@@ -730,7 +730,7 @@ func sensitivePath(value string) bool {
 	value = strings.ToLower(strings.ReplaceAll(value, "\\", "/"))
 	for _, part := range strings.Split(value, "/") {
 		part = strings.TrimSpace(part)
-		if part == ".git" || part == ".env" || strings.HasPrefix(part, ".env.") || part == "credentials" || part == "secrets" || part == "cookies" || part == "token" || part == "tokens" {
+		if part == ".git" || part == ".env" || strings.HasPrefix(part, ".env.") || part == ".claude" || part == ".codex" || part == "credentials" || part == "secrets" || part == "cookies" || part == "token" || part == "tokens" {
 			return true
 		}
 		if strings.HasPrefix(part, "id_rsa") || strings.HasPrefix(part, "id_ed25519") {
@@ -741,6 +741,10 @@ func sensitivePath(value string) bool {
 				return true
 			}
 		}
+	}
+	base := filepath.Base(value)
+	if base == ".credentials.json" || base == "credentials.json" || base == ".auth.json" || base == "auth.json" || base == ".oauth.json" || base == "oauth.json" || base == ".claude.json" {
+		return true
 	}
 	return false
 }
@@ -757,8 +761,14 @@ func containsSensitiveContent(data []byte) bool {
 		"private_key",
 		"api_key",
 		"access_token",
+		"accesstoken",
 		"refresh_token",
+		"refreshtoken",
 		"session_token",
+		"sessiontoken",
+		"oauth",
+		"credential",
+		"credentials",
 	} {
 		if strings.Contains(text, marker) {
 			return true

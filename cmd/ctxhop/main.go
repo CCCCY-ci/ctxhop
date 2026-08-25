@@ -36,7 +36,7 @@ type command struct {
 var commands = []command{
 	{name: "init", summary: "configure storage backend, encryption password and agent hooks"},
 	{name: "install", summary: "install ctxhop as a user-level command"},
-	{name: "uninstall", summary: "remove the installed ctxhop command without deleting sync data"},
+	{name: "uninstall", summary: "remove local CtxHop files without deleting sync data"},
 	{name: "status", summary: "show sync state for this project or globally"},
 	{name: "list", summary: "list sessions available for this project"},
 	{name: "resume", summary: "restore a session and its filtered environment"},

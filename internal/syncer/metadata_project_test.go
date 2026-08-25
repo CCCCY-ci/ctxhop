@@ -47,6 +47,17 @@ func TestFetchProjectMetadataReadsOnlyMetadataObjects(t *testing.T) {
 	if err := PutMetadata(context.Background(), store, public, secondLayout, second); err != nil {
 		t.Fatal(err)
 	}
+	otherProjectLayout, err := NewObjectLayout("projecttwo", "sessionother", "deviceother")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherProject, err := NewMetadata(7, [32]byte{3}, []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PutMetadata(context.Background(), store, public, otherProjectLayout, otherProject); err != nil {
+		t.Fatal(err)
+	}
 
 	objects, err := store.List(context.Background(), "v1/projects/projectone/sessions/sessionone")
 	if err != nil {
@@ -75,6 +86,11 @@ func TestFetchProjectMetadataReadsOnlyMetadataObjects(t *testing.T) {
 	}
 	if groups[0].Devices[0].Metadata.RecordCount != 3 || groups[1].Devices[0].Metadata.RecordCount != 5 {
 		t.Fatalf("metadata groups = %+v", groups)
+	}
+	for _, group := range groups {
+		if group.SessionID == "sessionother" {
+			t.Fatal("metadata from another project crossed the project filter")
+		}
 	}
 }
 

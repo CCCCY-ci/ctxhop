@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ecdh"
 	"errors"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/crypto"
@@ -28,6 +30,7 @@ func TestFetchRestorePlanReadsResolvesAndLocalizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupRestoreRemoteRoot(t, store.Root)
 	layout, err := syncer.NewObjectLayout("project", "session", "device")
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +78,21 @@ func TestFetchRestorePlanReadsResolvesAndLocalizes(t *testing.T) {
 	if plan.Devices[0] != "device" || plan.HeadDigest != mustDigest(t, records) {
 		t.Fatalf("source metadata = devices %v, digest %x", plan.Devices, plan.HeadDigest)
 	}
+}
+
+func cleanupRestoreRemoteRoot(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			lastErr = os.RemoveAll(root)
+			if lastErr == nil || errors.Is(lastErr, os.ErrNotExist) {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Errorf("remove restore test remote root: %v", lastErr)
+	})
 }
 
 func TestFetchRestorePlanRequiresAndHonorsForkSelection(t *testing.T) {

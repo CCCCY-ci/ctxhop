@@ -38,8 +38,8 @@ func (l CodexLayout) HooksPath() string {
 // Existing Codex hooks and unrelated top-level settings are preserved. The
 // operation is idempotent and updates the generated command if the executable
 // moved.
-func (l CodexLayout) InstallHook(executable string) error {
-	command, commandWindows, err := codexHookCommands(executable)
+func (l CodexLayout) InstallHook(executable string, includeWorkspace ...bool) error {
+	command, commandWindows, err := codexHookCommands(executable, hookIncludesWorkspace(includeWorkspace))
 	if err != nil {
 		return err
 	}
@@ -116,8 +116,8 @@ func (l CodexLayout) HookInstalled() (bool, error) {
 	}
 	return false, nil
 }
-func codexHookCommands(executable string) (string, string, error) {
-	command, err := hookCommand(executable)
+func codexHookCommands(executable string, includeWorkspace bool) (string, string, error) {
+	command, err := hookCommandWithWorkspace(executable, includeWorkspace)
 	if err != nil {
 		return "", "", err
 	}
@@ -126,7 +126,11 @@ func codexHookCommands(executable string) (string, string, error) {
 		// process must not keep the hook's stdout/stderr pipe open.
 		command += " >/dev/null 2>&1 &"
 	}
-	commandWindows := "Start-Process -FilePath " + powershellSingleQuoted(executable) + " -ArgumentList 'push','--ctxhop-hook' -WindowStyle Hidden"
+	arguments := "'push','--ctxhop-hook'"
+	if includeWorkspace {
+		arguments = "'push','--workspace','--ctxhop-hook'"
+	}
+	commandWindows := "Start-Process -FilePath " + powershellSingleQuoted(executable) + " -ArgumentList " + arguments + " -WindowStyle Hidden"
 	return command, commandWindows, nil
 }
 
@@ -227,7 +231,7 @@ func codexIsOurs(item map[string]any) bool {
 func codexLooksGenerated(item map[string]any) bool {
 	command, _ := item["command"].(string)
 	commandWindows, _ := item["commandWindows"].(string)
-	posix := strings.HasSuffix(command, " push "+hookMarker) || strings.Contains(command, ">/dev/null 2>&1 &")
+	posix := strings.HasSuffix(command, " push "+hookMarker) || strings.HasSuffix(command, " push --workspace "+hookMarker) || strings.Contains(command, ">/dev/null 2>&1 &")
 	windows := strings.HasPrefix(commandWindows, "Start-Process -FilePath ") && strings.Contains(commandWindows, "push") && strings.Contains(commandWindows, hookMarker)
 	return posix && windows
 }

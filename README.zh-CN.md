@@ -24,7 +24,10 @@ CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 G
 - **项目级同步边界**：只有显式绑定的项目和已授权设备参与同步，不扫描或传输无关项目。
 - **自托管存储**：支持本地目录与 S3 兼容对象存储，包括 Cloudflare R2。
 - **安全恢复**：`resume --preview` 可在写入前预览恢复内容；冲突检查失败时不会修改目标工作区。
-- **多 Agent 架构**：Claude Code 与 Codex 通过独立 Adapter 接入，后续可继续扩展其他 Coding Agent。
+
+## 演示
+
+[观看 CtxHop 演示视频](assets/ctxhop-demo.mp4)
 
 ## 安装
 
@@ -68,7 +71,9 @@ go install github.com/CCCCY-ci/ctxhop/cmd/ctxhop@latest
 ctxhop uninstall
 ```
 
-卸载仅移除 CLI，本地配置、设备密钥和同步数据会保留。
+卸载会移除 CLI、本地 `~/.ctxhop` 配置目录、设备密钥、本地状态、日志以及
+CtxHop 注册的 Agent Hook。S3 远端对象和已配置的本地目录后端会保留，不会被删除。
+如果本地目录后端与 `.ctxhop` 目录重叠，卸载会停止并提示你先移动同步目录。
 
 ## 快速开始：Cloudflare R2
 
@@ -103,7 +108,16 @@ ctxhop init \
 
 首次初始化会生成 **Recovery Key**，请离线保存。加密密码和 Recovery Key 同时丢失后，远端加密数据无法恢复。
 
-`init` 可同时安装 SessionEnd Hook，使 Agent 会话结束后自动执行 `push`。也可以之后手动安装：
+初始化过程中，CtxHop 会先检测 Claude Code 和 Codex，再询问 Agent 相关选项。如果检测到其中至少一个，可以输入 `1` 或 `2` 选择自动 SessionEnd Hook 的同步范围：
+
+- `1` — `session`：同步 Session 和过滤后的环境信息；
+- `2` — `session+workspace`：在上述内容之外，再同步项目工作区与 Git 状态。
+
+Hook 步骤完成后（或通过 `--no-hook` 跳过 Hook 安装后），CtxHop 才会询问是否同步检测到的 Agent 的过滤后配置，默认开启。如果同时安装了 Claude Code 和 Codex，这个选择同时适用于两个 Agent。只有白名单中的设置和不含敏感信息的 MCP 传输意图会进入同步范围。
+
+CtxHop 永远不会上传完整的 Agent 配置文件或鉴权文件，包括 Claude Code 的凭据与登录状态、Codex 的鉴权数据、Token、Header、环境变量以及 MCP 的 `env` 值。程序可以在本地读取 Claude 用户配置文件，从中提取当前 Session 实际引用的 MCP 命令、参数或 URL，但不会上传该文件本身。输入 `no` 后，Session 和其他允许同步的环境组件仍会上传，但后续上传会排除设置与 MCP 配置。
+
+Hook 只在会话结束时自动执行对应范围的 `push`。安装后，每次对话结束都会自动上传，不需要在每次对话后手动执行 `ctxhop push`。也可以之后手动安装：
 
 ```bash
 ctxhop hook install --agent codex
@@ -112,6 +126,15 @@ ctxhop hook install --agent claude-code
 ```
 
 不使用 Hook 时，在初始化阶段指定 `--no-hook`。
+
+如果要让已经初始化的设备切换到另一个同步域，再次执行 `ctxhop init` 即可。
+CtxHop 会先询问是否退出当前同步域：
+
+- 输入 `y`：退出当前同步域并继续新的初始化，同时删除本机配置、设备密钥和
+  CtxHop 注册的 Hook；远端 S3 对象和独立的目录后端同步目录会保留。
+- 输入 `n` 或直接回车：保留当前同步域并取消本次初始化。
+
+如果配置的目录后端与本地 CtxHop 配置目录重叠，请先移动同步目录；CtxHop 会在删除本地同步域状态前停止操作。
 
 ### 2. 绑定项目并上传
 
@@ -136,6 +159,11 @@ ctxhop push --workspace
 ```bash
 ctxhop project bind --name "my-project" --path .
 ```
+
+手动项目名用于标识项目，与本地目录路径无关。
+
+`pull`、`list` 和 `resume` 只查询当前目录绑定的项目。`ctxhop project discover`
+是例外，它会列出同步域中已授权设备发布的全部项目，方便在绑定新项目之前发现它。
 
 ### 3. 授权设备 B
 
@@ -168,11 +196,10 @@ ctxhop project discover
 ```bash
 cd /path/to/project
 ctxhop project bind --path .
-ctxhop pull
 ctxhop list
 ```
 
-`pull` 只刷新远端元数据，`list` 列出当前项目可恢复的 Session。
+`list` 列出当前项目可恢复的 Session。源设备安装了 SessionEnd Hook 时，最近一次已结束的对话已经自动上传；在目标设备上直接执行 `list` 或 `resume` 即可读取最新的远端元数据，正常的切换流程不需要额外执行 `ctxhop pull`。如果只想检查远端元数据，再单独使用 `pull`。
 
 恢复指定 Session：
 
@@ -216,9 +243,9 @@ claude --resume <SESSION_ID>
 |---|---|---|
 | Agent Session | 同步 | 本地压缩并加密后上传。 |
 | 项目身份与 Git 摘要 | 同步 | 用于跨设备识别项目，不包含项目文件或完整 Git 对象。 |
-| Session 相关环境 | 过滤后同步 | 仅恢复白名单中的 Skill、MCP 传输意图和 Session 设置。 |
+| Session 相关环境 | 过滤后同步；可在 `init` 中选择配置是否同步 | Claude Code 和 Codex 通过各自 Adapter 仅恢复白名单中的 Skill、MCP 传输意图和 Session 设置。全局设置仍写回用户级配置，项目级 MCP 保持项目范围。完整配置文件和鉴权数据永不同步。 |
 | 工作区与 Git 状态 | 按需 | 仅在 `push --workspace` / `resume --workspace` 时处理。 |
-| Token、凭据与 `.env` | 永不同步 | 登录状态、私钥、Header、Secrets 等不会进入同步数据。 |
+| Token、凭据与 `.env` | 永不同步 | Claude Code/Codex 登录状态与鉴权文件、私钥、Header、MCP `env` 值和 Secrets 等不会进入同步数据。 |
 
 普通 `push`、Hook 和 `watch` 不上传项目文件正文。启用 `--workspace` 后，CtxHop 也不会自动删除本地文件、切换分支，或执行 merge、rebase、commit、push、reset 等 Git 操作。
 
@@ -226,20 +253,32 @@ claude --resume <SESSION_ID>
 
 ## 常用命令
 
-执行 `ctxhop <command> --help` 查看完整参数。直接运行 `ctxhop` 会输出命令索引；使用 `ctxhop help <command>` 查看具体命令说明。脚本和 CI 可在支持的命令上使用 `--json`。
+执行 `ctxhop <command> --help` 查看完整参数。直接运行 `ctxhop` 会输出命令索引；使用 `ctxhop help <command>` 查看具体命令说明。下面列出所有一级命令和已支持的二级命令。脚本和 CI 可在支持的命令上使用 `--json`。
+
+### 初始化与帮助
+
+| 命令 | 说明 |
+|---|---|
+| `ctxhop init` | 配置存储后端、加密密码、设备和 Agent Hook。 |
+| `ctxhop install` | 将 CtxHop 安装为当前用户的命令。 |
+| `ctxhop uninstall` | 移除本地 CtxHop 文件，不删除远端或后端数据。 |
+| `ctxhop help [<command>]` | 查看命令索引，或查看指定命令的说明和参数。 |
+| `ctxhop version` | 查看已安装的版本。 |
 
 ### 项目与同步
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop project bind` | 绑定当前项目。 |
+| `ctxhop project bind` | 将本地项目绑定到稳定的项目身份。 |
+| `ctxhop project unbind` | 移除本地项目绑定。 |
+| `ctxhop project mode <mode>` | 将项目设置为 `normal`、`push-only` 或 `excluded`。 |
+| `ctxhop project list` | 列出本地项目绑定。 |
 | `ctxhop project discover` | 查看其他设备已发布的项目。 |
-| `ctxhop push` | 上传当前项目的 Session。 |
+| `ctxhop push` | 上传当前项目的 Session 和过滤后的环境。 |
 | `ctxhop push --workspace` | 同时上传有限工作区和 Git 状态。 |
-| `ctxhop pull` | 刷新远端元数据。 |
+| `ctxhop pull` | 检查远端元数据，不执行恢复。 |
 | `ctxhop list` | 列出当前项目可恢复的 Session。 |
-| `ctxhop resume` | 恢复 Session 和过滤环境。 |
-| `ctxhop resume --workspace` | 同时恢复已上传的工作区和 Git 状态。 |
+| `ctxhop resume` | 恢复 Session 和过滤后的环境；可按需使用 `--preview`、`--workspace` 或 `--allow-divergent`。 |
 | `ctxhop watch` | 监视本地 Session 变化并上传。 |
 
 ### 设备与安全
@@ -247,10 +286,25 @@ claude --resume <SESSION_ID>
 | 命令 | 说明 |
 |---|---|
 | `ctxhop device invite` | 创建新设备邀请。 |
+| `ctxhop device status` | 查看本地设备身份和模式。 |
+| `ctxhop device mode <mode>` | 将设备设置为 `normal`、`push-only` 或 `disabled`。 |
 | `ctxhop device list` | 查看已授权设备。 |
-| `ctxhop device remove` | 撤销设备后续访问权限。 |
+| `ctxhop device rename <name>` | 修改本地设备显示名称。 |
+| `ctxhop device remove <device-id>` | 撤销设备后续访问权限。 |
 | `ctxhop device rotate-key` | 轮换加密密钥。 |
-| `ctxhop passphrase change/reset` | 修改或使用 Recovery Key 重置加密密码。 |
+| `ctxhop passphrase change` | 修改加密密码。 |
+| `ctxhop passphrase reset` | 使用 Recovery Key 重置加密密码。 |
+
+### 历史与远端数据
+
+| 命令 | 说明 |
+|---|---|
+| `ctxhop history <SESSION_ID>` | 查看 Session 可恢复的历史版本。 |
+| `ctxhop history cleanup <SESSION_ID>` | 删除某个 Session 的全部远端版本。 |
+| `ctxhop history prune <SESSION_ID>` | 按保留数量或日期清理 Session 版本。 |
+| `ctxhop remote delete-session <SESSION_ID>` | 确认后删除一个远端 Session。 |
+| `ctxhop remote delete-project` | 确认后删除当前项目的全部远端数据。 |
+| `ctxhop remote delete-all` | 确认后删除当前同步域中的全部远端数据。 |
 
 ### 状态与维护
 
@@ -258,10 +312,8 @@ claude --resume <SESSION_ID>
 |---|---|
 | `ctxhop status` | 查看本地状态；`--remote` 同时检查远端。 |
 | `ctxhop doctor` | 检查配置、存储后端、Agent 和项目状态。 |
-| `ctxhop history` | 查看和清理 Session 历史。 |
 | `ctxhop stats` | 查看跨设备恢复统计。 |
 | `ctxhop hook install` | 安装 Claude Code / Codex SessionEnd Hook。 |
-| `ctxhop version` | 查看版本和构建信息。 |
 
 ## 配置
 

@@ -212,9 +212,10 @@ type ProjectPaths struct {
 // uninstall CtxHop completely (spec §8.5, §4 P5).
 type HookInstaller interface {
 	// InstallHook registers a hook that runs `ctxhop push` when a session
-	// ends. It must be idempotent and must not disturb hooks installed by
-	// anyone else.
-	InstallHook(executable string) error
+	// ends. The optional workspace flag includes the project files and Git
+	// state in that automatic push. It must be idempotent and must not disturb
+	// hooks installed by anyone else.
+	InstallHook(executable string, includeWorkspace ...bool) error
 
 	// RemoveHook removes only the hook this tool installed.
 	RemoveHook() error
