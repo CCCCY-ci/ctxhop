@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/config"
 )
 
@@ -50,6 +51,64 @@ func TestEnsureRemoteDataPreservedRefusesOverlappingDirBackend(t *testing.T) {
 	c.Remote = config.Remote{Type: "s3", Bucket: "test-bucket"}
 	if err := ensureRemoteDataPreserved(configDir, c); err != nil {
 		t.Fatalf("S3 configuration was rejected: %v", err)
+	}
+}
+
+func TestEnsureRemoteDataPreservedRefusesSymlinkedDirBackend(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, ".ctxhop")
+	remotePath := filepath.Join(root, "sync-alias")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(configDir, remotePath); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+
+	c := config.New()
+	c.Remote = config.Remote{Type: "dir", Path: remotePath}
+	if err := ensureRemoteDataPreserved(configDir, c); err == nil {
+		t.Fatal("symlinked remote path was accepted")
+	}
+}
+
+func TestUninstallRemovesInstalledHooksWhenConfigIsMissing(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), ".ctxhop")
+	claudeHome := t.TempDir()
+	codexHome := t.TempDir()
+	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeHome)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	if err := (adapter.Layout{Home: claudeHome}).InstallHook("ctxhop-test", false); err != nil {
+		t.Fatalf("install Claude hook: %v", err)
+	}
+	if err := (adapter.CodexLayout{Home: codexHome}).InstallHook("ctxhop-test", false); err != nil {
+		t.Fatalf("install Codex hook: %v", err)
+	}
+
+	installDir := t.TempDir()
+	target := filepath.Join(installDir, installedExecutableName())
+	if err := os.WriteFile(target, []byte("executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uninstallLocalFiles(uninstallOptions{dir: installDir}); err != nil {
+		t.Fatalf("uninstallLocalFiles: %v", err)
+	}
+
+	claudeInstalled, err := (adapter.Layout{Home: claudeHome}).HookInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeInstalled {
+		t.Fatal("Claude Hook remained after uninstall without local configuration")
+	}
+	codexInstalled, err := (adapter.CodexLayout{Home: codexHome}).HookInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexInstalled {
+		t.Fatal("Codex Hook remained after uninstall without local configuration")
 	}
 }
 

@@ -766,23 +766,34 @@ func containsSensitiveContent(data []byte) bool {
 		"refreshtoken",
 		"session_token",
 		"sessiontoken",
-		"oauth",
-		"credential",
-		"credentials",
+		"oauth_token",
+		"oauth_access_token",
+		"oauth_refresh_token",
+		"oauth_client_secret",
 	} {
 		if strings.Contains(text, marker) {
 			return true
 		}
 	}
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(line, "+"))
-		for _, key := range []string{"password", "passwd", "secret", "token", "authorization"} {
-			if strings.HasPrefix(line, key+"=") || strings.HasPrefix(line, key+":") || strings.HasPrefix(line, "\""+key+"\"") {
+		for _, key := range []string{"password", "passwd", "secret", "token", "authorization", "oauth", "credential", "credentials"} {
+			if sensitiveAssignment(line, key) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func sensitiveAssignment(line, key string) bool {
+	line = strings.TrimSpace(strings.TrimLeft(line, "+-"))
+	line = strings.TrimSpace(strings.TrimLeft(line, "{["))
+	if strings.HasPrefix(line, key+"=") || strings.HasPrefix(line, key+":") {
+		return true
+	}
+	quotedKey := `"` + key + `"`
+	remainder := strings.TrimSpace(strings.TrimPrefix(line, quotedKey))
+	return remainder != line && strings.HasPrefix(remainder, ":")
 }
 
 func sanitizeSubject(value string) string {

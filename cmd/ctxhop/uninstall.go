@@ -114,9 +114,9 @@ func uninstallLocalFiles(options uninstallOptions) (uninstallResult, error) {
 		if err := ensureRemoteDataPreserved(configDir, configured); err != nil {
 			return uninstallResult{}, err
 		}
-		if err := removeInstalledAgentHooks(); err != nil {
-			return uninstallResult{}, fmt.Errorf("uninstall: %w", err)
-		}
+	}
+	if err := removeInstalledAgentHooks(); err != nil {
+		return uninstallResult{}, fmt.Errorf("uninstall: %w", err)
 	}
 
 	installDir := options.dir
@@ -180,21 +180,73 @@ func loadUninstallConfig(configDir string) (*config.Config, error) {
 }
 
 func ensureRemoteDataPreserved(configDir string, c *config.Config) error {
-	if configuredRemotePathOverlaps(configDir, c) {
+	overlaps, err := configuredRemotePathOverlaps(configDir, c)
+	if err != nil {
+		return fmt.Errorf("uninstall: cannot verify the configured local sync directory: %w", err)
+	}
+	if overlaps {
 		return fmt.Errorf("uninstall: the configured local sync directory overlaps %s; move the sync directory before uninstalling so it is not deleted", configDir)
 	}
 	return nil
 }
 
-func configuredRemotePathOverlaps(configDir string, c *config.Config) bool {
+func configuredRemotePathOverlaps(configDir string, c *config.Config) (bool, error) {
 	if c == nil || !strings.EqualFold(strings.TrimSpace(c.Remote.Type), "dir") {
-		return false
+		return false, nil
 	}
 	remotePath := strings.TrimSpace(c.Remote.Path)
 	if remotePath == "" {
-		return false
+		return false, nil
 	}
-	return pathWithin(configDir, remotePath) || pathWithin(remotePath, configDir)
+	resolvedConfigDir, err := resolvePathForSafety(configDir)
+	if err != nil {
+		return false, err
+	}
+	resolvedRemotePath, err := resolvePathForSafety(remotePath)
+	if err != nil {
+		return false, err
+	}
+	return pathWithin(resolvedConfigDir, resolvedRemotePath) || pathWithin(resolvedRemotePath, resolvedConfigDir), nil
+}
+
+func resolvePathForSafety(path string) (string, error) {
+	absolute, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", errors.New("path cannot be resolved safely")
+	}
+	absolute = filepath.Clean(absolute)
+
+	// EvalSymlinks requires the final path to exist. Resolve the nearest
+	// existing ancestor so a configured-but-not-created directory is still
+	// checked through any symlink or Windows Junction in its parents.
+	missing := make([]string, 0, 4)
+	current := absolute
+	for {
+		_, statErr := os.Lstat(current)
+		if statErr == nil {
+			resolved, evalErr := filepath.EvalSymlinks(current)
+			if evalErr != nil {
+				return "", errors.New("path cannot be resolved safely")
+			}
+			resolved, absErr := filepath.Abs(resolved)
+			if absErr != nil {
+				return "", errors.New("path cannot be resolved safely")
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", errors.New("path cannot be resolved safely")
+		}
+		parent := filepath.Dir(current)
+		if sameInstallPath(parent, current) {
+			return "", errors.New("path cannot be resolved safely")
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func removeInstalledAgentHooks() error {

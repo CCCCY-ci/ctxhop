@@ -772,7 +772,11 @@ func leaveCurrentDomain(configDir string, c *config.Config) error {
 	if c == nil {
 		return errors.New("configuration is unavailable")
 	}
-	if configuredRemotePathOverlaps(configDir, c) {
+	overlaps, err := configuredRemotePathOverlaps(configDir, c)
+	if err != nil {
+		return fmt.Errorf("cannot verify the configured local sync directory: %w", err)
+	}
+	if overlaps {
 		return fmt.Errorf("the configured local sync directory overlaps %s; move the sync directory before leaving the current domain", configDir)
 	}
 	if err := removeInstalledAgentHooks(); err != nil {
