@@ -9,6 +9,10 @@
   <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
 </p>
 
+<p align="center">
+  <img src="assets/home.png" alt="CtxHop 欢迎页" width="900">
+</p>
+
 [English](README.md) | 简体中文
 
 **换设备，不换上下文。**
@@ -27,7 +31,7 @@ CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 G
 
 ## 演示
 
-[观看 CtxHop 演示视频](assets/ctxhop-demo.mp4)
+![CtxHop 演示](assets/ctxhop.gif)
 
 ## 安装
 
