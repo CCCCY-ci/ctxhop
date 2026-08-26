@@ -9,6 +9,10 @@
   <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
 </p>
 
+<p align="center">
+  <img src="assets/home.png" alt="CtxHop welcome screen" width="900">
+</p>
+
 English | [简体中文](README.zh-CN.md)
 
 **Switch devices. Keep your context.**
@@ -41,7 +45,7 @@ directory or an S3-compatible object store such as Cloudflare R2.
 
 ## Demo
 
-[Watch the CtxHop demo video](assets/ctxhop-demo.mp4)
+![CtxHop demo](assets/ctxhop.gif)
 
 ## Installation
 
