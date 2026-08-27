@@ -45,13 +45,17 @@ type sessionListEntry struct {
 }
 
 type sessionSourceEntry struct {
-	Agent       string    `json:"agent"`
-	NativeID    string    `json:"nativeId,omitempty"`
-	DeviceID    string    `json:"deviceId,omitempty"`
-	Local       bool      `json:"local"`
-	RecordCount uint64    `json:"recordCount,omitempty"`
-	CreatedAt   time.Time `json:"createdAt,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
+	Agent            string    `json:"agent"`
+	NativeID         string    `json:"nativeId,omitempty"`
+	NativeSessionKey string    `json:"nativeSessionKey,omitempty"`
+	ReplicaID        string    `json:"replicaId,omitempty"`
+	Generation       uint64    `json:"generation,omitempty"`
+	DeviceID         string    `json:"deviceId,omitempty"`
+	Local            bool      `json:"local"`
+	Complete         bool      `json:"complete"`
+	RecordCount      uint64    `json:"recordCount,omitempty"`
+	CreatedAt        time.Time `json:"createdAt,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
 }
 
 type sessionDiscoverReport struct {
@@ -74,11 +78,15 @@ type sessionDiscoverEntry struct {
 type sessionProjectionSource struct {
 	agent       string
 	nativeID    string
+	nativeKey   string
+	replicaID   string
+	generation  uint64
 	deviceID    string
 	title       string
 	createdAt   time.Time
 	updatedAt   time.Time
 	recordCount uint64
+	complete    bool
 	local       bool
 }
 
@@ -166,16 +174,8 @@ func registerPushedSessions(configDir string, identifierKey []byte, deviceID str
 		}
 		agent := sessionAgentLabel(source.Agent)
 		creator := sessionhub.SessionCreator{Agent: agent, DeviceID: deviceID}
-		record, err := registry.EnsureLegacySession(identifierKey, projectRecord.Descriptor.ProjectID, source.LegacySessionID, safeListText(source.Title), source.CreatedAt, creator)
+		_, err := registry.EnsureNativeSession(identifierKey, projectRecord.Descriptor.ProjectID, agent, source.NativeID, source.LegacySessionID, safeListText(source.Title), source.CreatedAt, creator)
 		if err != nil {
-			return err
-		}
-		if err := registry.BindNativeSession(projectRecord.Descriptor.ProjectID, record.Descriptor.SessionID, sessionhub.NativeSessionBinding{
-			Agent:           agent,
-			NativeSessionID: source.NativeID,
-			LegacySessionID: source.LegacySessionID,
-			BoundAt:         time.Now().UTC(),
-		}); err != nil {
 			return err
 		}
 	}
@@ -216,14 +216,18 @@ func buildSessionList(collection listCollection, registry sessionhub.Registry) (
 		hubScope = sessionHubScope{ID: hub.Descriptor.HubID, Name: hub.Descriptor.Name}
 	}
 	builder := sessionProjectionBuilder{
-		identifierKey: collection.identifierKey,
-		v2ProjectID:   v2ProjectID,
-		v1ProjectID:   collection.projectID,
-		localDevice:   collection.localDeviceID,
-		registry:      registry,
-		entries:       make(map[string]*sessionListEntry),
+		identifierKey:  collection.identifierKey,
+		v2ProjectID:    v2ProjectID,
+		v1ProjectID:    collection.projectID,
+		localDevice:    collection.localDeviceID,
+		registry:       registry,
+		entries:        make(map[string]*sessionListEntry),
+		nativeSessions: make(map[string]string),
 	}
 	builder.addRegisteredSessions()
+	for _, group := range collection.remoteReplicas {
+		builder.addRemoteReplicas(group)
+	}
 	for _, group := range collection.remoteSessions {
 		for _, device := range group.Devices {
 			builder.addRemote(group.SessionID, device)
@@ -240,6 +244,9 @@ func buildSessionList(collection listCollection, registry sessionhub.Registry) (
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			if len(entries[i].Sources) != 0 && len(entries[j].Sources) != 0 && entries[i].Sources[0].Agent != entries[j].Sources[0].Agent {
+				return entries[i].Sources[0].Agent < entries[j].Sources[0].Agent
+			}
 			return entries[i].SessionID < entries[j].SessionID
 		}
 		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
@@ -248,12 +255,13 @@ func buildSessionList(collection listCollection, registry sessionhub.Registry) (
 }
 
 type sessionProjectionBuilder struct {
-	identifierKey []byte
-	v2ProjectID   string
-	v1ProjectID   string
-	localDevice   string
-	registry      sessionhub.Registry
-	entries       map[string]*sessionListEntry
+	identifierKey  []byte
+	v2ProjectID    string
+	v1ProjectID    string
+	localDevice    string
+	registry       sessionhub.Registry
+	entries        map[string]*sessionListEntry
+	nativeSessions map[string]string
 }
 
 func (b *sessionProjectionBuilder) addRegisteredSessions() {
@@ -266,12 +274,54 @@ func (b *sessionProjectionBuilder) addRegisteredSessions() {
 		entry.Title = safeListText(record.Descriptor.Title)
 		entry.CreatedAt = record.Descriptor.CreatedAt.UTC()
 		for _, source := range record.Sources {
+			nativeKey, _ := sessionhub.DeriveNativeSessionKey(b.identifierKey, source.Agent, source.NativeSessionID)
 			b.addSource(record.Descriptor.SessionID, sessionProjectionSource{
-				agent:    source.Agent,
-				nativeID: source.NativeSessionID,
-				deviceID: b.localDevice,
+				agent:     source.Agent,
+				nativeID:  source.NativeSessionID,
+				nativeKey: nativeKey,
+				deviceID:  b.localDevice,
+				local:     true,
 			})
 		}
+	}
+}
+
+func (b *sessionProjectionBuilder) addRemoteReplicas(group syncer.ProjectReplicaMetadataRef) {
+	if len(group.Replicas) == 0 && group.SessionDescriptor != nil {
+		b.addSourceTitle(group.SessionDescriptor.SessionID, group.SessionDescriptor.Title, group.SessionDescriptor.CreatedAt)
+		entry := b.entry(group.SessionDescriptor.SessionID)
+		if entry.Title == "" {
+			entry.Title = "encrypted session metadata"
+		}
+		return
+	}
+	for _, replica := range group.Replicas {
+		descriptor := replica.Descriptor
+		sessionID := descriptor.SessionID
+		agent := sessionAgentLabel(descriptor.Source.Agent)
+		nativeKey := descriptor.Source.NativeSessionKey
+		if nativeKey != "" {
+			b.nativeSessions[nativeSourceKey(agent, nativeKey)] = sessionID
+		}
+		source := sessionProjectionSource{
+			agent:      agent,
+			nativeKey:  nativeKey,
+			replicaID:  descriptor.ReplicaID,
+			generation: descriptor.Source.Generation,
+			deviceID:   replica.Layout.DeviceID(),
+			createdAt:  descriptor.CreatedAt,
+			complete:   replica.Tip != nil,
+		}
+		if replica.Tip != nil {
+			source.recordCount = replica.Tip.RecordCount
+			source.updatedAt = replica.Tip.UpdatedAt
+		} else {
+			source.updatedAt = descriptor.CreatedAt
+		}
+		if group.SessionDescriptor != nil {
+			b.addSourceTitle(sessionID, group.SessionDescriptor.Title, group.SessionDescriptor.CreatedAt)
+		}
+		b.addSource(sessionID, source)
 	}
 }
 
@@ -287,6 +337,9 @@ func (b *sessionProjectionBuilder) addRemote(legacyID string, device syncer.Meta
 		source.title = safeListText(summary.Title)
 		source.createdAt = summary.CreatedAt
 		source.updatedAt = summary.UpdatedAt
+		if source.agent != "unknown" && source.nativeID != "" {
+			source.nativeKey, _ = sessionhub.DeriveNativeSessionKey(b.identifierKey, source.agent, source.nativeID)
+		}
 	}
 	b.addSource(b.sessionID(legacyID, source.agent, source.nativeID), source)
 }
@@ -298,10 +351,12 @@ func (b *sessionProjectionBuilder) addLocal(ref adapter.SessionRef) {
 	}
 	agent := sessionAgentLabel(ref.Agent)
 	nativeID := safeListText(ref.NativeID)
-	sessionID := b.sessionID(legacyID, agent, nativeID)
+	sessionID := b.localSessionID(legacyID, agent, nativeID)
+	nativeKey, _ := sessionhub.DeriveNativeSessionKey(b.identifierKey, agent, nativeID)
 	source := sessionProjectionSource{
 		agent:     agent,
 		nativeID:  nativeID,
+		nativeKey: nativeKey,
 		deviceID:  b.localDevice,
 		title:     safeListText(ref.Title),
 		createdAt: ref.CreatedAt,
@@ -315,11 +370,36 @@ func (b *sessionProjectionBuilder) sessionID(legacyID, agent, nativeID string) s
 	if record, ok := b.registry.FindSessionByNative(b.v2ProjectID, agent, nativeID, legacyID); ok {
 		return record.Descriptor.SessionID
 	}
+	if nativeKey, err := sessionhub.DeriveNativeSessionKey(b.identifierKey, agent, nativeID); err == nil {
+		if sessionID := b.nativeSessions[nativeSourceKey(agent, nativeKey)]; sessionID != "" {
+			return sessionID
+		}
+	}
 	logicalID, err := sessionhub.DeriveLegacySessionKey(b.identifierKey, b.v2ProjectID, legacyID)
 	if err != nil {
 		return ""
 	}
 	return logicalID
+}
+
+func (b *sessionProjectionBuilder) localSessionID(legacyID, agent, nativeID string) string {
+	if record, ok := b.registry.FindSessionByNative(b.v2ProjectID, agent, nativeID, legacyID); ok {
+		return record.Descriptor.SessionID
+	}
+	if nativeKey, err := sessionhub.DeriveNativeSessionKey(b.identifierKey, agent, nativeID); err == nil {
+		if sessionID := b.nativeSessions[nativeSourceKey(agent, nativeKey)]; sessionID != "" {
+			return sessionID
+		}
+	}
+	logicalID, err := sessionhub.DeriveNativeLogicalSessionKey(b.identifierKey, b.v2ProjectID, agent, nativeID)
+	if err != nil {
+		return ""
+	}
+	return logicalID
+}
+
+func nativeSourceKey(agent, nativeKey string) string {
+	return agent + "\x00" + nativeKey
 }
 
 func (b *sessionProjectionBuilder) entry(sessionID string) *sessionListEntry {
@@ -339,9 +419,7 @@ func (b *sessionProjectionBuilder) addSource(sessionID string, source sessionPro
 		return
 	}
 	entry := b.entry(sessionID)
-	if source.title != "" && (entry.Title == "" || entry.Title == "encrypted session metadata" || source.updatedAt.After(entry.UpdatedAt)) {
-		entry.Title = source.title
-	}
+	b.addSourceTitle(sessionID, source.title, source.createdAt)
 	if entry.Title == "" {
 		entry.Title = "encrypted session metadata"
 	}
@@ -356,33 +434,72 @@ func (b *sessionProjectionBuilder) addSource(sessionID string, source sessionPro
 		entry.RecordCount = source.recordCount
 	}
 
-	key := source.agent + "\x00" + source.nativeID + "\x00" + source.deviceID
+	identity := source.nativeKey
+	if identity == "" {
+		identity = source.nativeID
+	}
+	key := source.agent + "\x00" + identity + "\x00" + source.deviceID
 	for index := range entry.Sources {
 		existing := &entry.Sources[index]
-		if existing.Agent+"\x00"+existing.NativeID+"\x00"+existing.DeviceID != key {
+		existingIdentity := existing.NativeSessionKey
+		if existingIdentity == "" {
+			existingIdentity = existing.NativeID
+		}
+		if existing.Agent+"\x00"+existingIdentity+"\x00"+existing.DeviceID != key {
 			continue
 		}
 		existing.Local = existing.Local || source.local
+		existing.Complete = existing.Complete || source.complete
+		if existing.NativeID == "" && source.nativeID != "" {
+			existing.NativeID = source.nativeID
+		}
+		if existing.NativeSessionKey == "" {
+			existing.NativeSessionKey = source.nativeKey
+		}
+		if source.replicaID != "" {
+			existing.ReplicaID = source.replicaID
+		}
+		if source.generation > existing.Generation {
+			existing.Generation = source.generation
+		}
 		if source.recordCount > existing.RecordCount {
 			existing.RecordCount = source.recordCount
 		}
+		if source.createdAt.Before(existing.CreatedAt) || existing.CreatedAt.IsZero() {
+			existing.CreatedAt = source.createdAt.UTC()
+		}
 		if source.updatedAt.After(existing.UpdatedAt) {
-			if !source.createdAt.IsZero() {
-				existing.CreatedAt = source.createdAt.UTC()
-			}
 			existing.UpdatedAt = source.updatedAt.UTC()
 		}
 		return
 	}
 	entry.Sources = append(entry.Sources, sessionSourceEntry{
-		Agent:       source.agent,
-		NativeID:    source.nativeID,
-		DeviceID:    source.deviceID,
-		Local:       source.local,
-		RecordCount: source.recordCount,
-		CreatedAt:   source.createdAt.UTC(),
-		UpdatedAt:   source.updatedAt.UTC(),
+		Agent:            source.agent,
+		NativeID:         source.nativeID,
+		NativeSessionKey: source.nativeKey,
+		ReplicaID:        source.replicaID,
+		Generation:       source.generation,
+		DeviceID:         source.deviceID,
+		Local:            source.local,
+		Complete:         source.complete,
+		RecordCount:      source.recordCount,
+		CreatedAt:        source.createdAt.UTC(),
+		UpdatedAt:        source.updatedAt.UTC(),
 	})
+}
+
+func (b *sessionProjectionBuilder) addSourceTitle(sessionID, title string, createdAt time.Time) {
+	if sessionID == "" {
+		return
+	}
+	entry := b.entry(sessionID)
+	title = safeListText(title)
+	if title != "" && (entry.Title == "" || entry.Title == "encrypted session metadata") {
+		entry.Title = title
+	}
+	if !createdAt.IsZero() && (entry.CreatedAt.IsZero() || createdAt.Before(entry.CreatedAt)) {
+		entry.CreatedAt = createdAt.UTC()
+	}
 }
 
 func sessionAgentLabel(agent string) string {
@@ -461,6 +578,12 @@ func sessionSourceLabel(source sessionSourceEntry) string {
 	label := source.Agent
 	if source.NativeID != "" {
 		label += ":" + source.NativeID
+	} else if source.NativeSessionKey != "" {
+		key := source.NativeSessionKey
+		if len(key) > 12 {
+			key = key[:12]
+		}
+		label += ":key-" + key
 	}
 	return label + "@" + sessionDeviceLabel(source)
 }

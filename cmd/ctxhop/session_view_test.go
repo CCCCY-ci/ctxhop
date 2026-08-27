@@ -110,6 +110,66 @@ func TestBuildSessionListGroupsOnlyAnExistingRemoteSessionGroup(t *testing.T) {
 	}
 }
 
+func TestBuildSessionListProjectsRemoteNativeReplicaMetadata(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	current := project.Project{Root: t.TempDir(), Identity: project.Identity{Kind: project.KindRemote, Value: "github.com/example/app"}}
+	v1ProjectID, err := crypto.ProjectID(key, current.Identity.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubScope, projectScope, _, err := sessionHubAndProject(key, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 27, 6, 0, 0, 0, time.UTC)
+	layout, err := syncer.NewReplicaLayout(hubScope.ID, projectScope.ID, "session01", "replica01", "device02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica := syncer.ReplicaMetadata{
+		Layout: layout,
+		Descriptor: sessionhub.NativeReplicaDescriptor{
+			Version:   sessionhub.ModelVersion,
+			ReplicaID: "replica01",
+			SessionID: "session01",
+			Source: sessionhub.NativeSource{
+				Agent:            "codex",
+				NativeSessionKey: "nativekey01",
+				DeviceID:         "device02",
+				Generation:       1,
+				NativeFormat:     "codex-jsonl",
+			},
+			Origin:    sessionhub.ReplicaOrigin{Kind: sessionhub.ReplicaOriginNative},
+			CreatedAt: now,
+		},
+		Tip: &sessionhub.ReplicaTip{Version: sessionhub.ModelVersion, ReplicaID: "replica01", RecordCount: 7, ShardCount: 1, LastShard: 1, HeadDigest: strings.Repeat("0", 64), UpdatedAt: now.Add(time.Hour)},
+	}
+	registry, err := sessionhub.NewDefaultRegistry(key, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := buildSessionList(listCollection{
+		current:        current,
+		identifierKey:  key,
+		projectID:      v1ProjectID,
+		localDeviceID:  "device01",
+		remoteReplicas: []syncer.ProjectReplicaMetadataRef{{SessionID: "session01", SessionDescriptor: &sessionhub.SessionDescriptor{SessionID: "session01", ProjectID: projectScope.ID, Title: "remote title", CreatedAt: now, CreatedBy: sessionhub.SessionCreator{Agent: "codex", DeviceID: "device02"}, Version: sessionhub.ModelVersion, Lifecycle: sessionhub.SessionActive}, Replicas: []syncer.ReplicaMetadata{replica}}},
+	}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Sessions) != 1 || report.Sessions[0].SessionID != "session01" || report.Sessions[0].Title != "remote title" {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(report.Sessions[0].Sources) != 1 {
+		t.Fatalf("sources = %+v", report.Sessions[0].Sources)
+	}
+	source := report.Sessions[0].Sources[0]
+	if source.Agent != "codex" || source.NativeSessionKey != "nativekey01" || source.DeviceID != "device02" || !source.Complete || source.RecordCount != 7 {
+		t.Fatalf("remote Replica source = %+v", source)
+	}
+}
+
 func TestBuildSessionListHonoursAnExplicitLocalBinding(t *testing.T) {
 	key := []byte(strings.Repeat("k", 32))
 	current := project.Project{Root: t.TempDir(), Identity: project.Identity{Kind: project.KindRemote, Value: "github.com/example/app"}}

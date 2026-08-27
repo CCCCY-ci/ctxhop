@@ -89,7 +89,7 @@ func (s *pushSummary) failContext(agent, stage string, err error) {
 
 func pushFailureStageHasClass(stage string) bool {
 	switch stage {
-	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record", "session-registry":
+	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "replica-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record", "session-registry":
 		return true
 	default:
 		return false
@@ -264,6 +264,23 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	}
 
 	var summary pushSummary
+	needsReplicaScope := false
+	for _, agent := range agents {
+		refs := agent.Sessions
+		if options.session != "" {
+			refs = filterPushSession(refs, options.session)
+		}
+		if len(refs) != 0 {
+			needsReplicaScope = true
+			break
+		}
+	}
+	if needsReplicaScope {
+		if err := publishReplicaProjectScope(ctx, c.Device.ID, secrets.IdentifierKey, current.Identity.Value, current.Identity.Kind, store, public); err != nil {
+			summary.fail("replica-push", err)
+			return summary, nil
+		}
+	}
 	found := false
 	for _, agent := range agents {
 		refs := agent.Sessions
@@ -275,7 +292,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash, skipConfig: !c.SyncConfigEnabled()})
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash, skipConfig: !c.SyncConfigEnabled(), replicaIdentities: access.Identities})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -334,6 +351,7 @@ type pushSessionOptions struct {
 	gitStash                  string
 	skipConfig                bool
 	projectIdentity           string
+	replicaIdentities         []*ecdh.PrivateKey
 }
 
 type pushedNativeSession struct {
@@ -504,6 +522,10 @@ func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKe
 		fail("remote-push", err)
 		return summary
 	}
+	if err := publishNativeReplica(ctx, stateRoot, deviceID, identifierKey, options.projectIdentity, layout, installation, store, public, stateRoot, ref, sessionID, data, space, options.replicaIdentities); err != nil {
+		fail("replica-push", err)
+		return summary
+	}
 	environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
 	if options.skipConfig {
 		environmentCapture = environmentCapture.WithoutConfig()
@@ -645,6 +667,8 @@ func classifyPushFailure(err error) syncer.FailureClass {
 	case errors.Is(err, syncflow.ErrSessionNotPushable), errors.Is(err, syncflow.ErrInvalidPathSpace), errors.Is(err, syncflow.ErrInvalidSessionSnapshot):
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, syncer.ErrLocalHistoryChanged), errors.Is(err, syncer.ErrInvalidCursorState), errors.Is(err, syncer.ErrCursorCommit):
+		return syncer.FailureSessionCorrupt
+	case errors.Is(err, syncer.ErrReplicaImmutableConflict), errors.Is(err, syncer.ErrReplicaIdentityMismatch), errors.Is(err, syncer.ErrReplicaIncomplete), errors.Is(err, syncer.ErrReplicaCursorCommit), errors.Is(err, syncer.ErrReplicaObjectTooLarge):
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, remote.ErrCredentials):
 		return syncer.FailureCredentials

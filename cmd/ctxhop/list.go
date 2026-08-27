@@ -135,6 +135,7 @@ type listCollection struct {
 	localDeviceID  string
 	localSessions  []adapter.SessionRef
 	remoteSessions []syncer.ProjectMetadataRef
+	remoteReplicas []syncer.ProjectReplicaMetadataRef
 }
 
 func collectListCollection(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, error) {
@@ -190,6 +191,21 @@ func collectListCollection(ctx context.Context, c *config.Config, configDir, pro
 	if err != nil && !errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return listCollection{}, fmt.Errorf("%s: read encrypted session metadata: %w", command, err)
 	}
+	var remoteReplicas []syncer.ProjectReplicaMetadataRef
+	if command == "session list" {
+		hubScope, _, v2ProjectID, err := sessionHubAndProject(secrets.IdentifierKey, current)
+		if err != nil {
+			return listCollection{}, err
+		}
+		v2ProjectLayout, err := syncer.NewProjectHubLayout(hubScope.ID, v2ProjectID)
+		if err != nil {
+			return listCollection{}, fmt.Errorf("%s: prepare Session Hub metadata: %w", command, err)
+		}
+		remoteReplicas, err = syncer.FetchProjectReplicaMetadataWithDevices(ctx, store, v2ProjectLayout, identities, access.allowedDevices())
+		if err != nil && !errors.Is(err, syncer.ErrNoReplicaMetadata) {
+			return listCollection{}, fmt.Errorf("%s: read Session Hub Replica metadata: %w", command, err)
+		}
+	}
 	localSessions, err := discoverListSessionsWithContext(ctx, current.Root)
 	if err != nil {
 		return listCollection{}, err
@@ -201,6 +217,7 @@ func collectListCollection(ctx context.Context, c *config.Config, configDir, pro
 		localDeviceID:  c.Device.ID,
 		localSessions:  localSessions,
 		remoteSessions: remoteSessions,
+		remoteReplicas: remoteReplicas,
 	}, nil
 }
 

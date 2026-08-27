@@ -349,6 +349,112 @@ func (r *Registry) EnsureLegacySession(identifierKey []byte, projectID, legacySe
 	return cloneSessionRecord(session), nil
 }
 
+// EnsureNativeSession returns the logical Session already bound to an
+// Agent-native source, or creates the deterministic default logical Session
+// for that source when it has not been bound yet. The default identity
+// includes the Agent, so equal native IDs from Claude and Codex remain
+// independent until an explicit binding joins them.
+func (r *Registry) EnsureNativeSession(identifierKey []byte, projectID, agent, nativeSessionID, legacySessionID, title string, createdAt time.Time, creator SessionCreator) (SessionRecord, error) {
+	if r == nil {
+		return SessionRecord{}, errors.New("sessionhub: registry is required")
+	}
+	if err := r.Validate(); err != nil {
+		return SessionRecord{}, err
+	}
+	if err := validateOpaqueID(projectID); err != nil {
+		return SessionRecord{}, fmt.Errorf("%w: project id", ErrInvalidIdentity)
+	}
+	binding := NativeSessionBinding{
+		Agent:           agent,
+		NativeSessionID: nativeSessionID,
+		LegacySessionID: legacySessionID,
+		BoundAt:         time.Now().UTC(),
+	}
+	if err := binding.Validate(); err != nil {
+		return SessionRecord{}, err
+	}
+	if err := validateSessionCreator(creator); err != nil {
+		return SessionRecord{}, err
+	}
+	if existing, ok := r.FindSessionByNative(projectID, agent, nativeSessionID, legacySessionID); ok {
+		return updateNativeSessionRecord(existing, r, projectID, agent, nativeSessionID, legacySessionID, title, createdAt)
+	}
+	logicalID, err := DeriveNativeLogicalSessionKey(identifierKey, projectID, agent, nativeSessionID)
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	session := SessionRecord{Descriptor: SessionDescriptor{
+		Version:   ModelVersion,
+		SessionID: logicalID,
+		ProjectID: projectID,
+		Title:     title,
+		CreatedAt: createdAt.UTC().Round(0),
+		CreatedBy: creator,
+		Lifecycle: SessionActive,
+	}}
+	if err := session.Descriptor.Validate(); err != nil {
+		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %v", ErrInvalidModel, err)
+	}
+	projectIndex, hubIndex := r.findProject(projectID)
+	if hubIndex < 0 || projectIndex < 0 {
+		return SessionRecord{}, fmt.Errorf("%w: project %q is not registered", ErrInvalidModel, projectID)
+	}
+	project := &r.Hubs[hubIndex].Projects[projectIndex]
+	if index := sessionIndex(*project, logicalID); index >= 0 {
+		// A deterministic collision can only be caused by a previously created
+		// record that is missing its source binding. Do not overwrite it.
+		if err := r.BindNativeSession(projectID, logicalID, binding); err != nil {
+			return SessionRecord{}, err
+		}
+		return cloneSessionRecord(project.Sessions[index]), nil
+	}
+	project.Sessions = append(project.Sessions, session)
+	sortSessions(project.Sessions)
+	if err := r.BindNativeSession(projectID, logicalID, binding); err != nil {
+		return SessionRecord{}, err
+	}
+	if record, ok := r.FindSessionByNative(projectID, agent, nativeSessionID, legacySessionID); ok {
+		return record, nil
+	}
+	return SessionRecord{}, fmt.Errorf("%w: native session binding was not recorded", ErrInvalidModel)
+}
+
+func updateNativeSessionRecord(existing SessionRecord, r *Registry, projectID, agent, nativeSessionID, legacySessionID, title string, createdAt time.Time) (SessionRecord, error) {
+	projectIndex, hubIndex := r.findProject(projectID)
+	if hubIndex < 0 || projectIndex < 0 {
+		return SessionRecord{}, fmt.Errorf("%w: project %q is not registered", ErrInvalidModel, projectID)
+	}
+	project := &r.Hubs[hubIndex].Projects[projectIndex]
+	index := sessionIndex(*project, existing.Descriptor.SessionID)
+	if index < 0 {
+		return SessionRecord{}, fmt.Errorf("%w: native session record is unavailable", ErrInvalidModel)
+	}
+	if strings.TrimSpace(title) != "" {
+		project.Sessions[index].Descriptor.Title = title
+	}
+	if !createdAt.IsZero() && createdAt.Before(project.Sessions[index].Descriptor.CreatedAt) {
+		project.Sessions[index].Descriptor.CreatedAt = createdAt.UTC().Round(0)
+	}
+	if err := project.Sessions[index].Descriptor.Validate(); err != nil {
+		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %v", ErrInvalidModel, err)
+	}
+	// Refresh the optional legacy identity without changing the logical
+	// Session selected by the existing binding.
+	for sourceIndex := range project.Sessions[index].Sources {
+		source := &project.Sessions[index].Sources[sourceIndex]
+		if source.Agent == agent && source.NativeSessionID == nativeSessionID {
+			if legacySessionID != "" {
+				source.LegacySessionID = legacySessionID
+			}
+			source.BoundAt = time.Now().UTC()
+		}
+	}
+	return cloneSessionRecord(project.Sessions[index]), nil
+}
+
 // BindNativeSession attaches a local Agent session to an existing logical
 // Session. It never reads or changes the Agent's native file.
 func (r *Registry) BindNativeSession(projectID, sessionID string, binding NativeSessionBinding) error {

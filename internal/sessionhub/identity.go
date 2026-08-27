@@ -78,6 +78,25 @@ func DeriveNativeSessionKey(identifierKey []byte, agent, nativeSessionID string)
 	return derive(identifierKey, nativeSessionIdentifierDomain, agent, nativeSessionID)
 }
 
+// DeriveNativeLogicalSessionKey derives the default logical Session identity
+// for one unbound Agent-native source. Agent and native session identity are
+// both included deliberately: two Agents are never implicitly merged merely
+// because their native identifiers happen to be equal. An explicit local
+// binding can still attach the source to another logical Session.
+func DeriveNativeLogicalSessionKey(identifierKey []byte, projectKey, agent, nativeSessionID string) (string, error) {
+	if err := validateOpaqueID(projectKey); err != nil {
+		return "", fmt.Errorf("%w: native logical session project key", ErrInvalidIdentity)
+	}
+	if err := validateAgent(agent); err != nil {
+		return "", fmt.Errorf("%w: native logical session agent", ErrInvalidIdentity)
+	}
+	nativeKey, err := DeriveNativeSessionKey(identifierKey, agent, nativeSessionID)
+	if err != nil {
+		return "", err
+	}
+	return DeriveSessionKey(identifierKey, projectKey, "native-v2:"+agent+":"+nativeKey)
+}
+
 // DeriveReplicaKey derives the opaque key for one Agent/device/generation
 // NativeReplica.
 func DeriveReplicaKey(identifierKey []byte, sessionKey, agent, nativeSessionKey, deviceID string, generation uint64) (string, error) {

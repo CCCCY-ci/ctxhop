@@ -91,6 +91,39 @@ func TestRegistryCreatesProjectLegacySessionAndBinding(t *testing.T) {
 	}
 }
 
+func TestRegistryNativeSessionsKeepAgentIdentitySeparate(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	registry, err := NewDefaultRegistry(key, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := registry.EnsureProject(key, ProjectIdentityManual, "manual:app", time.Unix(200, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Unix(300, 0).UTC()
+	claude, err := registry.EnsureNativeSession(key, project.Descriptor.ProjectID, "claude-code", "same-native-id", "legacyclaude", "Claude", created, SessionCreator{Agent: "claude-code", DeviceID: "device01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := registry.EnsureNativeSession(key, project.Descriptor.ProjectID, "codex", "same-native-id", "legacycodex", "Codex", created, SessionCreator{Agent: "codex", DeviceID: "device01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claude.Descriptor.SessionID == codex.Descriptor.SessionID {
+		t.Fatalf("Claude and Codex were implicitly merged: %q", claude.Descriptor.SessionID)
+	}
+	if found, ok := registry.FindSessionByNative(project.Descriptor.ProjectID, "claude-code", "same-native-id", ""); !ok || found.Descriptor.SessionID != claude.Descriptor.SessionID {
+		t.Fatalf("Claude binding = %+v, ok=%t", found, ok)
+	}
+	if found, ok := registry.FindSessionByNative(project.Descriptor.ProjectID, "codex", "same-native-id", ""); !ok || found.Descriptor.SessionID != codex.Descriptor.SessionID {
+		t.Fatalf("Codex binding = %+v, ok=%t", found, ok)
+	}
+	if err := registry.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRegistryRejectsMissingFileWithoutCreatingIt(t *testing.T) {
 	_, err := LoadRegistry(t.TempDir())
 	if !errors.Is(err, ErrRegistryNotFound) {
