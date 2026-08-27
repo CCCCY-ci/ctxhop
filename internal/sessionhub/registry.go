@@ -349,6 +349,47 @@ func (r *Registry) EnsureLegacySession(identifierKey []byte, projectID, legacySe
 	return cloneSessionRecord(session), nil
 }
 
+// EnsureSession registers an authenticated logical Session descriptor under
+// its existing v2 identity. Unlike EnsureNativeSession it does not derive a
+// new identity from an Agent/native ID; this is what lets a device that has
+// never seen the Session before bind a restored NativeSession to the exact
+// remote logical Session selected by resume.
+func (r *Registry) EnsureSession(projectID string, descriptor SessionDescriptor) (SessionRecord, error) {
+	if r == nil {
+		return SessionRecord{}, errors.New("sessionhub: registry is required")
+	}
+	if err := r.Validate(); err != nil {
+		return SessionRecord{}, err
+	}
+	if err := descriptor.Validate(); err != nil {
+		return SessionRecord{}, fmt.Errorf("%w: session descriptor: %v", ErrInvalidModel, err)
+	}
+	projectIndex, hubIndex := r.findProject(projectID)
+	if hubIndex < 0 || projectIndex < 0 {
+		return SessionRecord{}, fmt.Errorf("%w: project %q is not registered", ErrInvalidModel, projectID)
+	}
+	if descriptor.ProjectID != projectID {
+		return SessionRecord{}, fmt.Errorf("%w: session belongs to another project", ErrInvalidHierarchy)
+	}
+	project := &r.Hubs[hubIndex].Projects[projectIndex]
+	if index := sessionIndex(*project, descriptor.SessionID); index >= 0 {
+		record := &project.Sessions[index]
+		if descriptor.Title != "" {
+			record.Descriptor.Title = descriptor.Title
+		}
+		if descriptor.CreatedAt.Before(record.Descriptor.CreatedAt) {
+			record.Descriptor.CreatedAt = descriptor.CreatedAt.UTC().Round(0)
+		}
+		if record.Descriptor.CreatedBy.Agent == "" && descriptor.CreatedBy.Agent != "" {
+			record.Descriptor.CreatedBy = descriptor.CreatedBy
+		}
+		return cloneSessionRecord(*record), nil
+	}
+	project.Sessions = append(project.Sessions, SessionRecord{Descriptor: descriptor})
+	sortSessions(project.Sessions)
+	return cloneSessionRecord(SessionRecord{Descriptor: descriptor}), nil
+}
+
 // EnsureNativeSession returns the logical Session already bound to an
 // Agent-native source, or creates the deterministic default logical Session
 // for that source when it has not been bound yet. The default identity

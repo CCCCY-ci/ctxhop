@@ -20,6 +20,7 @@ const (
 	sessionActionDiscover = "discover"
 	sessionActionList     = "list"
 	sessionActionShow     = "show"
+	sessionActionResume   = "resume"
 )
 
 type sessionOptions struct {
@@ -52,6 +53,13 @@ func runSessionWithIO(args []string, output io.Writer) error {
 }
 
 func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
+	// `session resume` is the v2 spelling of the same operation exposed by the
+	// historical top-level `resume` command. Dispatch before parsing the
+	// metadata-only session subcommands so all resume flags remain owned by one
+	// parser and both entry points have identical safety semantics.
+	if len(args) != 0 && args[0] == sessionActionResume {
+		return runResumeWithStreams(args[1:], input, output, prompt)
+	}
 	options, err := parseSessionOptions(args)
 	if err != nil {
 		return err
@@ -106,7 +114,7 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 
 func parseSessionOptions(args []string) (sessionOptions, error) {
 	if len(args) == 0 {
-		return sessionOptions{}, errors.New("session: expected discover, list, or show")
+		return sessionOptions{}, errors.New("session: expected discover, list, show, or resume")
 	}
 
 	options := sessionOptions{action: args[0]}
@@ -137,7 +145,7 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 			return sessionOptions{}, errors.New("session show: session ID contains an invalid character")
 		}
 	default:
-		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, or show", options.action)
+		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, show, or resume", options.action)
 	}
 	return options, nil
 }

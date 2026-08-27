@@ -15,7 +15,7 @@ var commandSubcommands = map[string][]string{
 	"passphrase": {"change", "reset"},
 	"project":    {"bind", "unbind", "mode", "list", "discover"},
 	"remote":     {"delete-session", "delete-project", "delete-all"},
-	"session":    {"discover", "list", "show"},
+	"session":    {"discover", "list", "resume", "show"},
 }
 
 var commandOptions = map[string][]string{
@@ -25,7 +25,7 @@ var commandOptions = map[string][]string{
 	"uninstall":             {"--dir"},
 	"status":                {"--json", "--remote"},
 	"list":                  {"--json"},
-	"resume":                {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version"},
+	"resume":                {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version", "--agent", "--replica"},
 	"history":               {"--json"},
 	"history prune":         {"--yes", "--remote-id", "--path", "--keep", "--before"},
 	"stats":                 {"--json"},
@@ -46,6 +46,7 @@ var commandOptions = map[string][]string{
 	"session discover":      {"--json"},
 	"session list":          {"--json"},
 	"session show":          {"--json"},
+	"session resume":        {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version", "--agent", "--replica"},
 	"remote delete-session": {"--yes", "--remote-id", "--path"},
 	"remote delete-project": {"--yes", "--path"},
 	"remote delete-all":     {"--yes"},
