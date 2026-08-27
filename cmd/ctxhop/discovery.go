@@ -15,6 +15,7 @@ var commandSubcommands = map[string][]string{
 	"passphrase": {"change", "reset"},
 	"project":    {"bind", "unbind", "mode", "list", "discover"},
 	"remote":     {"delete-session", "delete-project", "delete-all"},
+	"session":    {"discover", "list", "show"},
 }
 
 var commandOptions = map[string][]string{
@@ -42,6 +43,9 @@ var commandOptions = map[string][]string{
 	"project mode":          {"--path", "--identity"},
 	"project list":          {"--json"},
 	"project discover":      {"--json"},
+	"session discover":      {"--json"},
+	"session list":          {"--json"},
+	"session show":          {"--json"},
 	"remote delete-session": {"--yes", "--remote-id", "--path"},
 	"remote delete-project": {"--yes", "--path"},
 	"remote delete-all":     {"--yes"},

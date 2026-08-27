@@ -23,7 +23,7 @@ func TestCommandTableIsUniqueAndFullyImplemented(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"init", "install", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "pull", "version", "help"} {
+	for _, name := range []string{"init", "install", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "session", "pull", "version", "help"} {
 		if _, exists := seen[name]; !exists {
 			t.Errorf("expected command %q is missing", name)
 		}
@@ -85,7 +85,7 @@ func TestRunRejectsUnknownCommands(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("run error = %v, want unknown command", err)
 	}
-	for _, removed := range []string{"session", "state", "restore"} {
+	for _, removed := range []string{"state", "restore"} {
 		err := run([]string{removed})
 		if err == nil || !strings.Contains(err.Error(), "unknown command") {
 			t.Fatalf("removed command %q returned %v", removed, err)

@@ -41,6 +41,11 @@ type pushSummary struct {
 	Skipped         int
 	NoLocalSessions bool
 
+	// pushedSessions is local metadata used to register successful v1 pushes
+	// in the Phase 1 logical Session registry. It never carries session body
+	// bytes and is intentionally omitted from command output.
+	pushedSessions *[]pushedNativeSession
+
 	// failureDetails contains only fixed stage names and finite failure
 	// classes. It never carries session content, local paths, credentials or
 	// provider response text.
@@ -84,7 +89,7 @@ func (s *pushSummary) failContext(agent, stage string, err error) {
 
 func pushFailureStageHasClass(stage string) bool {
 	switch stage {
-	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record":
+	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record", "session-registry":
 		return true
 	default:
 		return false
@@ -280,6 +285,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 			}
 			summary.failureDetails += partial.failureDetails
 		}
+		mergePushedSessions(&summary, partial)
 	}
 	if options.session != "" && !found {
 		return pushSummary{}, errors.New("push: requested session was not found in the current project")
@@ -294,6 +300,11 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		if err := publishPushDeviceRecord(ctx, c, store, public); err != nil {
 			summary.fail("device-record", err)
+		}
+	}
+	if lenPushedSessions(summary) != 0 {
+		if err := registerPushedSessions(configDir, secrets.IdentifierKey, c.Device.ID, current.Identity, *summary.pushedSessions); err != nil {
+			summary.fail("session-registry", err)
 		}
 	}
 	return summary, nil
@@ -323,6 +334,41 @@ type pushSessionOptions struct {
 	gitStash                  string
 	skipConfig                bool
 	projectIdentity           string
+}
+
+type pushedNativeSession struct {
+	Agent           string
+	NativeID        string
+	LegacySessionID string
+	Title           string
+	CreatedAt       time.Time
+}
+
+func addPushedSession(summary *pushSummary, source pushedNativeSession) {
+	if summary == nil {
+		return
+	}
+	if summary.pushedSessions == nil {
+		summary.pushedSessions = new([]pushedNativeSession)
+	}
+	*summary.pushedSessions = append(*summary.pushedSessions, source)
+}
+
+func mergePushedSessions(summary *pushSummary, partial pushSummary) {
+	if summary == nil || partial.pushedSessions == nil || len(*partial.pushedSessions) == 0 {
+		return
+	}
+	if summary.pushedSessions == nil {
+		summary.pushedSessions = new([]pushedNativeSession)
+	}
+	*summary.pushedSessions = append(*summary.pushedSessions, (*partial.pushedSessions)...)
+}
+
+func lenPushedSessions(summary pushSummary) int {
+	if summary.pushedSessions == nil {
+		return 0
+	}
+	return len(*summary.pushedSessions)
 }
 
 func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey []byte, projectID string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, includeWorkspace ...bool) pushSummary {
@@ -385,6 +431,7 @@ func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, ide
 			}
 			summary.failureDetails += partial.failureDetails
 		}
+		mergePushedSessions(&summary, partial)
 	}
 	return summary
 }
@@ -515,6 +562,17 @@ func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKe
 		}
 	}
 	summary.Pushed++
+	agent := ref.Agent
+	if agent == "" {
+		agent = layout.Name()
+	}
+	addPushedSession(&summary, pushedNativeSession{
+		Agent:           agent,
+		NativeID:        ref.NativeID,
+		LegacySessionID: sessionID,
+		Title:           ref.Title,
+		CreatedAt:       ref.CreatedAt,
+	})
 	return summary
 }
 
