@@ -111,6 +111,12 @@ func PlanMaterialize(ctx context.Context, sourceCap, targetCap adapter.Materiali
 	if err := validateMaterializeView(view, options.SourceAgent); err != nil {
 		return MaterializePlan{}, err
 	}
+	if err := adapter.ValidateContextView(view); err != nil {
+		return MaterializePlan{}, fmt.Errorf("%w: source context view: %v", ErrInvalidMaterializeRequest, err)
+	}
+	if err := validateMaterializeSourceIndexes(view, len(sourceRecords)); err != nil {
+		return MaterializePlan{}, err
+	}
 	if view.Unsupported > 0 && !options.AllowUnsupported {
 		return MaterializePlan{}, fmt.Errorf("%w: %d source record(s) omitted", ErrMaterializeUnsupportedSource, view.Unsupported)
 	}
@@ -267,6 +273,18 @@ func validateMaterializeView(view adapter.ContextView, sourceAgent string) error
 		}
 		if item.SourceIndex < 0 {
 			return fmt.Errorf("%w: context item %d has a negative source index", ErrInvalidMaterializeRequest, i+1)
+		}
+	}
+	return nil
+}
+
+func validateMaterializeSourceIndexes(view adapter.ContextView, recordCount int) error {
+	if recordCount <= 0 {
+		return fmt.Errorf("%w: source record list is empty", ErrInvalidMaterializeRequest)
+	}
+	for index, item := range view.Items {
+		if item.SourceIndex < 0 || item.SourceIndex >= recordCount {
+			return fmt.Errorf("%w: context item %d refers to source record %d outside range", ErrInvalidMaterializeRequest, index+1, item.SourceIndex)
 		}
 	}
 	return nil

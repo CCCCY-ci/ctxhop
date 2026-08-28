@@ -92,15 +92,26 @@ const (
 	ContextItemKindNotice = ContextItemNotice
 )
 
+// ContextProvenance identifies the source range that contributed one context
+// item. It is transient diagnostic data: native encoders must not copy it
+// into target Agent records.
+type ContextProvenance struct {
+	SourceAgent    string `json:"sourceAgent"`
+	ReplicaID      string `json:"replicaId"`
+	ContributionID string `json:"contributionId"`
+}
+
 // ContextItem is one safe visible semantic extracted from a source session.
 // SourceIndex is zero-based and refers to the source record that contributed
-// the item. Source records themselves are never retained in this type.
+// the item within the decoded source range. Source records themselves are
+// never retained in this type.
 type ContextItem struct {
-	Kind        ContextItemKind `json:"kind"`
-	Text        string          `json:"text"`
-	Timestamp   time.Time       `json:"timestamp"`
-	SourceIndex int             `json:"sourceIndex"`
-	Completed   bool            `json:"completed"`
+	Kind        ContextItemKind    `json:"kind"`
+	Text        string             `json:"text"`
+	Timestamp   time.Time          `json:"timestamp"`
+	SourceIndex int                `json:"sourceIndex"`
+	Completed   bool               `json:"completed"`
+	Provenance  *ContextProvenance `json:"provenance,omitempty"`
 }
 
 // ContextView is the versioned, transient, source-neutral view used by a
@@ -113,6 +124,13 @@ type ContextView struct {
 	Items        []ContextItem `json:"items"`
 	Unsupported  int           `json:"unsupported"`
 	Filtered     int           `json:"filtered"`
+}
+
+// ValidateContextView validates the adapter-neutral context view without
+// performing I/O. Syncflow planners use it after annotating items from
+// multiple source ranges; encoders call the same validation internally.
+func ValidateContextView(view ContextView) error {
+	return validateMaterializeView(view)
 }
 
 // MaterializeTarget describes the local native session that an encoder is
@@ -1263,6 +1281,37 @@ func safeMaterializeNativeID(value string) bool {
 	return true
 }
 
+func safeMaterializeProvenanceValue(value string) bool {
+	if value == "" || len(value) > 128 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateMaterializeProvenance(provenance *ContextProvenance) error {
+	if provenance == nil {
+		return nil
+	}
+	for name, value := range map[string]string{
+		"source Agent":    provenance.SourceAgent,
+		"Replica ID":      provenance.ReplicaID,
+		"Contribution ID": provenance.ContributionID,
+	} {
+		if !safeMaterializeProvenanceValue(value) {
+			return fmt.Errorf("%s provenance is invalid", name)
+		}
+	}
+	return nil
+}
+
 func validateMaterializeView(view ContextView) error {
 	if view.Version != MaterializeViewVersion || view.Unsupported < 0 || view.Filtered < 0 {
 		return fmt.Errorf("%w: unsupported view version or counter", ErrMaterializeInvalidContext)
@@ -1281,6 +1330,9 @@ func validateMaterializeView(view ContextView) error {
 		}
 		if strings.TrimSpace(item.Text) == "" && item.Completed {
 			return fmt.Errorf("%w: completed context item has no text", ErrMaterializeInvalidContext)
+		}
+		if err := validateMaterializeProvenance(item.Provenance); err != nil {
+			return fmt.Errorf("%w: %v", ErrMaterializeInvalidContext, err)
 		}
 	}
 	return nil

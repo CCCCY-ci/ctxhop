@@ -333,3 +333,34 @@ func TestMaterializeTargetRequiresSafePathSpace(t *testing.T) {
 		t.Fatalf("newline project path error = %v, want ErrMaterializeInvalidTarget", err)
 	}
 }
+
+func TestMaterializeProvenanceIsValidatedAndNotEncoded(t *testing.T) {
+	view := ContextView{
+		Version: MaterializeViewVersion,
+		Items: []ContextItem{{
+			Kind: ContextItemUser,
+			Text: "visible context",
+			Provenance: &ContextProvenance{
+				SourceAgent:    "claude-code",
+				ReplicaID:      "replica-a",
+				ContributionID: "contribution-a",
+			},
+		}},
+	}
+	target := materializeTestTarget()
+	encoded, err := (CodexLayout{}).EncodeContext(context.Background(), view, target)
+	if err != nil {
+		t.Fatalf("EncodeContext() error = %v", err)
+	}
+	joined := string(encoded.Records[0])
+	for _, record := range encoded.Records[1:] {
+		joined += string(record)
+	}
+	if strings.Contains(joined, "replica-a") || strings.Contains(joined, "contribution-a") {
+		t.Fatalf("diagnostic provenance leaked into target records: %s", joined)
+	}
+	view.Items[0].Provenance.SourceAgent = "unsafe/source"
+	if _, err := (CodexLayout{}).EncodeContext(context.Background(), view, target); !errors.Is(err, ErrMaterializeInvalidContext) {
+		t.Fatalf("invalid provenance error = %v, want ErrMaterializeInvalidContext", err)
+	}
+}

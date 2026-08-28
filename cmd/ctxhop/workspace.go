@@ -29,11 +29,13 @@ type workspaceOptions struct {
 }
 
 type workspaceFileDescriptor struct {
-	Path      string `json:"path"`
-	Digest    string `json:"digest"`
-	Kind      string `json:"kind"`
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
+	Path       string `json:"path"`
+	Digest     string `json:"digest"`
+	Kind       string `json:"kind"`
+	Size       int64  `json:"size,omitempty"`
+	Available  bool   `json:"available"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type workspaceChange struct {
@@ -280,11 +282,13 @@ func buildWorkspacePreviewReport(ctx context.Context, state environmentContext, 
 		local := workspacepkg.InspectFile(source, state.CurrentRoot)
 		report.Changes = append(report.Changes, workspaceChange{
 			File: workspaceFileDescriptor{
-				Path:      source.Path,
-				Digest:    source.Digest,
-				Kind:      source.Kind,
-				Available: source.Available,
-				Reason:    source.Reason,
+				Path:       source.Path,
+				Digest:     source.Digest,
+				Kind:       source.Kind,
+				Size:       source.Size,
+				Available:  source.Available,
+				ReasonCode: source.ReasonCode,
+				Reason:     source.Reason,
 			},
 			Path:   local.Path,
 			State:  local.State,
@@ -357,19 +361,28 @@ func applyWorkspaceSnapshot(state environmentContext, snapshot workspacepkg.Snap
 	)
 	var applyErrors []error
 	applied := 0
-	for index := range snapshot.Files {
-		if index >= len(report.Changes) {
-			break
+	changesByPath := make(map[string]*workspaceChange, len(report.Changes))
+	for index := range report.Changes {
+		path := report.Changes[index].File.Path
+		if path != "" {
+			changesByPath[path] = &report.Changes[index]
 		}
-		change := &report.Changes[index]
-		local, err := workspacepkg.ApplyFile(snapshot.Files[index], state.CurrentRoot, backupRoot)
+	}
+	for _, source := range snapshot.Files {
+		change, ok := changesByPath[source.Path]
+		if !ok {
+			report.Conflicts = appendWorkspaceConflict(report.Conflicts, "apply-failed")
+			applyErrors = append(applyErrors, fmt.Errorf("%s: preview is missing the source entry", safeListText(source.Path)))
+			continue
+		}
+		local, err := workspacepkg.ApplyFile(source, state.CurrentRoot, backupRoot)
 		change.Path = local.Path
 		change.State = local.State
 		change.Backup = local.Backup
 		change.Reason = local.Reason
 		if err != nil {
 			report.Conflicts = appendWorkspaceConflict(report.Conflicts, "apply-failed")
-			applyErrors = append(applyErrors, fmt.Errorf("%s: %w", safeListText(snapshot.Files[index].Path), err))
+			applyErrors = append(applyErrors, fmt.Errorf("%s: %w", safeListText(source.Path), err))
 			continue
 		}
 		report.Conflicts = appendWorkspaceConflict(report.Conflicts, workspaceConflictKind(local.State))
@@ -466,6 +479,12 @@ func writeWorkspacePreviewText(w io.Writer, report workspacePreviewReport) error
 			safeListText(change.State),
 			change.File.Available,
 		)
+		if change.File.Size != 0 {
+			line += fmt.Sprintf(" size=%d", change.File.Size)
+		}
+		if change.File.ReasonCode != "" {
+			line += " reasonCode=" + safeListText(change.File.ReasonCode)
+		}
 		if change.Path != "" {
 			line += " path=" + safeListText(change.Path)
 		}

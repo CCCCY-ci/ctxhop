@@ -24,7 +24,12 @@ import (
 )
 
 const (
-	SnapshotVersion        = 1
+	// SnapshotVersion is the current format. Version 2 adds bounded file
+	// metadata without adding any large-file body transfer mechanism.
+	SnapshotVersion = 2
+	// SnapshotLegacyVersion is accepted for reading and for explicit legacy
+	// round trips when it contains only the version 1 fields.
+	SnapshotLegacyVersion  = 1
 	MaxFiles               = 512
 	MaxFileBytes           = 512 << 10
 	MaxTotalContentBytes   = 4 << 20
@@ -44,6 +49,23 @@ const (
 const (
 	CoverageFingerprint = "fingerprint"
 	CoverageDirectory   = "directory"
+)
+
+// File reason codes are stable machine-readable explanations for a file body
+// that is not available in the bounded workspace snapshot. The human-facing
+// Reason field may change without changing policy decisions.
+const (
+	FileReasonUnsafeEntry = "unsafe-entry"
+	FileReasonTooLarge    = "too-large"
+	FileReasonBodyLimit   = "body-limit"
+	FileReasonReadFailed  = "read-failed"
+	FileReasonChanged     = "changed"
+	FileReasonBinary      = "binary"
+	FileReasonSensitive   = "sensitive"
+	FileReasonNonRegular  = "non-regular"
+	FileReasonSymlink     = "symlink"
+	FileReasonAbsent      = "absent"
+	FileReasonDirectory   = "directory"
 )
 
 var ErrInvalidSnapshot = errors.New("workspace: invalid snapshot")
@@ -69,12 +91,14 @@ type Snapshot struct {
 // passed the safety filter and the source digest still matched at capture
 // time.
 type File struct {
-	Path      string `json:"path"`
-	Digest    string `json:"digest"`
-	Kind      string `json:"kind"`
-	Available bool   `json:"available"`
-	Content   []byte `json:"content,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	Path       string `json:"path"`
+	Digest     string `json:"digest"`
+	Kind       string `json:"kind"`
+	Size       int64  `json:"size,omitempty"`
+	Available  bool   `json:"available"`
+	Content    []byte `json:"content,omitempty"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // Capture creates a bounded snapshot from the already captured fingerprint.
@@ -132,6 +156,7 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 		entry := File{Path: path, Digest: expected}
 		if !validRelativePath(path) || !validDigest(expected) {
 			entry.Kind = KindFile
+			entry.ReasonCode = FileReasonUnsafeEntry
 			entry.Reason = "the source fingerprint entry is unsafe"
 			snapshot.Complete = false
 			snapshot.Files = append(snapshot.Files, entry)
@@ -139,11 +164,13 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 		}
 		if expected == "<absent>" {
 			entry.Kind = KindAbsent
+			entry.ReasonCode = FileReasonAbsent
 			snapshot.Files = append(snapshot.Files, entry)
 			continue
 		}
 		if expected == "<directory>" {
 			entry.Kind = KindDirectory
+			entry.ReasonCode = FileReasonDirectory
 			snapshot.Files = append(snapshot.Files, entry)
 			continue
 		}
@@ -152,6 +179,7 @@ func Capture(ctx context.Context, root string, fingerprint project.Fingerprint) 
 		if entry.Available && totalContentBytes+len(entry.Content) > MaxTotalContentBytes {
 			entry.Available = false
 			entry.Content = nil
+			entry.ReasonCode = FileReasonBodyLimit
 			entry.Reason = "the total workspace file-body limit was reached"
 			if !totalLimitWarning {
 				snapshot.Warnings = append(snapshot.Warnings, "workspace file-body size exceeded the snapshot limit; some bodies were omitted")
@@ -178,49 +206,61 @@ func captureFile(ctx context.Context, root, expected string, gitBacked bool, ent
 	}
 	path, err := targetPath(entry.Path, root)
 	if err != nil {
+		entry.ReasonCode = FileReasonUnsafeEntry
 		entry.Reason = "the source path is outside the project or is reserved"
 		return
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
+		entry.ReasonCode = FileReasonAbsent
 		entry.Reason = "the source file is no longer present"
 		return
 	}
 	if err != nil {
+		entry.ReasonCode = FileReasonReadFailed
 		entry.Reason = "the source file could not be inspected"
 		return
 	}
+	entry.Size = info.Size()
 	if info.Mode()&os.ModeSymlink != 0 {
+		entry.ReasonCode = FileReasonSymlink
 		entry.Reason = "symbolic links are not synchronized"
 		return
 	}
 	if !info.Mode().IsRegular() {
+		entry.ReasonCode = FileReasonNonRegular
 		entry.Reason = "the source entry is not a regular file"
 		return
 	}
 	if info.Size() > MaxFileBytes {
+		entry.ReasonCode = FileReasonTooLarge
 		entry.Reason = "the source file exceeds the size limit"
 		return
 	}
 	content, err := os.ReadFile(path)
 	if err != nil || len(content) > MaxFileBytes {
+		entry.ReasonCode = FileReasonReadFailed
 		entry.Reason = "the source file could not be read safely"
 		return
 	}
 	fingerprintDigest, digestErr := digestForFingerprint(ctx, root, entry.Path, content, gitBacked)
 	if digestErr != nil || fingerprintDigest != expected {
+		entry.ReasonCode = FileReasonChanged
 		entry.Reason = "the source file changed while the snapshot was captured"
 		return
 	}
 	if !safeTextContent(content) {
+		entry.ReasonCode = FileReasonBinary
 		entry.Reason = "binary file bodies are not synchronized in this phase"
 		return
 	}
 	if containsSensitiveMaterial(content) {
+		entry.ReasonCode = FileReasonSensitive
 		entry.Reason = "the file body looks like sensitive material"
 		return
 	}
 	entry.Available = true
+	entry.Size = int64(len(content))
 	entry.Digest = blobDigest(content)
 	entry.Content = append([]byte(nil), content...)
 }
@@ -254,7 +294,7 @@ func digestForFingerprint(ctx context.Context, root, relative string, content []
 	return digest, nil
 }
 func (s Snapshot) Validate() error {
-	if s.Version != SnapshotVersion {
+	if s.Version != SnapshotVersion && s.Version != SnapshotLegacyVersion {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidSnapshot, s.Version)
 	}
 	if s.Mode != ModeGit && s.Mode != ModeDirectory {
@@ -293,6 +333,9 @@ func (s Snapshot) Validate() error {
 		if err := file.validate(); err != nil {
 			return fmt.Errorf("%w: file %q: %v", ErrInvalidSnapshot, file.Path, err)
 		}
+		if s.Version == SnapshotLegacyVersion && (file.Size != 0 || file.ReasonCode != "") {
+			return fmt.Errorf("%w: file %q uses fields unavailable in snapshot version %d", ErrInvalidSnapshot, file.Path, SnapshotLegacyVersion)
+		}
 		if file.Available {
 			total += len(file.Content)
 			if total > MaxTotalContentBytes {
@@ -309,12 +352,22 @@ func (s Snapshot) Validate() error {
 }
 
 func (f File) validate() error {
-	if !validRelativePath(f.Path) || !validDigest(f.Digest) {
-		return errors.New("path or digest is invalid")
+	if !validRelativePath(f.Path) {
+		return errors.New("path is invalid")
+	}
+	if f.Size < 0 {
+		return errors.New("file size is invalid")
+	}
+	if f.ReasonCode != "" && !validReasonCode(f.ReasonCode) {
+		return errors.New("file reason code is invalid")
 	}
 	switch f.Kind {
 	case KindAbsent, KindDirectory:
-		if f.Kind == KindAbsent && f.Digest != "<absent>" || f.Kind == KindDirectory && f.Digest != "<directory>" || f.Available || len(f.Content) != 0 {
+		expectedDigest := "<absent>"
+		if f.Kind == KindDirectory {
+			expectedDigest = "<directory>"
+		}
+		if f.Digest != expectedDigest || f.Size != 0 || f.Available || len(f.Content) != 0 {
 			return errors.New("special entry is invalid")
 		}
 	case KindFile:
@@ -322,13 +375,13 @@ func (f File) validate() error {
 			return errors.New("file digest is invalid")
 		}
 		if f.Available {
-			if len(f.Content) > MaxFileBytes || !safeTextContent(f.Content) || unsafeFilePath(f.Path) || containsSensitiveMaterial(f.Content) {
+			if !validDigest(f.Digest) || len(f.Content) > MaxFileBytes || f.Size != 0 && int64(len(f.Content)) != f.Size || !safeTextContent(f.Content) || unsafeFilePath(f.Path) || containsSensitiveMaterial(f.Content) {
 				return errors.New("file body is not safe")
 			}
 			if blobDigest(f.Content) != f.Digest {
 				return errors.New("file body does not match its digest")
 			}
-		} else if len(f.Content) != 0 || !validText(f.Reason, maxWarningBytes) || f.Reason == "" {
+		} else if len(f.Content) != 0 || !validText(f.Reason, maxWarningBytes) || f.Reason == "" || f.Digest != "" && !validDigest(f.Digest) {
 			return errors.New("unavailable file must have a reason and no body")
 		}
 	default:
@@ -438,6 +491,20 @@ func validHex(value string, length int) bool {
 
 func validText(value string, max int) bool {
 	return len(value) <= max && utf8.ValidString(value) && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validReasonCode(value string) bool {
+	if value == "" || len(value) > 64 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func blobDigest(content []byte) string {

@@ -38,30 +38,31 @@ func CaptureDirectory(ctx context.Context, root string) (Snapshot, error) {
 		Warnings: append([]string(nil), scan.Warnings...),
 	}
 	totalContentBytes := 0
-	omittedWarning := false
+	totalLimitWarning := false
 	for _, relative := range scan.Paths {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
 		}
-		entry, omitted, captureErr := captureDirectoryFile(ctx, root, relative)
+		entry, captureErr := captureDirectoryFile(ctx, root, relative)
 		if captureErr != nil {
 			return Snapshot{}, captureErr
 		}
-		if omitted {
-			snapshot.Omitted = append(snapshot.Omitted, relative)
+		if entry.Available && totalContentBytes+len(entry.Content) > MaxTotalContentBytes {
+			entry.Available = false
+			entry.Content = nil
+			entry.ReasonCode = FileReasonBodyLimit
+			entry.Reason = "the total workspace file-body limit was reached"
 			snapshot.Complete = false
-			continue
-		}
-		if totalContentBytes+len(entry.Content) > MaxTotalContentBytes {
-			snapshot.Omitted = append(snapshot.Omitted, relative)
-			snapshot.Complete = false
-			if !omittedWarning {
+			if !totalLimitWarning {
 				snapshot.Warnings = append(snapshot.Warnings, "some eligible file bodies exceeded the total workspace size limit")
-				omittedWarning = true
+				totalLimitWarning = true
 			}
-			continue
 		}
-		totalContentBytes += len(entry.Content)
+		if entry.Available {
+			totalContentBytes += len(entry.Content)
+		} else {
+			snapshot.Complete = false
+		}
 		snapshot.Files = append(snapshot.Files, entry)
 	}
 	if len(snapshot.Omitted) != 0 {
@@ -170,46 +171,73 @@ func ScanDirectory(ctx context.Context, root string) (DirectoryScan, error) {
 	return scan, nil
 }
 
-func captureDirectoryFile(ctx context.Context, root, relative string) (File, bool, error) {
+func captureDirectoryFile(ctx context.Context, root, relative string) (File, error) {
+	entry := File{Path: relative, Kind: KindFile}
 	if err := ctx.Err(); err != nil {
-		return File{}, true, err
+		return File{}, err
 	}
 	path, err := targetPath(relative, root)
 	if err != nil {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonUnsafeEntry
+		entry.Reason = "the source path is outside the project or is reserved"
+		return entry, nil
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonAbsent
+		entry.Reason = "the source file is no longer present"
+		return entry, nil
 	}
 	if err != nil {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonReadFailed
+		entry.Reason = "the source file could not be inspected"
+		return entry, nil
 	}
+	entry.Size = info.Size()
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return File{}, true, nil
+		if info.Mode()&os.ModeSymlink != 0 {
+			entry.ReasonCode = FileReasonSymlink
+			entry.Reason = "symbolic links are not synchronized"
+		} else {
+			entry.ReasonCode = FileReasonNonRegular
+			entry.Reason = "the source entry is not a regular file"
+		}
+		return entry, nil
 	}
 	if info.Size() > MaxFileBytes {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonTooLarge
+		entry.Reason = "the source file exceeds the size limit"
+		return entry, nil
 	}
 	content, err := os.ReadFile(path)
 	if err != nil || len(content) > MaxFileBytes {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonReadFailed
+		entry.Reason = "the source file could not be read safely"
+		return entry, nil
 	}
 	after, err := os.Lstat(path)
 	if err != nil || after.Mode()&os.ModeSymlink != 0 || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
-		return File{}, true, nil
+		entry.ReasonCode = FileReasonChanged
+		entry.Reason = "the source file changed while the snapshot was captured"
+		return entry, nil
 	}
 	digest := blobDigest(content)
 	if !safeTextContent(content) || containsSensitiveMaterial(content) {
-		return File{}, true, nil
+		entry.Digest = digest
+		if !safeTextContent(content) {
+			entry.ReasonCode = FileReasonBinary
+			entry.Reason = "binary file bodies are not synchronized in this phase"
+		} else {
+			entry.ReasonCode = FileReasonSensitive
+			entry.Reason = "the file body looks like sensitive material"
+		}
+		return entry, nil
 	}
-	return File{
-		Path:      relative,
-		Digest:    digest,
-		Kind:      KindFile,
-		Available: true,
-		Content:   append([]byte(nil), content...),
-	}, false, nil
+	entry.Digest = digest
+	entry.Size = int64(len(content))
+	entry.Available = true
+	entry.Content = append([]byte(nil), content...)
+	return entry, nil
 }
 
 func excludedDirectory(relative string) bool {
