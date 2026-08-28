@@ -90,5 +90,7 @@ func cloneStringSlice(values []string) []string {
 	if values == nil {
 		return []string{}
 	}
-	return append([]string(nil), values...)
+	copyValues := make([]string, len(values))
+	copy(copyValues, values)
+	return copyValues
 }

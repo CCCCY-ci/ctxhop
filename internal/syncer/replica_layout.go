@@ -18,6 +18,7 @@ const (
 
 	replicaDescriptorName = "meta"
 	replicaTipName        = "tip"
+	contributionDirName   = "contributions"
 
 	descriptorMetaName = "meta"
 )
@@ -143,13 +144,53 @@ func (l SessionHubLayout) ProjectPrefix() (string, error) {
 }
 
 // SessionPrefix returns the root containing one logical Session's descriptors,
-// Replica streams and future Contribution objects.
+// Replica streams and Contribution objects.
 func (l SessionHubLayout) SessionPrefix() (string, error) {
 	project, err := l.ProjectPrefix()
 	if err != nil {
 		return "", err
 	}
 	return project + "/sessions/" + l.sessionKey, nil
+}
+
+// ContributionPrefix returns the shared immutable Contribution namespace for
+// this logical Session. Contributions are Session-level facts, not children of
+// an Agent-native Replica, so every source Agent can append a distinct object
+// without rewriting another Agent's history.
+func (l SessionHubLayout) ContributionPrefix() (string, error) {
+	prefix, err := l.SessionPrefix()
+	if err != nil {
+		return "", err
+	}
+	return prefix + "/" + contributionDirName, nil
+}
+
+// ContributionPrefixForDevice returns the device-owned immutable Contribution
+// namespace. The device segment prevents unrelated writers from racing on
+// one remote key while the Contribution ID remains the content identity.
+func (l SessionHubLayout) ContributionPrefixForDevice(deviceID string) (string, error) {
+	prefix, err := l.ContributionPrefix()
+	if err != nil {
+		return "", err
+	}
+	if err := validateIdentifier(deviceID); err != nil {
+		return "", fmt.Errorf("%w: contribution device key: %v", errInvalidReplicaLayout, err)
+	}
+	return checkedKey(prefix + "/" + deviceID)
+}
+
+// ContributionKey returns the immutable object key for one device-owned
+// Contribution. The Contribution ID is already an opaque, deterministic
+// identity and is authenticated again by the encrypted object envelope.
+func (l SessionHubLayout) ContributionKey(contributionID, deviceID string) (string, error) {
+	prefix, err := l.ContributionPrefixForDevice(deviceID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateIdentifier(contributionID); err != nil {
+		return "", fmt.Errorf("%w: contribution key: %v", errInvalidReplicaLayout, err)
+	}
+	return checkedKey(prefix + "/" + contributionID)
 }
 
 // DescriptorKey returns this device's logical Session descriptor object.

@@ -332,12 +332,15 @@ func (g *Graph) topologicalOrder() ([]string, error) {
 		if _, exists := g.contributions[id]; !exists {
 			return nil, fmt.Errorf("%w: contribution index contains unknown ID %q", ErrInvalidModel, id)
 		}
-		parentIDs, exists := g.parents[id]
+		_, exists := g.parents[id]
 		if !exists {
 			return nil, fmt.Errorf("%w: contribution %q has no parent index", ErrInvalidModel, id)
 		}
 		children[id] = []string{}
 		indegree[id] = 0
+	}
+	for _, id := range g.ids {
+		parentIDs := g.parents[id]
 		for _, parentID := range parentIDs {
 			if parentID == id {
 				return nil, fmt.Errorf("%w: contribution %q is its own parent", ErrCycle, id)

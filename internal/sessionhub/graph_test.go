@@ -52,6 +52,22 @@ func TestGraphRootsAndHeads(t *testing.T) {
 	}
 }
 
+func TestGraphSupportsParentsWithLexicallyLaterIDs(t *testing.T) {
+	parent := graphTestContribution("z")
+	child := graphTestContribution("a", parent.ContributionID)
+	graph, err := NewGraph("s", []Contribution{child, parent})
+	if err != nil {
+		t.Fatalf("NewGraph: %v", err)
+	}
+	ancestry, err := graph.Ancestry(child.ContributionID)
+	if err != nil {
+		t.Fatalf("Ancestry: %v", err)
+	}
+	if got, want := strings.Join(ancestry, ","), "z,a"; got != want {
+		t.Fatalf("ancestry = %q, want %q", got, want)
+	}
+}
+
 func TestGraphParallelBranchesAndAncestrySelection(t *testing.T) {
 	root := graphTestContribution("a")
 	left := graphTestContribution("b", "a")
