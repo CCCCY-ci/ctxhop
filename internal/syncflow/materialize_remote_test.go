@@ -132,3 +132,43 @@ func TestFetchMaterializePreviewRejectsAmbiguousReplicaSource(t *testing.T) {
 		t.Fatalf("ambiguous Replica error = %v, want ErrMaterializeRemoteSourceConflict", err)
 	}
 }
+
+func TestResolveMaterializeHeadsSupportsPoliciesDeterministically(t *testing.T) {
+	claudeLayout, err := syncer.NewReplicaLayout("hub", "project", "session", "replicaclaude", "deviceclaude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexLayout, err := syncer.NewReplicaLayout("hub", "project", "session", "replicacodex", "devicecodex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude := syncerTestReplicaDescriptor(t, claudeLayout, "claude-code")
+	codex := syncerTestReplicaDescriptor(t, codexLayout, "codex")
+	records := [][]byte{[]byte(`{"n":1}`)}
+	root := materializeSelectionContribution(t, "a", nil, claude, records, 0, 1)
+	otherRoot := materializeSelectionContribution(t, "b", nil, codex, records, 0, 1)
+	claudeChild := materializeSelectionContribution(t, "c", []string{"a"}, claude, records, 0, 1)
+	graph, err := sessionhub.NewContributionGraph("session", []sessionhub.Contribution{claudeChild, otherRoot, root})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	causal, err := ResolveMaterializeHeads(graph, MaterializeContextCausalHead, []string{"c"}, "")
+	if err != nil || len(causal) != 1 || causal[0] != "c" {
+		t.Fatalf("causal heads = %v, err=%v", causal, err)
+	}
+	all, err := ResolveMaterializeHeads(graph, MaterializeContextAllHeads, nil, "")
+	if err != nil || len(all) != 2 || all[0] != "b" || all[1] != "c" {
+		t.Fatalf("all heads = %v, err=%v", all, err)
+	}
+	agentOnly, err := ResolveMaterializeHeads(graph, MaterializeContextAgentOnly, nil, "claude-code")
+	if err != nil || len(agentOnly) != 2 || agentOnly[0] != "a" || agentOnly[1] != "c" {
+		t.Fatalf("agent-only heads = %v, err=%v", agentOnly, err)
+	}
+	if _, err := ResolveMaterializeHeads(graph, MaterializeContextCausalHead, nil, ""); !errors.Is(err, ErrMaterializeHeadSelection) {
+		t.Fatalf("causal automatic selection error = %v, want ErrMaterializeHeadSelection", err)
+	}
+	if _, err := ResolveMaterializeHeads(graph, MaterializeContextAllHeads, []string{"c"}, ""); !errors.Is(err, ErrMaterializeHeadSelection) {
+		t.Fatalf("all-heads explicit head error = %v, want ErrMaterializeHeadSelection", err)
+	}
+}

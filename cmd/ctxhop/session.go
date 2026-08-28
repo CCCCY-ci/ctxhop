@@ -60,6 +60,9 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 	if len(args) != 0 && args[0] == sessionActionResume {
 		return runResumeWithStreams(args[1:], input, output, prompt)
 	}
+	if len(args) != 0 && args[0] == sessionActionMaterialize {
+		return runSessionMaterializeWithStreams(args[1:], input, output, prompt)
+	}
 	options, err := parseSessionOptions(args)
 	if err != nil {
 		return err
@@ -114,7 +117,7 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 
 func parseSessionOptions(args []string) (sessionOptions, error) {
 	if len(args) == 0 {
-		return sessionOptions{}, errors.New("session: expected discover, list, show, or resume")
+		return sessionOptions{}, errors.New("session: expected discover, list, show, materialize, or resume")
 	}
 
 	options := sessionOptions{action: args[0]}
@@ -145,7 +148,7 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 			return sessionOptions{}, errors.New("session show: session ID contains an invalid character")
 		}
 	default:
-		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, show, or resume", options.action)
+		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, show, materialize, or resume", options.action)
 	}
 	return options, nil
 }

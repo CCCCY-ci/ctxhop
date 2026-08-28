@@ -45,7 +45,12 @@ type MaterializeRange struct {
 // byte stream; a later multi-source planner can decode each range with its
 // owning source capability and combine only the transient views.
 type MaterializeSelection struct {
-	Coverage            sessionhub.Coverage
+	Coverage sessionhub.Coverage
+	// SelectedHeads is the explicit policy result used to produce Coverage.
+	// Keeping it beside the selected ranges lets a caller explain an
+	// all-heads or agent-only selection without reconstructing policy from the
+	// graph after the remote snapshot has been consumed.
+	SelectedHeads       []string
 	Ranges              []MaterializeRange
 	SelectedRecordCount uint64
 }
@@ -144,9 +149,16 @@ func PlanMaterializeSelection(graph *sessionhub.Graph, heads []string, replicas 
 
 	return MaterializeSelection{
 		Coverage:            coverage,
+		SelectedHeads:       sortedMaterializeHeads(heads),
 		Ranges:              ranges,
 		SelectedRecordCount: selectedRecordCount,
 	}, nil
+}
+
+func sortedMaterializeHeads(heads []string) []string {
+	result := append([]string(nil), heads...)
+	sort.Strings(result)
+	return result
 }
 
 type materializeRangeInterval struct {

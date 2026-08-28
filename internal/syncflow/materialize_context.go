@@ -60,6 +60,7 @@ type MaterializeSourceSummary struct {
 // the command layer.
 type MaterializePreview struct {
 	Coverage             sessionhub.Coverage        `json:"coverage"`
+	SelectedHeads        []string                   `json:"selectedHeads,omitempty"`
 	Sources              []MaterializeSourceSummary `json:"sources"`
 	TargetAgent          string                     `json:"targetAgent"`
 	TargetNativeID       string                     `json:"targetNativeId"`
@@ -218,6 +219,7 @@ func PlanMaterializePreview(ctx context.Context, selection MaterializeSelection,
 
 	preview := MaterializePreview{
 		Coverage:             cloneMaterializeCoverage(selection.Coverage),
+		SelectedHeads:        append([]string(nil), selection.SelectedHeads...),
 		Sources:              summaries,
 		TargetAgent:          options.TargetAgent,
 		TargetNativeID:       target.NativeID,
