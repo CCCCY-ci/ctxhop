@@ -2,18 +2,39 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/config"
 	"github.com/CCCCY-ci/ctxhop/internal/project"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
+
+func TestSessionMigrationMutationWaitsForPushLock(t *testing.T) {
+	root := t.TempDir()
+	lock, err := syncer.AcquireLocalFileLock(context.Background(), filepath.Join(root, "push.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = collectSessionMigrationWithPrompt(ctx, config.New(), root, ".", sessionOptions{}, strings.NewReader(""), io.Discard)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("migration lock error = %v, want context deadline exceeded", err)
+	}
+}
 
 func TestBuildLegacyMigrationCandidatesUsesStableLogicalIDAndUnknownSource(t *testing.T) {
 	key := []byte(strings.Repeat("k", 32))

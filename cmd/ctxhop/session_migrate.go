@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -120,6 +121,19 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	}
 	if err := ctx.Err(); err != nil {
 		return sessionMigrationReport{}, fmt.Errorf("session migrate: %w", err)
+	}
+	// A non-preview migration changes the local registry/ledger and, for
+	// --publish-v2, the same device-owned cursor and Replica namespace used by
+	// push/watch. Serialize the whole mutation command with push so a second
+	// local process cannot read an old cursor and race the migration writer.
+	var mutationLock *syncer.LocalFileLock
+	if !options.preview {
+		var lockErr error
+		mutationLock, lockErr = syncer.AcquireLocalFileLock(ctx, filepath.Join(configDir, "push.lock"))
+		if lockErr != nil {
+			return sessionMigrationReport{}, fmt.Errorf("session migrate: acquire local mutation lock: %w", lockErr)
+		}
+		defer mutationLock.Close() //nolint:errcheck // the operation result is already determined
 	}
 	secretReader := newCommandSecretReader(input)
 	collection, access, err := collectListCollectionWithSecretReader(ctx, c, configDir, projectDir, secretReader, prompt, "session migrate")
