@@ -14,8 +14,11 @@ import (
 )
 
 // MigrationLedgerVersion is the version of the local, metadata-only v1 to
-// v2 migration ledger.
-const MigrationLedgerVersion = 1
+// v2 migration ledger. Version 2 adds the local read-mode preference; version
+// 1 ledgers remain readable and are upgraded only when local state is saved.
+const MigrationLedgerVersion = 2
+
+const migrationLedgerPreviousVersion = 1
 
 // MigrationStatus describes the durable progress recorded by a migration
 // ledger. Status is local progress metadata; it is not a substitute for
@@ -27,6 +30,16 @@ const (
 	MigrationStatusPartial   MigrationStatus = "partial"
 	MigrationStatusPublished MigrationStatus = "published"
 	MigrationStatusBlocked   MigrationStatus = "blocked"
+)
+
+// MigrationReadMode controls which local compatibility route is preferred for
+// one legacy Session. It is local policy, not a claim about the immutable v1
+// or v2 Remote objects.
+type MigrationReadMode string
+
+const (
+	MigrationReadModeV2     MigrationReadMode = "v2"
+	MigrationReadModeLegacy MigrationReadMode = "legacy-v1"
 )
 
 var (
@@ -72,6 +85,7 @@ type MigrationLedger struct {
 	LegacyRefs        []LegacyMigrationRef `json:"legacyRefs"`
 	PublishedReplicas []string             `json:"publishedReplicas"`
 	Status            MigrationStatus      `json:"status"`
+	ReadMode          MigrationReadMode    `json:"readMode"`
 	UpdatedAt         time.Time            `json:"updatedAt"`
 }
 
@@ -87,6 +101,7 @@ type migrationLedgerWire struct {
 	LegacyRefs        []LegacyMigrationRef `json:"legacyRefs"`
 	PublishedReplicas []string             `json:"publishedReplicas"`
 	Status            MigrationStatus      `json:"status"`
+	ReadMode          MigrationReadMode    `json:"readMode,omitempty"`
 	UpdatedAt         string               `json:"updatedAt"`
 }
 
@@ -109,6 +124,7 @@ func DeriveLegacySessionLogicalID(identifierKey []byte, projectKey, legacySessio
 func (l MigrationLedger) Validate() error {
 	switch {
 	case l.Version == MigrationLedgerVersion:
+	case l.Version == migrationLedgerPreviousVersion:
 	case l.Version > MigrationLedgerVersion:
 		return fmt.Errorf("%w: migration ledger version %d", ErrUnsupportedVersion, l.Version)
 	default:
@@ -153,6 +169,9 @@ func (l MigrationLedger) Validate() error {
 	default:
 		return fmt.Errorf("%w: migration ledger status", ErrInvalidModel)
 	}
+	if l.ReadMode != "" && l.ReadMode != MigrationReadModeV2 && l.ReadMode != MigrationReadModeLegacy {
+		return fmt.Errorf("%w: migration ledger read mode", ErrInvalidModel)
+	}
 	if err := validateTime(l.UpdatedAt); err != nil {
 		return fmt.Errorf("%w: migration ledger timestamp", ErrInvalidModel)
 	}
@@ -176,6 +195,7 @@ func (l MigrationLedger) MarshalBinary() ([]byte, error) {
 		LegacyRefs:        canonical.LegacyRefs,
 		PublishedReplicas: canonical.PublishedReplicas,
 		Status:            canonical.Status,
+		ReadMode:          canonical.ReadMode,
 		UpdatedAt:         formatTime(canonical.UpdatedAt),
 	}, "migration ledger", maxDescriptorBytes)
 }
@@ -204,6 +224,7 @@ func ParseMigrationLedger(data []byte) (MigrationLedger, error) {
 		LegacyRefs:        wire.LegacyRefs,
 		PublishedReplicas: wire.PublishedReplicas,
 		Status:            wire.Status,
+		ReadMode:          wire.ReadMode,
 		UpdatedAt:         updatedAt,
 	}
 	if err := ledger.Validate(); err != nil {
@@ -352,6 +373,7 @@ func MergeMigrationLedger(existing, incoming MigrationLedger) (MigrationLedger, 
 	}
 	if incoming.UpdatedAt.After(existing.UpdatedAt) {
 		merged.UpdatedAt = incoming.UpdatedAt
+		merged.ReadMode = incoming.ReadMode
 	}
 	return canonicalMigrationLedger(merged)
 }
@@ -366,6 +388,12 @@ func canonicalMigrationLedger(l MigrationLedger) (MigrationLedger, error) {
 		return copyLedger.LegacyRefs[i].DeviceID < copyLedger.LegacyRefs[j].DeviceID
 	})
 	copyLedger.PublishedReplicas = sortedUniqueMigrationIDs(l.PublishedReplicas)
+	if copyLedger.ReadMode == "" {
+		copyLedger.ReadMode = MigrationReadModeV2
+	}
+	if copyLedger.Version < MigrationLedgerVersion {
+		copyLedger.Version = MigrationLedgerVersion
+	}
 	if copyLedger.LegacyRefs == nil {
 		copyLedger.LegacyRefs = []LegacyMigrationRef{}
 	}

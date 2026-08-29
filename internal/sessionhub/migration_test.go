@@ -66,6 +66,9 @@ func TestMigrationLedgerRoundTripCanonicalizesOrdering(t *testing.T) {
 	if !reflect.DeepEqual(parsed.PublishedReplicas, []string{testOpaque('a'), testOpaque('c')}) {
 		t.Fatalf("published replicas = %v", parsed.PublishedReplicas)
 	}
+	if parsed.ReadMode != MigrationReadModeV2 {
+		t.Fatalf("read mode = %q, want %q", parsed.ReadMode, MigrationReadModeV2)
+	}
 	canonical, err := parsed.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -198,12 +201,19 @@ func TestMigrationLedgerRejectsCorruptAndUnknownVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknown := bytes.Replace(encoded, []byte(`{"version":1}`), []byte(`{"version":2}`), 1)
-	if bytes.Equal(unknown, encoded) {
-		unknown = bytes.Replace(encoded, []byte(`{"version":1,"`), []byte(`{"version":2,"`), 1)
-	}
+	unknown := bytes.Replace(encoded, []byte(`"version":2`), []byte(`"version":3`), 1)
 	if _, err := ParseMigrationLedger(unknown); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("unknown version error = %v", err)
+	}
+
+	legacy := bytes.Replace(encoded, []byte(`,"readMode":"v2"`), nil, 1)
+	legacy = bytes.Replace(legacy, []byte(`"version":2`), []byte(`"version":1`), 1)
+	parsedLegacy, err := ParseMigrationLedger(legacy)
+	if err != nil {
+		t.Fatalf("legacy version parse error = %v", err)
+	}
+	if parsedLegacy.Version != MigrationLedgerVersion || parsedLegacy.ReadMode != MigrationReadModeV2 {
+		t.Fatalf("legacy ledger upgrade = version:%d readMode:%q", parsedLegacy.Version, parsedLegacy.ReadMode)
 	}
 
 	root := t.TempDir()
@@ -237,7 +247,7 @@ func TestMigrationLedgerContainsOnlyMetadataFields(t *testing.T) {
 	wantTop := map[string]bool{
 		"version": true, "hubId": true, "projectId": true, "legacySessionId": true,
 		"sessionId": true, "legacyRefs": true, "publishedReplicas": true,
-		"status": true, "updatedAt": true,
+		"status": true, "readMode": true, "updatedAt": true,
 	}
 	if len(top) != len(wantTop) {
 		t.Fatalf("ledger fields = %v", top)
@@ -283,6 +293,7 @@ func testMigrationLedger() MigrationLedger {
 		},
 		PublishedReplicas: []string{testOpaque('q')},
 		Status:            MigrationStatusLazy,
+		ReadMode:          MigrationReadModeV2,
 		UpdatedAt:         time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC),
 	}
 }

@@ -273,7 +273,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 
 	var selection resumeSelection
 	if nativeSelector {
-		selection, err = selectNativeResume(ctx, current, secrets.IdentifierKey, groups, options, prompter, access)
+		selection, err = selectNativeResume(ctx, configDir, current, secrets.IdentifierKey, groups, options, prompter, access)
 	} else {
 		var candidate resumeCandidate
 		candidate, err = chooseResumeCandidate(groups, projectID, secrets.IdentifierKey, options.session, prompter)

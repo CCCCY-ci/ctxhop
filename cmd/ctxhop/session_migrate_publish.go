@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -111,12 +113,115 @@ func selectCompleteLegacyBranch(ctx context.Context, access *domainAccess, colle
 	return legacy, liveSource, nil
 }
 
+// selectLegacyMigrationReader opens the current, authenticated v1 branch for
+// the local writer without assembling its records. Metadata and shard
+// structure are checked before any v2 object is written; shard bodies are
+// consumed later by publishLegacyMigrationReplicaStream.
+func selectLegacyMigrationReader(ctx context.Context, access *domainAccess, collection listCollection, candidate legacyMigrationCandidate, source legacyMigrationSource) (*syncer.LegacyReplicaReader, syncer.Metadata, legacyMigrationSource, error) {
+	if ctx == nil {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: context is required")
+	}
+	if access == nil || access.Store == nil || access.Public == nil {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: authenticated domain access is unavailable")
+	}
+	if source.deviceID != collection.localDeviceID {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: legacy source is not owned by the local device")
+	}
+	if active := access.allowedDevices(); active != nil {
+		if _, ok := active[source.deviceID]; !ok {
+			return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: local device is not active in the sync domain")
+		}
+	}
+
+	reader, err := syncer.OpenLegacyReplicaReader(ctx, access.Store, collection.projectID, candidate.legacyID, source.deviceID, access.Identities)
+	if err != nil {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, fmt.Errorf("session migrate: open legacy branch reader: %w", err)
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = reader.Close()
+		}
+	}()
+	metadata := reader.Metadata()
+	ref, ok := legacyMigrationRefForDevice(candidate.refs, source.deviceID)
+	if !ok || ref.RecordCount != metadata.RecordCount || ref.BranchHeadDigest != legacyMigrationDigest(metadata.HeadDigest) {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: legacy branch changed during migration planning; retry discovery")
+	}
+
+	// Metadata can change between metadata-only discovery and this reader open.
+	// Re-derive the transient source from the authenticated live payload and
+	// refuse to publish under a stale native identity.
+	liveSource, warning := legacyMigrationSourceFromMetadata(collection.identifierKey, candidate.legacyID, syncer.MetadataRef{
+		DeviceID: source.deviceID,
+		Metadata: metadata,
+	})
+	if warning != nil || !liveSource.known {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: live legacy metadata has no usable Agent source")
+	}
+	if liveSource.agent != source.agent || liveSource.nativeID != source.nativeID {
+		return nil, syncer.Metadata{}, legacyMigrationSource{}, errors.New("session migrate: legacy Agent source changed during migration planning; retry discovery")
+	}
+	closeOnError = false
+	return reader, metadata, liveSource, nil
+}
+
 // publishLegacyMigrationReplica creates a new v2 source-native Replica from
-// one complete v1 branch. It never calls a v1 write API. The legacy branch is
-// already canonical, so no adapter conversion is performed here; the v2
-// object is simply encrypted under its new immutable namespace.
+// one materialized v1 branch. It remains as a compatibility wrapper for
+// callers/tests that already have a complete LegacyReplica; the production
+// migration path uses the reader-based function below.
 func publishLegacyMigrationReplica(ctx context.Context, configDir string, access *domainAccess, collection listCollection, hubScope sessionHubScope, projectScope sessionProjectScope, candidate legacyMigrationCandidate, source legacyMigrationSource, legacy syncer.LegacyReplica) (legacyMigrationPublishResult, error) {
 	result := legacyMigrationPublishResult{}
+	if legacy.DeviceID != source.deviceID || legacy.LegacySessionID != candidate.legacyID {
+		return result, errors.New("session migrate: legacy branch ownership does not match the local writer")
+	}
+	if len(legacy.Branch.Records) == 0 {
+		return result, errors.New("session migrate: legacy branch is empty")
+	}
+	if err := legacy.Metadata.Validate(); err != nil {
+		return result, fmt.Errorf("session migrate: legacy metadata is invalid: %w", err)
+	}
+	ref, ok := legacyMigrationRefForDevice(candidate.refs, source.deviceID)
+	if !ok || ref.RecordCount != legacy.Metadata.RecordCount || ref.BranchHeadDigest != legacyMigrationDigest(legacy.Metadata.HeadDigest) {
+		return result, errors.New("session migrate: legacy branch does not match the migration plan")
+	}
+	digest, err := syncer.DigestRecords(legacy.Branch.Records)
+	if err != nil {
+		return result, fmt.Errorf("session migrate: validate legacy branch records: %w", err)
+	}
+	if uint64(len(legacy.Branch.Records)) != legacy.Metadata.RecordCount || digest != legacy.Metadata.HeadDigest || digest != legacy.Branch.HeadDigest {
+		return result, errors.New("session migrate: legacy branch body does not match its authenticated metadata")
+	}
+	reader, err := syncer.NewSliceRecordReader(legacy.Branch.Records)
+	if err != nil {
+		return result, fmt.Errorf("session migrate: prepare legacy branch reader: %w", err)
+	}
+	return publishLegacyMigrationReplicaStream(ctx, configDir, access, collection, hubScope, projectScope, candidate, source, legacy.Metadata, reader)
+}
+
+// publishLegacyMigrationReplicaStream creates a new v2 source-native Replica
+// from one canonical v1 record reader. It never calls a v1 write API. The
+// source reader and publisher each retain only one shard at a time, while the
+// authenticated metadata count/digest prevents a stale or truncated listing
+// from being promoted into a complete v2 Replica.
+func publishLegacyMigrationReplicaStream(ctx context.Context, configDir string, access *domainAccess, collection listCollection, hubScope sessionHubScope, projectScope sessionProjectScope, candidate legacyMigrationCandidate, source legacyMigrationSource, metadata syncer.Metadata, reader syncer.RecordReader) (result legacyMigrationPublishResult, err error) {
+	if reader == nil {
+		return result, errors.New("session migrate: legacy branch reader is required")
+	}
+	handedOff := false
+	defer func() {
+		if handedOff {
+			return
+		}
+		if closeErr := reader.Close(); closeErr != nil {
+			if err == nil {
+				err = fmt.Errorf("session migrate: close legacy branch reader: %w", closeErr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("session migrate: close legacy branch reader: %w", closeErr))
+			}
+		}
+	}()
+
 	if ctx == nil {
 		return result, errors.New("session migrate: context is required")
 	}
@@ -132,28 +237,21 @@ func publishLegacyMigrationReplica(ctx context.Context, configDir string, access
 	if !source.known || strings.TrimSpace(source.agent) == "" || strings.TrimSpace(source.nativeID) == "" {
 		return result, errors.New("session migrate: legacy source is not publishable")
 	}
-	if source.deviceID != collection.localDeviceID || legacy.DeviceID != source.deviceID || legacy.LegacySessionID != candidate.legacyID {
+	if source.deviceID != collection.localDeviceID {
 		return result, errors.New("session migrate: legacy branch ownership does not match the local writer")
 	}
-	if len(legacy.Branch.Records) == 0 {
+	if metadata.RecordCount == 0 {
 		return result, errors.New("session migrate: legacy branch is empty")
 	}
 	if err := configDeviceID(collection.localDeviceID); err != nil {
 		return result, err
 	}
-	if err := legacy.Metadata.Validate(); err != nil {
+	if err := metadata.Validate(); err != nil {
 		return result, fmt.Errorf("session migrate: legacy metadata is invalid: %w", err)
 	}
 	ref, ok := legacyMigrationRefForDevice(candidate.refs, source.deviceID)
-	if !ok || ref.RecordCount != legacy.Metadata.RecordCount || ref.BranchHeadDigest != legacyMigrationDigest(legacy.Metadata.HeadDigest) {
+	if !ok || ref.RecordCount != metadata.RecordCount || ref.BranchHeadDigest != legacyMigrationDigest(metadata.HeadDigest) {
 		return result, errors.New("session migrate: legacy branch does not match the migration plan")
-	}
-	digest, err := syncer.DigestRecords(legacy.Branch.Records)
-	if err != nil {
-		return result, fmt.Errorf("session migrate: validate legacy branch records: %w", err)
-	}
-	if uint64(len(legacy.Branch.Records)) != legacy.Metadata.RecordCount || digest != legacy.Metadata.HeadDigest || digest != legacy.Branch.HeadDigest {
-		return result, errors.New("session migrate: legacy branch body does not match its authenticated metadata")
 	}
 
 	nativeKey, err := sessionhub.DeriveNativeSessionKey(collection.identifierKey, source.agent, source.nativeID)
@@ -226,11 +324,17 @@ func publishLegacyMigrationReplica(ctx context.Context, configDir string, access
 	if err != nil {
 		return result, fmt.Errorf("session migrate: prepare v2 Replica cursor: %w", err)
 	}
-	pushResult, pushErr := syncer.PushReplicaWithCursorStore(ctx, access.Store, access.Public, layout, replicaDescriptor, cursorStore, legacy.Branch.Records, syncer.ReplicaPushOptions{
-		Plan:       syncer.DefaultPlanOptions(),
-		Identities: access.Identities,
-		Now:        time.Now().UTC(),
+	pushResult, pushErr := syncer.PushReplicaStreamWithCursorStore(ctx, access.Store, access.Public, layout, replicaDescriptor, cursorStore, reader, syncer.ReplicaStreamOptions{
+		ReplicaPushOptions: syncer.ReplicaPushOptions{
+			Plan:       syncer.DefaultPlanOptions(),
+			Identities: access.Identities,
+			Now:        time.Now().UTC(),
+		},
+		VerifyExpected:      true,
+		ExpectedRecordCount: metadata.RecordCount,
+		ExpectedHeadDigest:  metadata.HeadDigest,
 	})
+	handedOff = true
 	result.PublishedShards = pushResult.PublishedShards
 	if pushErr != nil {
 		result.WritesV2 = true
@@ -337,6 +441,7 @@ func recordLegacyMigrationPublishProgress(configDir string, hubScope sessionHubS
 			SessionID:       candidate.sessionID,
 			LegacyRefs:      append([]sessionhub.LegacyMigrationRef(nil), candidate.refs...),
 			Status:          sessionhub.MigrationStatusLazy,
+			ReadMode:        sessionhub.MigrationReadModeV2,
 			UpdatedAt:       legacyUnknownTime,
 		}
 	}
@@ -410,4 +515,94 @@ func legacyMigrationRefForDevice(refs []sessionhub.LegacyMigrationRef, deviceID 
 
 func legacyMigrationDigest(digest [32]byte) string {
 	return fmt.Sprintf("sha256:%x", digest[:])
+}
+
+func confirmLegacyMigrationPublish(input *bufio.Reader, prompt io.Writer, candidate legacyMigrationCandidate, source legacyMigrationSource) (bool, error) {
+	records := candidate.records
+	if ref, ok := legacyMigrationRefForDevice(candidate.refs, source.deviceID); ok {
+		records = ref.RecordCount
+	}
+	answer, err := readCommandSecretReader(input, prompt, "session migrate", fmt.Sprintf(
+		"Publish legacy session %q as a v2 Replica? local branch records=%d total-branches=%d; v1 data will remain unchanged [y/N]: ",
+		candidate.sessionID, records, len(candidate.refs)))
+	if err != nil {
+		return false, fmt.Errorf("session migrate: read publish confirmation: %w", err)
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes"), nil
+}
+
+func confirmLegacyMigrationRollback(input *bufio.Reader, prompt io.Writer, candidate legacyMigrationCandidate) (bool, error) {
+	answer, err := readCommandSecretReader(input, prompt, "session migrate", fmt.Sprintf(
+		"Stop using the v2 mapping for legacy session %q and prefer the v1 compatibility reader? v1/v2 remote objects will be kept [y/N]: ",
+		candidate.sessionID))
+	if err != nil {
+		return false, fmt.Errorf("session migrate: read rollback confirmation: %w", err)
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes"), nil
+}
+
+func loadLegacyMigrationReadMode(configDir, hubID, projectID, legacySessionID string) (sessionhub.MigrationReadMode, error) {
+	ledger, err := sessionhub.LoadMigrationLedger(configDir, hubID, projectID, legacySessionID)
+	if errors.Is(err, sessionhub.ErrMigrationLedgerNotFound) {
+		return sessionhub.MigrationReadModeV2, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("resume: read migration preference: %w", err)
+	}
+	if ledger.ReadMode == "" {
+		return sessionhub.MigrationReadModeV2, nil
+	}
+	return ledger.ReadMode, nil
+}
+
+// setLegacyMigrationReadMode updates the local preference without changing
+// migration progress. Keeping the preference in the ledger avoids a second
+// rollback sidecar and makes the policy travel with the existing local
+// migration record. The Remote remains untouched.
+func setLegacyMigrationReadMode(configDir string, hubScope sessionHubScope, projectScope sessionProjectScope, candidate legacyMigrationCandidate, ledgers map[string]sessionhub.MigrationLedger, mode sessionhub.MigrationReadMode) (map[string]sessionhub.MigrationLedger, bool, error) {
+	if strings.TrimSpace(configDir) == "" {
+		return ledgers, false, errors.New("session migrate: configuration directory is required")
+	}
+	if mode != sessionhub.MigrationReadModeV2 && mode != sessionhub.MigrationReadModeLegacy {
+		return ledgers, false, errors.New("session migrate: invalid migration read mode")
+	}
+	updated := cloneMigrationLedgerMap(ledgers)
+	current, ok := updated[candidate.legacyID]
+	if !ok {
+		current = sessionhub.MigrationLedger{
+			Version:         sessionhub.MigrationLedgerVersion,
+			HubID:           hubScope.ID,
+			ProjectID:       projectScope.ID,
+			LegacySessionID: candidate.legacyID,
+			SessionID:       candidate.sessionID,
+			LegacyRefs:      append([]sessionhub.LegacyMigrationRef(nil), candidate.refs...),
+			Status:          sessionhub.MigrationStatusLazy,
+			ReadMode:        mode,
+			UpdatedAt:       legacyUnknownTime,
+		}
+	} else if current.HubID != hubScope.ID || current.ProjectID != projectScope.ID || current.LegacySessionID != candidate.legacyID || current.SessionID != candidate.sessionID {
+		return ledgers, false, errors.New("session migrate: local migration ledger conflicts with the selected Session")
+	}
+	if current.ReadMode == "" {
+		current.ReadMode = sessionhub.MigrationReadModeV2
+	}
+	if ok && current.ReadMode == mode {
+		updated[candidate.legacyID] = current
+		return updated, false, nil
+	}
+	current.ReadMode = mode
+	now := time.Now().UTC().Round(0)
+	if !now.After(current.UpdatedAt) {
+		now = current.UpdatedAt.Add(time.Nanosecond)
+	}
+	current.UpdatedAt = now
+	if err := sessionhub.SaveMigrationLedger(configDir, current); err != nil {
+		return ledgers, false, fmt.Errorf("session migrate: save migration read mode: %w", err)
+	}
+	effective, err := sessionhub.LoadMigrationLedger(configDir, hubScope.ID, projectScope.ID, candidate.legacyID)
+	if err != nil {
+		return ledgers, false, fmt.Errorf("session migrate: verify migration read mode: %w", err)
+	}
+	updated[candidate.legacyID] = effective
+	return updated, true, nil
 }

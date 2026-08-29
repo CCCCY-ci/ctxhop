@@ -247,4 +247,21 @@ func TestParseSessionOptionsSupportsMigrationPreview(t *testing.T) {
 	if _, err := parseSessionOptions([]string{"migrate", "one", "two"}); err == nil {
 		t.Fatal("migrate accepted two session selectors")
 	}
+	rollback, err := parseSessionOptions([]string{"migrate", "legacysession", "--rollback", "--yes", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rollback.rollback || !rollback.yes || rollback.publishV2 || !rollback.json {
+		t.Fatalf("rollback options = %+v", rollback)
+	}
+	invalid := [][]string{
+		{"migrate", "one", "--publish-v2", "--rollback"},
+		{"migrate", "one", "--yes"},
+		{"migrate", "one", "--preview", "--yes", "--rollback"},
+	}
+	for _, args := range invalid {
+		if _, err := parseSessionOptions(args); err == nil {
+			t.Fatalf("parseSessionOptions(%v) unexpectedly succeeded", args)
+		}
+	}
 }

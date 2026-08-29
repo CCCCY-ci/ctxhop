@@ -30,6 +30,8 @@ type sessionOptions struct {
 	json      bool
 	preview   bool
 	publishV2 bool
+	rollback  bool
+	yes       bool
 }
 
 type sessionShowReport struct {
@@ -140,6 +142,8 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 	if options.action == sessionActionMigrate {
 		flags.BoolVar(&options.preview, "preview", false, "show a read-only migration plan")
 		flags.BoolVar(&options.publishV2, "publish-v2", false, "publish the selected legacy branch as a v2 Replica")
+		flags.BoolVar(&options.rollback, "rollback", false, "stop using the v2 mapping and prefer the v1 compatibility reader")
+		flags.BoolVar(&options.yes, "yes", false, "skip the migration confirmation prompt")
 	}
 	if options.action == sessionActionShow || options.action == sessionActionMigrate {
 		// The standard flag package stops parsing at the first positional
@@ -173,6 +177,15 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 			if strings.ContainsRune(options.sessionID, 0) {
 				return sessionOptions{}, errors.New("session migrate: session ID contains an invalid character")
 			}
+		}
+		if options.publishV2 && options.rollback {
+			return sessionOptions{}, errors.New("session migrate: --publish-v2 and --rollback cannot be used together")
+		}
+		if options.yes && !options.publishV2 && !options.rollback {
+			return sessionOptions{}, errors.New("session migrate: --yes requires --publish-v2 or --rollback")
+		}
+		if options.preview && options.yes {
+			return sessionOptions{}, errors.New("session migrate: --yes cannot be used with --preview")
 		}
 	default:
 		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, migrate, show, materialize, or resume", options.action)

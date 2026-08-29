@@ -46,7 +46,7 @@ var commandOptions = map[string][]string{
 	"session discover":      {"--json"},
 	"session list":          {"--json"},
 	"session materialize":   {"--json", "--preview", "--apply", "--to", "--context", "--head", "--source", "--allow-unsupported"},
-	"session migrate":       {"--json", "--preview", "--publish-v2"},
+	"session migrate":       {"--json", "--preview", "--publish-v2", "--rollback", "--yes"},
 	"session show":          {"--json"},
 	"session resume":        {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version", "--agent", "--replica"},
 	"remote delete-session": {"--yes", "--remote-id", "--path"},

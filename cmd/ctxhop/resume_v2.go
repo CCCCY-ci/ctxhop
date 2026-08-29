@@ -67,7 +67,7 @@ type nativeResumeSource struct {
 // Session/Agent/Replica tuple, and only then downloads the selected Replica
 // body. It is deliberately separate from the v1 resolver: a v2 native resume
 // must never combine branches from different Agents into one plan.
-func selectNativeResume(ctx context.Context, current project.Project, identifierKey []byte, legacyGroups []syncer.ProjectMetadataRef, options resumeOptions, prompter *resumePrompter, access *domainAccess) (resumeSelection, error) {
+func selectNativeResume(ctx context.Context, configDir string, current project.Project, identifierKey []byte, legacyGroups []syncer.ProjectMetadataRef, options resumeOptions, prompter *resumePrompter, access *domainAccess) (resumeSelection, error) {
 	if access == nil {
 		return resumeSelection{}, errors.New("resume: remote access is unavailable")
 	}
@@ -97,6 +97,15 @@ func selectNativeResume(ctx context.Context, current project.Project, identifier
 	candidate, err := chooseNativeResumeCandidate(v2Groups, options.session, options.agent, options.replica, legacyGroups, identifierKey, localRefs, prompter)
 	if err != nil {
 		return resumeSelection{}, err
+	}
+	if candidate.HasLegacy && candidate.LegacyGroup.SessionID != "" {
+		readMode, err := loadLegacyMigrationReadMode(configDir, hubScope.ID, v2ProjectID, candidate.LegacyGroup.SessionID)
+		if err != nil {
+			return resumeSelection{}, err
+		}
+		if readMode == sessionhub.MigrationReadModeLegacy {
+			return resumeSelection{}, errors.New("resume: v2 mapping is rolled back locally; use the legacy resume path or publish the Session again")
+		}
 	}
 	if !candidate.HasLegacy || candidate.Summary.Fingerprint == nil {
 		return resumeSelection{}, errors.New("resume: selected Replica has no matching workspace fingerprint; push it again from the source device")

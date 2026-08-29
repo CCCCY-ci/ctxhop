@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdh"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +264,31 @@ func TestSelectCompleteLegacyBranchRevalidatesLiveSource(t *testing.T) {
 	if legacy.DeviceID != "deviceone" || len(legacy.Branch.Records) != 1 || live.agent != "codex" || live.nativeID != "native-one" {
 		t.Fatalf("legacy=%+v live=%+v", legacy, live)
 	}
+	reader, streamedMetadata, streamedSource, err := selectLegacyMigrationReader(context.Background(), access, collection, candidate, candidate.sources[0])
+	if err != nil {
+		t.Fatalf("selectLegacyMigrationReader: %v", err)
+	}
+	defer reader.Close()
+	if streamedMetadata.RecordCount != metadata.RecordCount || streamedMetadata.HeadDigest != metadata.HeadDigest || streamedSource != live {
+		t.Fatalf("stream metadata/source = %+v/%+v, want %+v/%+v", streamedMetadata, streamedSource, metadata, live)
+	}
+	var streamed [][]byte
+	for {
+		record, nextErr := reader.Next(context.Background())
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			t.Fatalf("stream reader.Next: %v", nextErr)
+		}
+		streamed = append(streamed, record)
+	}
+	if len(streamed) != 1 || !bytes.Equal(streamed[0], records[0]) {
+		t.Fatalf("streamed legacy records = %q", streamed)
+	}
+	if reader.Close() != nil {
+		t.Fatal("close legacy stream reader")
+	}
 
 	candidate.sources[0].nativeID = "stale-native"
 	if _, _, err := selectCompleteLegacyBranch(context.Background(), access, collection, candidate, candidate.sources[0]); err == nil {
@@ -304,6 +331,120 @@ func TestRecordLegacyMigrationPublishProgressIsIdempotent(t *testing.T) {
 	}
 	if secondChanged || !bytes.Equal(first, second) || secondUpdated[candidate.legacyID].Status != sessionhub.MigrationStatusPublished {
 		t.Fatalf("repeat progress changed:%t first:%s second:%s", secondChanged, first, second)
+	}
+}
+
+func TestMigrationConfirmationRequiresAffirmativeAnswer(t *testing.T) {
+	candidate := legacyMigrationCandidate{sessionID: "sessionone", records: 4, refs: []sessionhub.LegacyMigrationRef{{DeviceID: "deviceone"}}}
+	var prompt bytes.Buffer
+	confirmed, err := confirmLegacyMigrationPublish(bufio.NewReader(strings.NewReader("yes\n")), &prompt, candidate, legacyMigrationSource{deviceID: "deviceone"})
+	if err != nil || !confirmed {
+		t.Fatalf("positive confirmation = %t, err=%v", confirmed, err)
+	}
+	if !strings.Contains(prompt.String(), "sessionone") || !strings.Contains(prompt.String(), "v1 data will remain unchanged") {
+		t.Fatalf("publish prompt = %q", prompt.String())
+	}
+
+	prompt.Reset()
+	confirmed, err = confirmLegacyMigrationRollback(bufio.NewReader(strings.NewReader("no\n")), &prompt, candidate)
+	if err != nil || confirmed {
+		t.Fatalf("negative rollback confirmation = %t, err=%v", confirmed, err)
+	}
+	if !strings.Contains(prompt.String(), "v1/v2 remote objects will be kept") {
+		t.Fatalf("rollback prompt = %q", prompt.String())
+	}
+}
+
+func TestSetLegacyMigrationReadModePreservesProgressAndIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	candidate := legacyMigrationCandidate{
+		legacyID:  "legacyone",
+		sessionID: "sessionone",
+		refs:      []sessionhub.LegacyMigrationRef{{DeviceID: "deviceone", BranchHeadDigest: "sha256:" + strings.Repeat("a", 64), RecordCount: 4}},
+	}
+	hubScope := sessionHubScope{ID: "hubone", Name: "default"}
+	projectScope := sessionProjectScope{ID: "projectone"}
+	initial := sessionhub.MigrationLedger{
+		Version:           sessionhub.MigrationLedgerVersion,
+		HubID:             hubScope.ID,
+		ProjectID:         projectScope.ID,
+		LegacySessionID:   candidate.legacyID,
+		SessionID:         candidate.sessionID,
+		LegacyRefs:        append([]sessionhub.LegacyMigrationRef(nil), candidate.refs...),
+		PublishedReplicas: []string{"replicaone"},
+		Status:            sessionhub.MigrationStatusPublished,
+		ReadMode:          sessionhub.MigrationReadModeV2,
+		UpdatedAt:         time.Date(2026, 8, 29, 15, 0, 0, 0, time.UTC),
+	}
+	if err := sessionhub.SaveMigrationLedger(root, initial); err != nil {
+		t.Fatal(err)
+	}
+	ledgers := map[string]sessionhub.MigrationLedger{candidate.legacyID: initial}
+	updated, changed, err := setLegacyMigrationReadMode(root, hubScope, projectScope, candidate, ledgers, sessionhub.MigrationReadModeLegacy)
+	if err != nil || !changed {
+		t.Fatalf("rollback mode change = %t, err=%v", changed, err)
+	}
+	loaded, err := sessionhub.LoadMigrationLedger(root, hubScope.ID, projectScope.ID, candidate.legacyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ReadMode != sessionhub.MigrationReadModeLegacy || loaded.Status != initial.Status || !reflect.DeepEqual(loaded.PublishedReplicas, initial.PublishedReplicas) {
+		t.Fatalf("rollback ledger = %+v", loaded)
+	}
+	path, err := sessionhub.MigrationLedgerPath(root, hubScope.ID, projectScope.ID, candidate.legacyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err = setLegacyMigrationReadMode(root, hubScope, projectScope, candidate, updated, sessionhub.MigrationReadModeLegacy)
+	if err != nil || changed {
+		t.Fatalf("repeated rollback mode change = %t, err=%v", changed, err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) || updated[candidate.legacyID].ReadMode != sessionhub.MigrationReadModeLegacy {
+		t.Fatalf("repeated rollback changed local state: first=%s second=%s", first, second)
+	}
+
+	newRoot := t.TempDir()
+	created, changed, err := setLegacyMigrationReadMode(newRoot, hubScope, projectScope, candidate, nil, sessionhub.MigrationReadModeLegacy)
+	if err != nil || !changed {
+		t.Fatalf("rollback mode creation = %t, err=%v", changed, err)
+	}
+	createdLedger, err := sessionhub.LoadMigrationLedger(newRoot, hubScope.ID, projectScope.ID, candidate.legacyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdLedger.ReadMode != sessionhub.MigrationReadModeLegacy || created[candidate.legacyID].ReadMode != sessionhub.MigrationReadModeLegacy {
+		t.Fatalf("created rollback ledger = %+v", createdLedger)
+	}
+}
+
+func TestLoadLegacyMigrationReadModeDefaultsToV2AndHonoursRollback(t *testing.T) {
+	root := t.TempDir()
+	if mode, err := loadLegacyMigrationReadMode(root, "hubone", "projectone", "legacyone"); err != nil || mode != sessionhub.MigrationReadModeV2 {
+		t.Fatalf("missing migration read mode = %q, err=%v", mode, err)
+	}
+	ledger := sessionhub.MigrationLedger{
+		Version:         sessionhub.MigrationLedgerVersion,
+		HubID:           "hubone",
+		ProjectID:       "projectone",
+		LegacySessionID: "legacyone",
+		SessionID:       "sessionone",
+		Status:          sessionhub.MigrationStatusPublished,
+		ReadMode:        sessionhub.MigrationReadModeLegacy,
+		UpdatedAt:       time.Date(2026, 8, 29, 16, 0, 0, 0, time.UTC),
+	}
+	if err := sessionhub.SaveMigrationLedger(root, ledger); err != nil {
+		t.Fatal(err)
+	}
+	if mode, err := loadLegacyMigrationReadMode(root, ledger.HubID, ledger.ProjectID, ledger.LegacySessionID); err != nil || mode != sessionhub.MigrationReadModeLegacy {
+		t.Fatalf("rollback migration read mode = %q, err=%v", mode, err)
 	}
 }
 

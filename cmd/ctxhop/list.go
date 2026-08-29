@@ -151,6 +151,14 @@ func collectListCollection(ctx context.Context, c *config.Config, configDir, pro
 // explicit body operation, such as legacy full publish. The caller owns the
 // returned access object and must close it after the operation completes.
 func collectListCollectionWithAccess(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
+	return collectListCollectionWithSecretReader(ctx, c, configDir, projectDir, newCommandSecretReader(input), prompt, command)
+}
+
+// collectListCollectionWithSecretReader is the shared metadata discovery
+// path for commands that may continue with a confirmation after unlocking
+// the domain. The secret reader must remain alive until that confirmation has
+// consumed its line.
+func collectListCollectionWithSecretReader(ctx context.Context, c *config.Config, configDir, projectDir string, secretReader *commandSecretReader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
 	if c == nil {
 		return listCollection{}, nil, fmt.Errorf("%s: configuration is unavailable", command)
 	}
@@ -191,7 +199,7 @@ func collectListCollectionWithAccess(ctx context.Context, c *config.Config, conf
 		return listCollection{}, nil, fmt.Errorf("%s: derive project identity: %w", command, err)
 	}
 
-	access, err := openDomainForRead(ctx, c, configDir, input, prompt, command)
+	access, err := openDomainForReadWithSecretReader(ctx, c, configDir, secretReader, prompt, command)
 	if err != nil {
 		return listCollection{}, nil, err
 	}

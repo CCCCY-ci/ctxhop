@@ -22,6 +22,7 @@ import (
 const (
 	migrationModeLazy          = "lazy"
 	migrationModeFullPublish   = "full-publish"
+	migrationModeRollback      = "rollback"
 	migrationCompatibilityV1   = "legacy-reader"
 	migrationProvenanceRoot    = "legacy-root"
 	migrationUnknownSourceCode = "legacy-source-unknown"
@@ -57,6 +58,7 @@ type sessionMigrationEntry struct {
 	SourceAgents       []string              `json:"sourceAgents"`
 	LegacyRefs         []sessionMigrationRef `json:"legacyRefs"`
 	PublishedReplicas  []string              `json:"publishedReplicas"`
+	ReadMode           string                `json:"readMode"`
 }
 
 type sessionMigrationRef struct {
@@ -103,6 +105,8 @@ type legacyMigrationCandidate struct {
 	warnings     []sessionMigrationWarning
 }
 
+const migrationReadModeUnknown = "unknown"
+
 // collectSessionMigrationWithPrompt implements the v1 compatibility and
 // migration flow. Discovery and lazy migration read metadata only. An
 // explicit --publish-v2 for one selected session additionally reads only the
@@ -117,7 +121,8 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	if err := ctx.Err(); err != nil {
 		return sessionMigrationReport{}, fmt.Errorf("session migrate: %w", err)
 	}
-	collection, access, err := collectListCollectionWithAccess(ctx, c, configDir, projectDir, input, prompt, "session migrate")
+	secretReader := newCommandSecretReader(input)
+	collection, access, err := collectListCollectionWithSecretReader(ctx, c, configDir, projectDir, secretReader, prompt, "session migrate")
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
@@ -138,19 +143,24 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
+	var publishSource legacyMigrationSource
 	if options.publishV2 && !options.preview {
 		if len(candidates) != 1 {
 			return sessionMigrationReport{}, errors.New("session migrate: --publish-v2 requires exactly one selected legacy session")
 		}
-		if _, err := selectLegacyMigrationPublishSource(candidates[0], collection.localDeviceID); err != nil {
+		publishSource, err = selectLegacyMigrationPublishSource(candidates[0], collection.localDeviceID)
+		if err != nil {
 			return sessionMigrationReport{}, err
 		}
+	}
+	if options.rollback && len(candidates) != 1 {
+		return sessionMigrationReport{}, errors.New("session migrate: --rollback requires exactly one selected legacy session")
 	}
 	ledgers, corrupt, ledgerWarnings, err := loadLegacyMigrationLedgers(configDir, hubScope.ID, projectScope.ID, candidates)
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
-	if options.publishV2 && !options.preview {
+	if (options.publishV2 || options.rollback) && !options.preview {
 		if corrupt[candidates[0].legacyID] {
 			return sessionMigrationReport{}, errors.New("session migrate: migration ledger is corrupt; read-only discovery is required")
 		}
@@ -160,6 +170,53 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	}
 	report := buildSessionMigrationReport(hubScope, projectScope, candidates, ledgers, corrupt, ledgerWarnings, options)
 	if options.preview || len(candidates) == 0 {
+		return report, nil
+	}
+
+	if options.publishV2 || options.rollback {
+		if !options.yes {
+			var confirmed bool
+			if options.publishV2 {
+				confirmed, err = confirmLegacyMigrationPublish(secretReader.lines, prompt, candidates[0], publishSource)
+			} else {
+				confirmed, err = confirmLegacyMigrationRollback(secretReader.lines, prompt, candidates[0])
+			}
+			if err != nil {
+				return sessionMigrationReport{}, err
+			}
+			if !confirmed {
+				return sessionMigrationReport{}, errors.New("session migrate: cancelled")
+			}
+		}
+	}
+
+	if options.rollback {
+		candidate := candidates[0]
+		updatedLedgers, modeChanged, err := setLegacyMigrationReadMode(configDir, hubScope, projectScope, candidate, ledgers, sessionhub.MigrationReadModeLegacy)
+		if err != nil {
+			return sessionMigrationReport{}, err
+		}
+		updatedLedgers, registryChanged, ledgerChanged, err := applyLazyLegacyMigration(configDir, collection, hubScope, projectScope, registry, candidates, updatedLedgers, corrupt)
+		if err != nil {
+			return sessionMigrationReport{}, err
+		}
+		report = buildSessionMigrationReport(hubScope, projectScope, candidates, updatedLedgers, corrupt, ledgerWarnings, options)
+		report.SideEffects.WritesRegistry = registryChanged
+		report.SideEffects.WritesLedger = modeChanged || ledgerChanged
+		report.Warnings = append(report.Warnings, sessionMigrationWarning{
+			Code:            "rollback-not-recall",
+			Message:         "rollback changes only this installation's read preference; v1/v2 remote objects and materialized Agent files are retained",
+			LegacySessionID: candidate.legacyID,
+		})
+		sort.SliceStable(report.Warnings, func(i, j int) bool {
+			if report.Warnings[i].LegacySessionID != report.Warnings[j].LegacySessionID {
+				return report.Warnings[i].LegacySessionID < report.Warnings[j].LegacySessionID
+			}
+			if report.Warnings[i].DeviceID != report.Warnings[j].DeviceID {
+				return report.Warnings[i].DeviceID < report.Warnings[j].DeviceID
+			}
+			return report.Warnings[i].Code < report.Warnings[j].Code
+		})
 		return report, nil
 	}
 
@@ -176,15 +233,12 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 
 	candidate := candidates[0]
 	publishLedgerChanged := false
-	source, err := selectLegacyMigrationPublishSource(candidate, collection.localDeviceID)
+	source := publishSource
+	legacyReader, metadata, liveSource, err := selectLegacyMigrationReader(ctx, access, collection, candidate, source)
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
-	legacy, liveSource, err := selectCompleteLegacyBranch(ctx, access, collection, candidate, source)
-	if err != nil {
-		return sessionMigrationReport{}, err
-	}
-	publishResult, publishErr := publishLegacyMigrationReplica(ctx, configDir, access, collection, hubScope, projectScope, candidate, liveSource, legacy)
+	publishResult, publishErr := publishLegacyMigrationReplicaStream(ctx, configDir, access, collection, hubScope, projectScope, candidate, liveSource, metadata, legacyReader)
 	if publishResult.ReplicaID != "" {
 		status := sessionhub.MigrationStatusPartial
 		if publishResult.Complete && len(candidate.refs) == 1 {
@@ -202,6 +256,14 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	}
 	if publishErr != nil {
 		return sessionMigrationReport{}, publishErr
+	}
+	if publishResult.Complete && len(candidate.refs) == 1 {
+		updated, changed, modeErr := setLegacyMigrationReadMode(configDir, hubScope, projectScope, candidate, updatedLedgers, sessionhub.MigrationReadModeV2)
+		if modeErr != nil {
+			return sessionMigrationReport{}, fmt.Errorf("session migrate: restore v2 read preference after publish: %w", modeErr)
+		}
+		updatedLedgers = updated
+		publishLedgerChanged = publishLedgerChanged || changed
 	}
 	report = buildSessionMigrationReport(hubScope, projectScope, candidates, updatedLedgers, corrupt, ledgerWarnings, options)
 	report.SideEffects.WritesRegistry = registryChanged
@@ -410,6 +472,8 @@ func buildSessionMigrationReport(hubScope sessionHubScope, projectScope sessionP
 	mode := migrationModeLazy
 	if options.publishV2 {
 		mode = migrationModeFullPublish
+	} else if options.rollback {
+		mode = migrationModeRollback
 	}
 	report := sessionMigrationReport{
 		Scope:    "project",
@@ -431,15 +495,26 @@ func buildSessionMigrationReport(hubScope sessionHubScope, projectScope sessionP
 			Message: "preview reads legacy metadata only; no legacy body or v2 object is written",
 		})
 	}
+	if options.rollback && options.preview {
+		report.Warnings = append(report.Warnings, sessionMigrationWarning{
+			Code:    "rollback-preview",
+			Message: "preview only shows the local read preference change; no v1/v2 object, registry, or ledger is written",
+		})
+	}
 	for _, candidate := range candidates {
 		status := string(sessionhub.MigrationStatusLazy)
 		published := []string{}
+		readMode := string(sessionhub.MigrationReadModeV2)
 		if corrupt[candidate.legacyID] {
 			status = string(sessionhub.MigrationStatusBlocked)
+			readMode = migrationReadModeUnknown
 		}
 		if ledger, ok := ledgers[candidate.legacyID]; ok {
 			status = string(ledger.Status)
 			published = append(published, ledger.PublishedReplicas...)
+			if ledger.ReadMode != "" {
+				readMode = string(ledger.ReadMode)
+			}
 		}
 		agents := make([]string, 0, len(candidate.sources))
 		agentSeen := make(map[string]struct{}, len(candidate.sources))
@@ -475,6 +550,7 @@ func buildSessionMigrationReport(hubScope sessionHubScope, projectScope sessionP
 			SourceAgents:       agents,
 			LegacyRefs:         refs,
 			PublishedReplicas:  published,
+			ReadMode:           readMode,
 		}
 		report.Sessions = append(report.Sessions, entry)
 		report.Warnings = append(report.Warnings, candidate.warnings...)
@@ -543,11 +619,13 @@ func applyLazyLegacyMigration(configDir string, collection listCollection, hubSc
 			SessionID:       candidate.sessionID,
 			LegacyRefs:      append([]sessionhub.LegacyMigrationRef(nil), candidate.refs...),
 			Status:          sessionhub.MigrationStatusLazy,
+			ReadMode:        sessionhub.MigrationReadModeV2,
 			UpdatedAt:       now,
 		}
 		if hasLedger {
 			desired.PublishedReplicas = append([]string(nil), current.PublishedReplicas...)
 			desired.Status = current.Status
+			desired.ReadMode = current.ReadMode
 		}
 		if !hasLedger || !sameMigrationRefs(current.LegacyRefs, desired.LegacyRefs) {
 			ledgerWrites = append(ledgerWrites, desired)
@@ -659,7 +737,7 @@ func writeSessionMigrationText(w io.Writer, report sessionMigrationReport) error
 		return err
 	}
 	for _, entry := range report.Sessions {
-		if _, err := fmt.Fprintf(w, "- legacy=%s session=%s status=%s compatibility=%s branches=%d records=%d sources=%s provenance=%s\n", safeListText(entry.LegacySessionID), safeListText(entry.SessionID), safeListText(entry.Status), safeListText(entry.Compatibility), entry.BranchCount, entry.RecordCount, strings.Join(entry.SourceAgents, ","), safeListText(entry.Provenance)); err != nil {
+		if _, err := fmt.Fprintf(w, "- legacy=%s session=%s status=%s read-mode=%s compatibility=%s branches=%d records=%d sources=%s provenance=%s\n", safeListText(entry.LegacySessionID), safeListText(entry.SessionID), safeListText(entry.Status), safeListText(entry.ReadMode), safeListText(entry.Compatibility), entry.BranchCount, entry.RecordCount, strings.Join(entry.SourceAgents, ","), safeListText(entry.Provenance)); err != nil {
 			return err
 		}
 	}
