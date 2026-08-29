@@ -19,6 +19,7 @@ const sessionCommandTimeout = 30 * time.Second
 const (
 	sessionActionDiscover = "discover"
 	sessionActionList     = "list"
+	sessionActionMigrate  = "migrate"
 	sessionActionShow     = "show"
 	sessionActionResume   = "resume"
 )
@@ -27,6 +28,8 @@ type sessionOptions struct {
 	action    string
 	sessionID string
 	json      bool
+	preview   bool
+	publishV2 bool
 }
 
 type sessionShowReport struct {
@@ -98,6 +101,18 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 			return writeSessionDiscoverJSON(output, report)
 		}
 		return writeSessionDiscoverText(output, report)
+	case sessionActionMigrate:
+		if options.publishV2 && !options.preview {
+			return errors.New("session migrate: --publish-v2 is not implemented yet; use --publish-v2 --preview to inspect the planned publish")
+		}
+		report, err := collectSessionMigrationWithPrompt(ctx, c, configDir, ".", options, input, prompt)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeSessionMigrationJSON(output, report)
+		}
+		return writeSessionMigrationText(output, report)
 	case sessionActionList, sessionActionShow:
 		report, err := collectSessionListWithPrompt(ctx, c, configDir, ".", input, prompt)
 		if err != nil {
@@ -117,7 +132,7 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 
 func parseSessionOptions(args []string) (sessionOptions, error) {
 	if len(args) == 0 {
-		return sessionOptions{}, errors.New("session: expected discover, list, show, materialize, or resume")
+		return sessionOptions{}, errors.New("session: expected discover, list, migrate, show, materialize, or resume")
 	}
 
 	options := sessionOptions{action: args[0]}
@@ -125,10 +140,15 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
 	flagArgs := args[1:]
-	if options.action == sessionActionShow {
+	if options.action == sessionActionMigrate {
+		flags.BoolVar(&options.preview, "preview", false, "show a read-only migration plan")
+		flags.BoolVar(&options.publishV2, "publish-v2", false, "plan a future full v2 Replica publish")
+	}
+	if options.action == sessionActionShow || options.action == sessionActionMigrate {
 		// The standard flag package stops parsing at the first positional
 		// argument. Accept both `show --json <session>` and
-		// `show <session> --json` by moving flags ahead of the selector.
+		// `show <session> --json` (and the corresponding migrate forms) by
+		// moving flags ahead of the selector.
 		flagArgs = reorderSessionShowArgs(flagArgs)
 	}
 	if err := flags.Parse(flagArgs); err != nil {
@@ -147,8 +167,18 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 		if strings.ContainsRune(options.sessionID, 0) {
 			return sessionOptions{}, errors.New("session show: session ID contains an invalid character")
 		}
+	case sessionActionMigrate:
+		if flags.NArg() > 1 {
+			return sessionOptions{}, errors.New("session migrate: expected zero or one session ID")
+		}
+		if flags.NArg() == 1 {
+			options.sessionID = flags.Arg(0)
+			if strings.ContainsRune(options.sessionID, 0) {
+				return sessionOptions{}, errors.New("session migrate: session ID contains an invalid character")
+			}
+		}
 	default:
-		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, show, materialize, or resume", options.action)
+		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, migrate, show, materialize, or resume", options.action)
 	}
 	return options, nil
 }
