@@ -102,9 +102,6 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 		}
 		return writeSessionDiscoverText(output, report)
 	case sessionActionMigrate:
-		if options.publishV2 && !options.preview {
-			return errors.New("session migrate: --publish-v2 is not implemented yet; use --publish-v2 --preview to inspect the planned publish")
-		}
 		report, err := collectSessionMigrationWithPrompt(ctx, c, configDir, ".", options, input, prompt)
 		if err != nil {
 			return err
@@ -142,7 +139,7 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 	flagArgs := args[1:]
 	if options.action == sessionActionMigrate {
 		flags.BoolVar(&options.preview, "preview", false, "show a read-only migration plan")
-		flags.BoolVar(&options.publishV2, "publish-v2", false, "plan a future full v2 Replica publish")
+		flags.BoolVar(&options.publishV2, "publish-v2", false, "publish the selected legacy branch as a v2 Replica")
 	}
 	if options.action == sessionActionShow || options.action == sessionActionMigrate {
 		// The standard flag package stops parsing at the first positional

@@ -139,78 +139,95 @@ type listCollection struct {
 }
 
 func collectListCollection(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, error) {
+	collection, access, err := collectListCollectionWithAccess(ctx, c, configDir, projectDir, input, prompt, command)
+	if access != nil {
+		access.close()
+	}
+	return collection, err
+}
+
+// collectListCollectionWithAccess is the authenticated variant used by
+// commands that need to continue from metadata-only discovery into an
+// explicit body operation, such as legacy full publish. The caller owns the
+// returned access object and must close it after the operation completes.
+func collectListCollectionWithAccess(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
 	if c == nil {
-		return listCollection{}, fmt.Errorf("%s: configuration is unavailable", command)
+		return listCollection{}, nil, fmt.Errorf("%s: configuration is unavailable", command)
 	}
 	if err := ctx.Err(); err != nil {
-		return listCollection{}, fmt.Errorf("%s: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: %w", command, err)
 	}
 
 	if err := devicePullError(command, c); err != nil {
-		return listCollection{}, err
+		return listCollection{}, nil, err
 	}
 	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
-		return listCollection{}, fmt.Errorf("%s: identify the current project: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: identify the current project: %w", command, err)
 	}
 	if !current.Identity.Stable() {
 		reason := current.Reason
 		if reason == "" {
 			reason = "the current directory has no stable project identity"
 		}
-		return listCollection{}, fmt.Errorf("%s: %s", command, reason)
+		return listCollection{}, nil, fmt.Errorf("%s: %s", command, reason)
 	}
 
 	switch projectPullMode(c, current.Identity.Value) {
 	case projectModeExcluded:
-		return listCollection{}, fmt.Errorf("%s: project is excluded from synchronization", command)
+		return listCollection{}, nil, fmt.Errorf("%s: project is excluded from synchronization", command)
 	case projectModePushOnly:
-		return listCollection{}, fmt.Errorf("%s: project is configured as push-only; remote sessions are unavailable", command)
+		return listCollection{}, nil, fmt.Errorf("%s: project is configured as push-only; remote sessions are unavailable", command)
 	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
-		return listCollection{}, fmt.Errorf("%s: local device identity is invalid: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: local device identity is invalid: %w", command, err)
 	}
 	secrets, err := config.LoadSecrets(configDir)
 	if err != nil {
-		return listCollection{}, fmt.Errorf("%s: load local sync material: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: load local sync material: %w", command, err)
 	}
 	projectID, err := crypto.ProjectID(secrets.IdentifierKey, current.Identity.Value)
 	if err != nil {
-		return listCollection{}, fmt.Errorf("%s: derive project identity: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: derive project identity: %w", command, err)
 	}
 
 	access, err := openDomainForRead(ctx, c, configDir, input, prompt, command)
 	if err != nil {
-		return listCollection{}, err
+		return listCollection{}, nil, err
 	}
-	defer access.close()
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			access.close()
+		}
+	}()
 	store := access.Store
 	identities := access.Identities
 
 	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if err != nil && !errors.Is(err, syncer.ErrNoRemoteMetadata) {
-		return listCollection{}, fmt.Errorf("%s: read encrypted session metadata: %w", command, err)
+		return listCollection{}, nil, fmt.Errorf("%s: read encrypted session metadata: %w", command, err)
 	}
 	var remoteReplicas []syncer.ProjectReplicaMetadataRef
 	if command == "session list" {
 		hubScope, _, v2ProjectID, err := sessionHubAndProject(secrets.IdentifierKey, current)
 		if err != nil {
-			return listCollection{}, err
+			return listCollection{}, nil, err
 		}
 		v2ProjectLayout, err := syncer.NewProjectHubLayout(hubScope.ID, v2ProjectID)
 		if err != nil {
-			return listCollection{}, fmt.Errorf("%s: prepare Session Hub metadata: %w", command, err)
+			return listCollection{}, nil, fmt.Errorf("%s: prepare Session Hub metadata: %w", command, err)
 		}
 		remoteReplicas, err = syncer.FetchProjectReplicaMetadataWithDevices(ctx, store, v2ProjectLayout, identities, access.allowedDevices())
 		if err != nil && !errors.Is(err, syncer.ErrNoReplicaMetadata) {
-			return listCollection{}, fmt.Errorf("%s: read Session Hub Replica metadata: %w", command, err)
+			return listCollection{}, nil, fmt.Errorf("%s: read Session Hub Replica metadata: %w", command, err)
 		}
 	}
 	localSessions, err := discoverListSessionsWithContext(ctx, current.Root)
 	if err != nil {
-		return listCollection{}, err
+		return listCollection{}, nil, err
 	}
-	return listCollection{
+	collection := listCollection{
 		current:        current,
 		identifierKey:  append([]byte(nil), secrets.IdentifierKey...),
 		projectID:      projectID,
@@ -218,7 +235,9 @@ func collectListCollection(ctx context.Context, c *config.Config, configDir, pro
 		localSessions:  localSessions,
 		remoteSessions: remoteSessions,
 		remoteReplicas: remoteReplicas,
-	}, nil
+	}
+	closeOnError = false
+	return collection, access, nil
 }
 
 func discoverListSessions(projectRoot string) ([]adapter.SessionRef, error) {

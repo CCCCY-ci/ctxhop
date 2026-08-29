@@ -103,9 +103,10 @@ type legacyMigrationCandidate struct {
 	warnings     []sessionMigrationWarning
 }
 
-// collectSessionMigrationWithPrompt implements the first migration slice:
-// read v1 metadata, project it into stable v2 identities, and optionally
-// persist only local mapping/ledger metadata. It never reads v1 shard bodies.
+// collectSessionMigrationWithPrompt implements the v1 compatibility and
+// migration flow. Discovery and lazy migration read metadata only. An
+// explicit --publish-v2 for one selected session additionally reads only the
+// local device's complete v1 branch and appends it to a new v2 Replica.
 func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, options sessionOptions, input io.Reader, prompt io.Writer) (sessionMigrationReport, error) {
 	if c == nil {
 		return sessionMigrationReport{}, errors.New("session migrate: configuration is unavailable")
@@ -116,14 +117,11 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	if err := ctx.Err(); err != nil {
 		return sessionMigrationReport{}, fmt.Errorf("session migrate: %w", err)
 	}
-	if options.publishV2 && !options.preview {
-		return sessionMigrationReport{}, errors.New("session migrate: --publish-v2 is not implemented yet; use --publish-v2 --preview to inspect the planned publish")
-	}
-
-	collection, err := collectListCollection(ctx, c, configDir, projectDir, input, prompt, "session migrate")
+	collection, access, err := collectListCollectionWithAccess(ctx, c, configDir, projectDir, input, prompt, "session migrate")
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
+	defer access.close()
 	hubScope, projectScope, v2ProjectID, err := sessionHubAndProject(collection.identifierKey, collection.current)
 	if err != nil {
 		return sessionMigrationReport{}, err
@@ -140,9 +138,25 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
+	if options.publishV2 && !options.preview {
+		if len(candidates) != 1 {
+			return sessionMigrationReport{}, errors.New("session migrate: --publish-v2 requires exactly one selected legacy session")
+		}
+		if _, err := selectLegacyMigrationPublishSource(candidates[0], collection.localDeviceID); err != nil {
+			return sessionMigrationReport{}, err
+		}
+	}
 	ledgers, corrupt, ledgerWarnings, err := loadLegacyMigrationLedgers(configDir, hubScope.ID, projectScope.ID, candidates)
 	if err != nil {
 		return sessionMigrationReport{}, err
+	}
+	if options.publishV2 && !options.preview {
+		if corrupt[candidates[0].legacyID] {
+			return sessionMigrationReport{}, errors.New("session migrate: migration ledger is corrupt; read-only discovery is required")
+		}
+		if ledger, ok := ledgers[candidates[0].legacyID]; ok && ledger.Status == sessionhub.MigrationStatusBlocked {
+			return sessionMigrationReport{}, errors.New("session migrate: local migration ledger is blocked; read-only discovery is required")
+		}
 	}
 	report := buildSessionMigrationReport(hubScope, projectScope, candidates, ledgers, corrupt, ledgerWarnings, options)
 	if options.preview || len(candidates) == 0 {
@@ -156,6 +170,60 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	report = buildSessionMigrationReport(hubScope, projectScope, candidates, updatedLedgers, corrupt, ledgerWarnings, options)
 	report.SideEffects.WritesRegistry = registryChanged
 	report.SideEffects.WritesLedger = ledgerChanged
+	if !options.publishV2 {
+		return report, nil
+	}
+
+	candidate := candidates[0]
+	publishLedgerChanged := false
+	source, err := selectLegacyMigrationPublishSource(candidate, collection.localDeviceID)
+	if err != nil {
+		return sessionMigrationReport{}, err
+	}
+	legacy, liveSource, err := selectCompleteLegacyBranch(ctx, access, collection, candidate, source)
+	if err != nil {
+		return sessionMigrationReport{}, err
+	}
+	publishResult, publishErr := publishLegacyMigrationReplica(ctx, configDir, access, collection, hubScope, projectScope, candidate, liveSource, legacy)
+	if publishResult.ReplicaID != "" {
+		status := sessionhub.MigrationStatusPartial
+		if publishResult.Complete && len(candidate.refs) == 1 {
+			status = sessionhub.MigrationStatusPublished
+		}
+		updated, changed, ledgerErr := recordLegacyMigrationPublishProgress(configDir, hubScope, projectScope, candidate, updatedLedgers, publishResult.ReplicaID, status)
+		if ledgerErr != nil {
+			if publishErr != nil {
+				return sessionMigrationReport{}, errors.Join(publishErr, ledgerErr)
+			}
+			return sessionMigrationReport{}, fmt.Errorf("session migrate: save publish progress after remote write: %w", ledgerErr)
+		}
+		updatedLedgers = updated
+		publishLedgerChanged = changed
+	}
+	if publishErr != nil {
+		return sessionMigrationReport{}, publishErr
+	}
+	report = buildSessionMigrationReport(hubScope, projectScope, candidates, updatedLedgers, corrupt, ledgerWarnings, options)
+	report.SideEffects.WritesRegistry = registryChanged
+	report.SideEffects.WritesLedger = ledgerChanged || publishLedgerChanged
+	report.SideEffects.WritesV2 = publishResult.WritesV2
+	report.SideEffects.ReadsBodies = true
+	if len(candidate.refs) > 1 {
+		report.Warnings = append(report.Warnings, sessionMigrationWarning{
+			Code:            "legacy-branches-not-published",
+			Message:         "only the local device branch was published; other legacy branches remain available through the compatibility reader",
+			LegacySessionID: candidate.legacyID,
+		})
+		sort.SliceStable(report.Warnings, func(i, j int) bool {
+			if report.Warnings[i].LegacySessionID != report.Warnings[j].LegacySessionID {
+				return report.Warnings[i].LegacySessionID < report.Warnings[j].LegacySessionID
+			}
+			if report.Warnings[i].DeviceID != report.Warnings[j].DeviceID {
+				return report.Warnings[i].DeviceID < report.Warnings[j].DeviceID
+			}
+			return report.Warnings[i].Code < report.Warnings[j].Code
+		})
+	}
 	return report, nil
 }
 
@@ -357,10 +425,10 @@ func buildSessionMigrationReport(hubScope sessionHubScope, projectScope sessionP
 		},
 		Warnings: append([]sessionMigrationWarning(nil), ledgerWarnings...),
 	}
-	if options.publishV2 {
+	if options.publishV2 && options.preview {
 		report.Warnings = append(report.Warnings, sessionMigrationWarning{
-			Code:    "full-publish-pending",
-			Message: "full v2 Replica publish is not implemented; this command only shows the planned side effects",
+			Code:    "full-publish-preview",
+			Message: "preview reads legacy metadata only; no legacy body or v2 object is written",
 		})
 	}
 	for _, candidate := range candidates {
