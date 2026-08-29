@@ -300,6 +300,14 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, err
 	}
+	var mutationLock *syncer.LocalFileLock
+	if !options.preview {
+		mutationLock, err = acquireLocalMutationLock(ctx, configDir, "resume")
+		if err != nil {
+			return resumeReport{}, err
+		}
+		defer mutationLock.Close() //nolint:errcheck // the operation result is already determined
+	}
 
 	candidate := selection.Candidate
 	agent := selection.Agent

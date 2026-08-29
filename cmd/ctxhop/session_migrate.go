@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -126,12 +125,10 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	// --publish-v2, the same device-owned cursor and Replica namespace used by
 	// push/watch. Serialize the whole mutation command with push so a second
 	// local process cannot read an old cursor and race the migration writer.
-	var mutationLock *syncer.LocalFileLock
 	if !options.preview {
-		var lockErr error
-		mutationLock, lockErr = syncer.AcquireLocalFileLock(ctx, filepath.Join(configDir, "push.lock"))
+		mutationLock, lockErr := acquireLocalMutationLock(ctx, configDir, "session migrate")
 		if lockErr != nil {
-			return sessionMigrationReport{}, fmt.Errorf("session migrate: acquire local mutation lock: %w", lockErr)
+			return sessionMigrationReport{}, lockErr
 		}
 		defer mutationLock.Close() //nolint:errcheck // the operation result is already determined
 	}

@@ -3,13 +3,72 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
+	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
+
+func TestApplyMaterializeExecutionWaitsForPushLock(t *testing.T) {
+	configDir := t.TempDir()
+	lock, err := syncer.AcquireLocalFileLock(context.Background(), filepath.Join(configDir, "push.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	agentHome := t.TempDir()
+	execution := materializeExecution{
+		Preview: syncflow.MaterializePreview{
+			Coverage:      sessionhub.Coverage{SelectedIDs: []string{"contribution"}},
+			SelectedHeads: []string{"head"},
+			Sources: []syncflow.MaterializeSourceSummary{{
+				ContributionID: "contribution",
+				SourceAgent:    "codex",
+				ReplicaID:      "replica",
+				StartRecord:    0,
+				EndRecord:      1,
+				RecordCount:    1,
+				ContextItems:   1,
+				SourceFormat:   "codex-jsonl",
+			}},
+			TargetAgent:          "claude-code",
+			TargetNativeID:       "ctxhop-target",
+			SourceViewVersion:    adapter.MaterializeViewVersion,
+			TargetAdapterVersion: adapter.ClaudeMaterializeAdapterVersion,
+			SelectedRecordCount:  1,
+			ContextItems:         1,
+			Stats:                adapter.MaterializeStats{Converted: 1},
+			EncodedRecords:       [][]byte{[]byte(`{"type":"user"}`)},
+		},
+		Target: adapter.AgentSessions{
+			Layout:       adapter.Layout{Home: agentHome},
+			Installation: adapter.Installation{DataDir: agentHome},
+		},
+		TargetCapability: adapter.Layout{Home: agentHome},
+		ConfigDir:        configDir,
+		ProjectRoot:      `C:\project`,
+		IdentifierKey:    []byte(strings.Repeat("k", 32)),
+		LocalDeviceID:    "device",
+		HubID:            "hub",
+		ProjectID:        "project",
+		SessionID:        "session",
+		TransactionID:    "transaction",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := applyMaterializeExecution(ctx, execution, io.Discard, false); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("materialize lock error = %v, want context deadline exceeded", err)
+	}
+}
 
 func TestApplyMaterializeExecutionCommitsLocalStateAndRetriesIdempotently(t *testing.T) {
 	configDir := t.TempDir()

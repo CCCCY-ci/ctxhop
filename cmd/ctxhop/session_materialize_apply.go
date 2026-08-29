@@ -89,6 +89,11 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 	if err != nil {
 		return fmt.Errorf("session materialize: prepare local binding: %w", err)
 	}
+	mutationLock, err := acquireLocalMutationLock(ctx, execution.ConfigDir, "session materialize")
+	if err != nil {
+		return err
+	}
+	defer mutationLock.Close() //nolint:errcheck // the operation result is already determined
 
 	transaction, err := sessionhub.LoadMaterializeTransaction(execution.ConfigDir, execution.HubID, execution.ProjectID, execution.SessionID, execution.TransactionID)
 	wasCommitted := false
