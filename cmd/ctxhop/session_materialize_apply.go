@@ -251,7 +251,7 @@ func materializeLocalBinding(execution materializeExecution) (sessionhub.LocalBi
 			RecordCount: recordCount,
 			HeadDigest:  hexDigest,
 		},
-		ContributionCursor: sessionhub.ContributionCursor{},
+		ContributionCursor: sessionhub.ContributionCursor{EndRecord: recordCount},
 		Origin: sessionhub.BindingOrigin{
 			Kind:      sessionhub.ReplicaOriginLocalMaterialize,
 			BaseHeads: append([]string(nil), execution.Preview.SelectedHeads...),

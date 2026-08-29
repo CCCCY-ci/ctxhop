@@ -634,9 +634,6 @@ func (b LocalBinding) Validate() error {
 	if err := b.ContributionCursor.Validate(); err != nil {
 		return fmt.Errorf("%w: binding contribution cursor", err)
 	}
-	if b.ContributionCursor.EndRecord > b.ReplicaCursor.RecordCount {
-		return fmt.Errorf("%w: contribution cursor is ahead of replica cursor", ErrInvalidModel)
-	}
 	if err := b.Origin.Validate(); err != nil {
 		return fmt.Errorf("%w: binding origin", err)
 	}
@@ -645,15 +642,27 @@ func (b LocalBinding) Validate() error {
 			if b.LocalSnapshot == nil || b.Origin.ImportBoundary.RecordCount > b.LocalSnapshot.RecordCount {
 				return fmt.Errorf("%w: import boundary exceeds local snapshot", ErrInvalidModel)
 			}
-			// EndRecord is the absolute end of the published contribution
-			// cursor. Zero means that no post-import target records have been
-			// published yet, which is the normal state immediately after apply.
-			if b.ContributionCursor.EndRecord != 0 && b.Origin.ImportBoundary.RecordCount > b.ContributionCursor.EndRecord {
-				return fmt.Errorf("%w: contribution cursor precedes import boundary", ErrInvalidModel)
+			boundary := b.Origin.ImportBoundary.RecordCount
+			if b.ContributionCursor.LastContributionID == "" {
+				// New bindings use the import boundary as their unpublished
+				// baseline. Zero remains readable for bindings written by the
+				// first Phase 6 build and is normalized on the next push.
+				if b.ContributionCursor.EndRecord != 0 && b.ContributionCursor.EndRecord != boundary {
+					return fmt.Errorf("%w: unpublished contribution cursor differs from import boundary", ErrInvalidModel)
+				}
+			} else {
+				if b.ContributionCursor.EndRecord <= boundary {
+					return fmt.Errorf("%w: published contribution cursor does not follow import boundary", ErrInvalidModel)
+				}
+				if b.ContributionCursor.EndRecord > b.ReplicaCursor.RecordCount {
+					return fmt.Errorf("%w: contribution cursor is ahead of replica cursor", ErrInvalidModel)
+				}
 			}
 		} else if b.Origin.ImportBoundary.RecordCount > b.ContributionCursor.EndRecord {
 			return fmt.Errorf("%w: contribution cursor precedes import boundary", ErrInvalidModel)
 		}
+	} else if b.ContributionCursor.EndRecord > b.ReplicaCursor.RecordCount {
+		return fmt.Errorf("%w: contribution cursor is ahead of replica cursor", ErrInvalidModel)
 	}
 	return nil
 }

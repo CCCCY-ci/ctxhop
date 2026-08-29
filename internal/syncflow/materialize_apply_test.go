@@ -101,7 +101,7 @@ func applyPreviewAndBinding(t *testing.T) (MaterializePreview, sessionhub.LocalB
 		Generation:         1,
 		ReplicaCursor:      sessionhub.ReplicaCursor{NextShard: 1, HeadDigest: fmtDigest(emptyDigest)},
 		LocalSnapshot:      &sessionhub.LocalSessionSnapshot{RecordCount: uint64(len(preview.EncodedRecords)), HeadDigest: hexDigest},
-		ContributionCursor: sessionhub.ContributionCursor{},
+		ContributionCursor: sessionhub.ContributionCursor{EndRecord: uint64(len(preview.EncodedRecords))},
 		Origin: sessionhub.BindingOrigin{
 			Kind:      sessionhub.ReplicaOriginLocalMaterialize,
 			BaseHeads: []string{"head"},

@@ -670,6 +670,10 @@ func classifyPushFailure(err error) syncer.FailureClass {
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, syncer.ErrReplicaImmutableConflict), errors.Is(err, syncer.ErrReplicaIdentityMismatch), errors.Is(err, syncer.ErrReplicaIncomplete), errors.Is(err, syncer.ErrReplicaCursorCommit), errors.Is(err, syncer.ErrReplicaObjectTooLarge):
 		return syncer.FailureSessionCorrupt
+	case errors.Is(err, syncflow.ErrMaterializeBoundaryUnknown), errors.Is(err, syncflow.ErrMaterializePrefixRewrite), errors.Is(err, syncflow.ErrMaterializeContributionConflict):
+		return syncer.FailureSessionCorrupt
+	case errors.Is(err, syncer.ErrContributionImmutableConflict), errors.Is(err, syncer.ErrContributionIdentityMismatch), errors.Is(err, syncer.ErrContributionSnapshotIncomplete), errors.Is(err, syncer.ErrContributionObjectTooLarge):
+		return syncer.FailureSessionCorrupt
 	case errors.Is(err, remote.ErrCredentials):
 		return syncer.FailureCredentials
 	case errors.Is(err, remote.ErrPermission):

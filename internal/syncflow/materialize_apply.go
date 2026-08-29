@@ -254,8 +254,8 @@ func validateMaterializeApplyBinding(preview MaterializePreview, targetAgent str
 	if binding.LocalSnapshot == nil || binding.LocalSnapshot.RecordCount != uint64(len(preview.EncodedRecords)) || binding.LocalSnapshot.HeadDigest != fmt.Sprintf("%x", recordDigest[:]) {
 		return errors.New("binding local snapshot differs from the target output")
 	}
-	if binding.ContributionCursor.EndRecord != 0 {
-		return errors.New("binding Contribution cursor must not claim unpublished target records")
+	if binding.ContributionCursor.EndRecord != boundary.RecordCount || binding.ContributionCursor.LastContributionID != "" {
+		return errors.New("binding Contribution cursor must start at the unpublished import boundary")
 	}
 	return nil
 }

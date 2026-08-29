@@ -78,6 +78,18 @@ func publishNativeReplica(ctx context.Context, configDir, deviceID string, ident
 	if err != nil {
 		return fmt.Errorf("prepare Replica layout: %w", err)
 	}
+	materializedBinding, err := loadMaterializedReplicaBinding(configDir, hubKey, projectKey, sessionKey, replicaKey, agent, ref.NativeID, generation)
+	if err != nil {
+		return err
+	}
+	if materializedBinding != nil {
+		if err := syncflow.ValidateMaterializedPushPreflight(*materializedBinding, stream.Records); err != nil {
+			return fmt.Errorf("validate materialized target before Replica publication: %w", err)
+		}
+		if err := ensureMaterializedReplicaOrigin(ctx, store, layoutV2, identities, *materializedBinding); err != nil {
+			return err
+		}
+	}
 
 	createdAt := ref.CreatedAt
 	if createdAt.IsZero() {
@@ -93,6 +105,13 @@ func publishNativeReplica(ctx context.Context, configDir, deviceID string, ident
 		CreatedBy: sessionhub.SessionCreator{Agent: agent, DeviceID: deviceID},
 		Lifecycle: sessionhub.SessionActive,
 	}
+	replicaOrigin := sessionhub.ReplicaOrigin{Kind: sessionhub.ReplicaOriginNative}
+	if materializedBinding != nil {
+		replicaOrigin = sessionhub.ReplicaOrigin{
+			Kind:      sessionhub.ReplicaOriginLocalMaterialize,
+			BaseHeads: append([]string(nil), materializedBinding.Origin.BaseHeads...),
+		}
+	}
 	replicaDescriptor := sessionhub.NativeReplicaDescriptor{
 		Version:   sessionhub.ModelVersion,
 		ReplicaID: replicaKey,
@@ -105,7 +124,7 @@ func publishNativeReplica(ctx context.Context, configDir, deviceID string, ident
 			NativeFormat:     agent + "-jsonl",
 			AgentVersion:     installation.Version,
 		},
-		Origin:    sessionhub.ReplicaOrigin{Kind: sessionhub.ReplicaOriginNative},
+		Origin:    replicaOrigin,
 		CreatedAt: createdAt.UTC().Round(0),
 	}
 
@@ -126,6 +145,11 @@ func publishNativeReplica(ctx context.Context, configDir, deviceID string, ident
 		Now:        now,
 	}); err != nil {
 		return fmt.Errorf("publish native Replica: %w", err)
+	}
+	if materializedBinding != nil {
+		if err := publishMaterializedReplicaSuffix(ctx, configDir, store, public, identities, identifierKey, layoutV2, *materializedBinding); err != nil {
+			return fmt.Errorf("publish materialized target suffix: %w", err)
+		}
 	}
 	return nil
 }
