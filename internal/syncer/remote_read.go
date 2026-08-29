@@ -33,6 +33,22 @@ var (
 	ErrRemoteObjectTooLarge = errors.New("syncer: remote shard is too large")
 )
 
+// LegacyReplica is a complete, read-only compatibility view of one v1
+// device branch. Metadata and the assembled canonical branch are returned
+// together so migration and v2 resume code cannot accidentally pair a body
+// from one device with metadata from another device.
+//
+// The value is a reader result, not a v2 object. It has no v2 Replica ID and
+// does not authorize a caller to rewrite the v1 namespace. Callers that need
+// a v2 publication must derive a new v2 identity and publish new immutable
+// objects.
+type LegacyReplica struct {
+	LegacySessionID string
+	DeviceID        string
+	Metadata        Metadata
+	Branch          Branch
+}
+
 // SessionLayout identifies the remote prefix shared by every device branch of
 // one session.
 type SessionLayout struct {
@@ -184,6 +200,34 @@ func FetchCompleteBranchesWithIdentities(ctx context.Context, store remote.Remot
 // FetchCompleteBranchesWithIdentitiesAndDevices validates metadata and branches
 // after filtering the current membership set.
 func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]Branch, error) {
+	replicas, err := FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
+	if err != nil {
+		return nil, err
+	}
+	branches := make([]Branch, 0, len(replicas))
+	for _, replica := range replicas {
+		branches = append(branches, replica.Branch)
+	}
+	return branches, nil
+}
+
+// FetchCompleteLegacyReplicas reads and verifies one complete v1 Replica for
+// every authorized device branch under a legacy session. It reads metadata and
+// shard bodies exactly once per call, and it rejects stale listings, gaps,
+// duplicate objects, digest mismatches, and metadata/body disagreement.
+func FetchCompleteLegacyReplicas(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]LegacyReplica, error) {
+	return FetchCompleteLegacyReplicasWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchCompleteLegacyReplicasWithIdentities reads complete v1 Replicas using
+// any retained content-key generation.
+func FetchCompleteLegacyReplicasWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey) ([]LegacyReplica, error) {
+	return FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil)
+}
+
+// FetchCompleteLegacyReplicasWithIdentitiesAndDevices is the device-filtered
+// compatibility reader used by migration and restore paths.
+func FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]LegacyReplica, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
@@ -212,6 +256,7 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 	}
 
 	actual := make(map[string]Branch, len(branches))
+	metadataByDevice := make(map[string]Metadata, len(metadata))
 	for _, branch := range branches {
 		if _, exists := actual[branch.DeviceID]; exists {
 			return nil, fmt.Errorf("%w: duplicate branch for device %q", ErrIncompleteRemoteSession, branch.DeviceID)
@@ -224,6 +269,7 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 			return nil, fmt.Errorf("%w: device %q metadata expects %d records with digest %x, visible branch has %d with digest %x", ErrIncompleteRemoteSession, branch.DeviceID, metadata.RecordCount, metadata.HeadDigest, len(branch.Records), branch.HeadDigest)
 		}
 		actual[branch.DeviceID] = branch
+		metadataByDevice[branch.DeviceID] = metadata
 	}
 
 	for device := range expected {
@@ -232,7 +278,16 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 		}
 	}
 
-	return branches, nil
+	replicas := make([]LegacyReplica, 0, len(branches))
+	for _, branch := range branches {
+		replicas = append(replicas, LegacyReplica{
+			LegacySessionID: sessionID,
+			DeviceID:        branch.DeviceID,
+			Metadata:        metadataByDevice[branch.DeviceID],
+			Branch:          branch,
+		})
+	}
+	return replicas, nil
 }
 
 type shardRefs map[string]map[uint64]string
