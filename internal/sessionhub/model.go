@@ -189,9 +189,20 @@ type EnvironmentAttachment struct {
 }
 
 // ReplicaCursor proves how much of a NativeReplica body this local writer has
-// published.
+// published to the Remote. A newly materialized target intentionally starts
+// with an empty published cursor; its complete local body is described by
+// LocalSessionSnapshot below.
 type ReplicaCursor struct {
 	NextShard   uint64 `json:"nextShard"`
+	RecordCount uint64 `json:"recordCount"`
+	HeadDigest  string `json:"headDigest"`
+}
+
+// LocalSessionSnapshot fingerprints the complete local NativeSession body
+// independently of Remote publication progress. This distinction matters for
+// materialization: an imported prefix exists locally before the first target
+// Replica/Contribution push.
+type LocalSessionSnapshot struct {
 	RecordCount uint64 `json:"recordCount"`
 	HeadDigest  string `json:"headDigest"`
 }
@@ -230,15 +241,16 @@ type BindingOrigin struct {
 // LocalBinding maps a plaintext local Agent NativeSession to a logical
 // Session. NativeSessionID is intentionally local-only.
 type LocalBinding struct {
-	Version            int                `json:"version"`
-	HubID              string             `json:"hubId"`
-	ProjectID          string             `json:"projectId"`
-	SessionID          string             `json:"sessionId"`
-	Agent              string             `json:"agent"`
-	NativeSessionID    string             `json:"nativeSessionId"`
-	ReplicaID          string             `json:"replicaId"`
-	Generation         uint64             `json:"generation"`
-	ReplicaCursor      ReplicaCursor      `json:"replicaCursor"`
-	ContributionCursor ContributionCursor `json:"contributionCursor"`
-	Origin             BindingOrigin      `json:"origin"`
+	Version            int                   `json:"version"`
+	HubID              string                `json:"hubId"`
+	ProjectID          string                `json:"projectId"`
+	SessionID          string                `json:"sessionId"`
+	Agent              string                `json:"agent"`
+	NativeSessionID    string                `json:"nativeSessionId"`
+	ReplicaID          string                `json:"replicaId"`
+	Generation         uint64                `json:"generation"`
+	ReplicaCursor      ReplicaCursor         `json:"replicaCursor"`
+	LocalSnapshot      *LocalSessionSnapshot `json:"localSnapshot,omitempty"`
+	ContributionCursor ContributionCursor    `json:"contributionCursor"`
+	Origin             BindingOrigin         `json:"origin"`
 }

@@ -32,6 +32,22 @@ func TestParseMaterializeOptionsAcceptsDocumentedPositionalForm(t *testing.T) {
 	}
 }
 
+func TestParseMaterializeOptionsAcceptsExplicitApply(t *testing.T) {
+	options, err := parseMaterializeOptions([]string{
+		"logical-session",
+		"--to", "codex",
+		"--context", "causal-head",
+		"--head", "contribution-head",
+		"--apply",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.apply || options.preview {
+		t.Fatalf("options = %+v", options)
+	}
+}
+
 func TestParseMaterializeOptionsValidatesContextSelectors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -61,6 +77,30 @@ func TestRunSessionMaterializeRequiresExplicitPreviewBeforeConfigAccess(t *testi
 	err = runSessionMaterializeWithStreams([]string{"session", "--to", "codex"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "pass --preview") {
 		t.Fatalf("run error = %v, want explicit preview guard", err)
+	}
+}
+
+func TestRunSessionMaterializeRejectsPreviewAndApplyTogether(t *testing.T) {
+	err := runSessionMaterializeWithStreams([]string{"session", "--to", "codex", "--preview", "--apply"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("run error = %v, want exclusive action error", err)
+	}
+}
+
+func TestMaterializeApplyRequestIdentityAndFallbackTimeAreStable(t *testing.T) {
+	first := materializeOptions{
+		sessionID:     "session",
+		targetAgent:   "codex",
+		contextPolicy: materializeContextCausal,
+		heads:         []string{"headb", "heada"},
+		apply:         true,
+	}
+	second := first
+	second.heads = []string{"heada", "headb"}
+	firstID := materializeRequestID("hub", "project", first)
+	secondID := materializeRequestID("hub", "project", second)
+	if firstID != secondID || materializeNativeSessionID(firstID) != materializeNativeSessionID(secondID) || materializeStableTargetTime(firstID) != materializeStableTargetTime(secondID) {
+		t.Fatalf("apply identity is not stable: %q/%q", firstID, secondID)
 	}
 }
 
@@ -111,6 +151,27 @@ func TestWriteMaterializePreviewOutputOmitsEncodedRecords(t *testing.T) {
 	}
 	if _, exists := decoded["encodedRecords"]; exists {
 		t.Fatalf("JSON output exposed encoded records: %s", jsonOutput.String())
+	}
+}
+
+func TestWriteMaterializeApplyTextReportsCommittedTargetWithoutPreviewClaim(t *testing.T) {
+	report := materializePreviewReport{
+		Preview:        false,
+		Scope:          "project",
+		HubID:          "hub",
+		ProjectID:      "project",
+		SessionID:      "session",
+		ContextPolicy:  materializeContextCausal,
+		TargetAgent:    "codex",
+		TargetNativeID: "ctxhop-target",
+		WriteStatus:    "created-and-committed",
+	}
+	var output bytes.Buffer
+	if err := writeMaterializePreviewText(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "unchanged\n") || !strings.Contains(output.String(), "target Agent session and local binding: committed") {
+		t.Fatalf("apply text output = %q", output.String())
 	}
 }
 

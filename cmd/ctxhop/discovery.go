@@ -45,7 +45,7 @@ var commandOptions = map[string][]string{
 	"project discover":      {"--json"},
 	"session discover":      {"--json"},
 	"session list":          {"--json"},
-	"session materialize":   {"--json", "--preview", "--to", "--context", "--head", "--source", "--allow-unsupported"},
+	"session materialize":   {"--json", "--preview", "--apply", "--to", "--context", "--head", "--source", "--allow-unsupported"},
 	"session show":          {"--json"},
 	"session resume":        {"--json", "--preview", "--workspace", "--allow-limited", "--allow-divergent", "--no-workspace-context", "--replace-existing", "--version", "--agent", "--replica"},
 	"remote delete-session": {"--yes", "--remote-id", "--path"},

@@ -526,6 +526,17 @@ func (c ReplicaCursor) Validate() error {
 	return nil
 }
 
+// Validate checks a complete local NativeSession snapshot fingerprint.
+func (s LocalSessionSnapshot) Validate() error {
+	if s.RecordCount == 0 {
+		return fmt.Errorf("%w: local snapshot has no records", ErrInvalidModel)
+	}
+	if err := validateDigest(s.HeadDigest); err != nil {
+		return fmt.Errorf("%w: local snapshot digest", ErrInvalidModel)
+	}
+	return nil
+}
+
 // Validate checks the Contribution cursor.
 func (c ContributionCursor) Validate() error {
 	if c.LastContributionID != "" {
@@ -538,7 +549,10 @@ func (c ContributionCursor) Validate() error {
 
 // Validate checks an imported prefix boundary.
 func (b ImportBoundary) Validate() error {
-	if err := validateDigest(b.PrefixDigest); err != nil {
+	// Import boundaries are fingerprints rather than digest-chain cursors.
+	// Accept the canonical `sha256:<hex>` spelling used by the materialization
+	// spec while retaining the raw 64-hex form written by early v2 builds.
+	if err := validateFingerprint(b.PrefixDigest); err != nil {
 		return fmt.Errorf("%w: import boundary digest", err)
 	}
 	return nil
@@ -612,6 +626,11 @@ func (b LocalBinding) Validate() error {
 	if err := b.ReplicaCursor.Validate(); err != nil {
 		return fmt.Errorf("%w: binding replica cursor", err)
 	}
+	if b.LocalSnapshot != nil {
+		if err := b.LocalSnapshot.Validate(); err != nil {
+			return fmt.Errorf("%w: binding local snapshot", err)
+		}
+	}
 	if err := b.ContributionCursor.Validate(); err != nil {
 		return fmt.Errorf("%w: binding contribution cursor", err)
 	}
@@ -622,7 +641,17 @@ func (b LocalBinding) Validate() error {
 		return fmt.Errorf("%w: binding origin", err)
 	}
 	if b.Origin.ImportBoundary != nil {
-		if b.Origin.ImportBoundary.RecordCount > b.ContributionCursor.EndRecord {
+		if b.Origin.Kind == ReplicaOriginLocalMaterialize {
+			if b.LocalSnapshot == nil || b.Origin.ImportBoundary.RecordCount > b.LocalSnapshot.RecordCount {
+				return fmt.Errorf("%w: import boundary exceeds local snapshot", ErrInvalidModel)
+			}
+			// EndRecord is the absolute end of the published contribution
+			// cursor. Zero means that no post-import target records have been
+			// published yet, which is the normal state immediately after apply.
+			if b.ContributionCursor.EndRecord != 0 && b.Origin.ImportBoundary.RecordCount > b.ContributionCursor.EndRecord {
+				return fmt.Errorf("%w: contribution cursor precedes import boundary", ErrInvalidModel)
+			}
+		} else if b.Origin.ImportBoundary.RecordCount > b.ContributionCursor.EndRecord {
 			return fmt.Errorf("%w: contribution cursor precedes import boundary", ErrInvalidModel)
 		}
 	}

@@ -73,6 +73,23 @@ func (l Layout) ReplaceSession(projectRoot, sessionID string, records [][]byte) 
 	return writeSessionAt(l.SessionFile(projectRoot, sessionID), records)
 }
 
+// RemoveSession removes one native session by its already validated ID. It is
+// intentionally a narrow operation used by materialization rollback after a
+// newly created target fails read-back validation; callers must never use it
+// to replace or clean up an existing session.
+func (l Layout) RemoveSession(projectRoot, sessionID string) error {
+	if err := checkSessionID(sessionID); err != nil {
+		return err
+	}
+	if err := os.Remove(l.SessionFile(projectRoot, sessionID)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("remove session: %w", err)
+	}
+	return nil
+}
+
 // writeSession writes records to path atomically.
 //
 // Everything is validated before anything is created, so a rejected write

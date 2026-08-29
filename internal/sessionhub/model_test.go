@@ -130,6 +130,7 @@ func testMaterializedBinding() LocalBinding {
 		ReplicaID:          testOpaque('j'),
 		Generation:         1,
 		ReplicaCursor:      ReplicaCursor{NextShard: 2, RecordCount: 4, HeadDigest: testDigest('0')},
+		LocalSnapshot:      &LocalSessionSnapshot{RecordCount: 4, HeadDigest: testDigest('3')},
 		ContributionCursor: ContributionCursor{EndRecord: 4, LastContributionID: testOpaque('g')},
 		Origin: BindingOrigin{
 			Kind:      ReplicaOriginLocalMaterialize,
