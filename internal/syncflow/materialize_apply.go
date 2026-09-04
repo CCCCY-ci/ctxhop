@@ -126,13 +126,13 @@ func ApplyMaterialize(ctx context.Context, request MaterializeApplyRequest) (Mat
 		return MaterializeApplyResult{}, fmt.Errorf("%w: target project path does not match the apply project", ErrMaterializeApply)
 	}
 	if err := validateMaterializeAgent(request.TargetAgent, "target"); err != nil {
-		return MaterializeApplyResult{}, fmt.Errorf("%w: %v", ErrMaterializeApply, err)
+		return MaterializeApplyResult{}, fmt.Errorf("%w: %w", ErrMaterializeApply, err)
 	}
 	if request.Preview.TargetAgent != request.TargetAgent {
 		return MaterializeApplyResult{}, fmt.Errorf("%w: target Agent differs from the preview", ErrMaterializeApply)
 	}
 	if err := request.Preview.Validate(); err != nil {
-		return MaterializeApplyResult{}, fmt.Errorf("%w: preview: %v", ErrMaterializeApply, err)
+		return MaterializeApplyResult{}, fmt.Errorf("%w: preview: %w", ErrMaterializeApply, err)
 	}
 	if request.Preview.TargetNativeID != request.Target.NativeID {
 		return MaterializeApplyResult{}, fmt.Errorf("%w: target native ID differs from the preview", ErrMaterializeApply)
@@ -144,7 +144,7 @@ func ApplyMaterialize(ctx context.Context, request MaterializeApplyRequest) (Mat
 		canonicalRecords = request.Preview.EncodedRecords
 	}
 	if err := validateMaterializeApplyBinding(request.Preview, request.TargetAgent, request.Binding, canonicalRecords); err != nil {
-		return MaterializeApplyResult{}, fmt.Errorf("%w: binding: %v", ErrMaterializeApply, err)
+		return MaterializeApplyResult{}, fmt.Errorf("%w: binding: %w", ErrMaterializeApply, err)
 	}
 
 	records := cloneMaterializeRecords(request.Preview.EncodedRecords)
@@ -177,7 +177,7 @@ func ApplyMaterialize(ctx context.Context, request MaterializeApplyRequest) (Mat
 		}
 		if result.TargetInstalled {
 			if rollbackErr := request.Installer.RemoveSession(request.ProjectRoot, request.Preview.TargetNativeID); rollbackErr != nil && !errors.Is(rollbackErr, os.ErrNotExist) {
-				return result, fmt.Errorf("%w: %v; rollback target: %w", ErrMaterializeTargetValidation, err, rollbackErr)
+				return result, fmt.Errorf("%w: %w; rollback target: %w", ErrMaterializeTargetValidation, err, rollbackErr)
 			}
 		}
 		return result, err
@@ -211,7 +211,7 @@ func verifyMaterializeTarget(ctx context.Context, request MaterializeApplyReques
 		ProjectPath: request.ProjectRoot,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: read installed target: %v", ErrMaterializeTargetValidation, err)
+		return fmt.Errorf("%w: read installed target: %w", ErrMaterializeTargetValidation, err)
 	}
 	if data.DroppedTail || data.Skipped != 0 {
 		return fmt.Errorf("%w: target contains an incomplete or skipped record", ErrMaterializeTargetValidation)

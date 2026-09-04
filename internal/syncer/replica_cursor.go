@@ -83,13 +83,13 @@ func (s ReplicaCursorStore) Load(ctx context.Context) (PushCursor, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&wire); err != nil {
-		return PushCursor{}, fmt.Errorf("%w: decode state: %v", ErrInvalidReplicaCursorState, err)
+		return PushCursor{}, fmt.Errorf("%w: decode state: %w", ErrInvalidReplicaCursorState, err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err == nil {
 		return PushCursor{}, fmt.Errorf("%w: state contains trailing JSON", ErrInvalidReplicaCursorState)
 	} else if !errors.Is(err, io.EOF) {
-		return PushCursor{}, fmt.Errorf("%w: state has trailing data: %v", ErrInvalidReplicaCursorState, err)
+		return PushCursor{}, fmt.Errorf("%w: state has trailing data: %w", ErrInvalidReplicaCursorState, err)
 	}
 	if wire.Version != replicaCursorStateVersion {
 		if wire.Version > replicaCursorStateVersion {
@@ -102,11 +102,11 @@ func (s ReplicaCursorStore) Load(ctx context.Context) (PushCursor, error) {
 	}
 	digest, err := parseDigest(wire.HeadDigest)
 	if err != nil {
-		return PushCursor{}, fmt.Errorf("%w: head digest: %v", ErrInvalidReplicaCursorState, err)
+		return PushCursor{}, fmt.Errorf("%w: head digest: %w", ErrInvalidReplicaCursorState, err)
 	}
 	cursor := PushCursor{NextShard: wire.NextShard, RecordCount: wire.RecordCount, HeadDigest: digest}
 	if err := cursor.Validate(); err != nil {
-		return PushCursor{}, fmt.Errorf("%w: %v", ErrInvalidReplicaCursorState, err)
+		return PushCursor{}, fmt.Errorf("%w: %w", ErrInvalidReplicaCursorState, err)
 	}
 	return cursor, nil
 }

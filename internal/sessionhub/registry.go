@@ -189,7 +189,7 @@ func (r *Registry) MergeHubDescriptor(identifierKey []byte, descriptor HubDescri
 		return false, err
 	}
 	if err := descriptor.Validate(); err != nil {
-		return false, fmt.Errorf("%w: remote Hub descriptor: %v", ErrInvalidModel, err)
+		return false, fmt.Errorf("%w: remote Hub descriptor: %w", ErrInvalidModel, err)
 	}
 	derivedID, err := DeriveHubKey(identifierKey, descriptor.Name)
 	if err != nil {
@@ -301,7 +301,7 @@ func (r Registry) Validate() error {
 	hubIDs := make(map[string]struct{}, len(r.Hubs))
 	for _, hub := range r.Hubs {
 		if err := hub.Descriptor.Validate(); err != nil {
-			return fmt.Errorf("%w: hub: %v", ErrInvalidModel, err)
+			return fmt.Errorf("%w: hub: %w", ErrInvalidModel, err)
 		}
 		if _, exists := hubIDs[hub.Descriptor.HubID]; exists {
 			return fmt.Errorf("%w: duplicate hub %q", ErrInvalidModel, hub.Descriptor.HubID)
@@ -310,7 +310,7 @@ func (r Registry) Validate() error {
 		projectIDs := make(map[string]struct{}, len(hub.Projects))
 		for _, project := range hub.Projects {
 			if err := project.Descriptor.Validate(); err != nil {
-				return fmt.Errorf("%w: project: %v", ErrInvalidModel, err)
+				return fmt.Errorf("%w: project: %w", ErrInvalidModel, err)
 			}
 			if project.Identity != "" && (!utf8.ValidString(project.Identity) || strings.ContainsRune(project.Identity, 0)) {
 				return fmt.Errorf("%w: project %q has an invalid local identity", ErrInvalidModel, project.Descriptor.ProjectID)
@@ -335,7 +335,7 @@ func validateSessionRecords(project ProjectRecord) error {
 	boundSources := make(map[string]string)
 	for _, session := range project.Sessions {
 		if err := session.Descriptor.Validate(); err != nil {
-			return fmt.Errorf("%w: session: %v", ErrInvalidModel, err)
+			return fmt.Errorf("%w: session: %w", ErrInvalidModel, err)
 		}
 		if session.Descriptor.ProjectID != project.Descriptor.ProjectID {
 			return fmt.Errorf("%w: session %q has the wrong project", ErrInvalidModel, session.Descriptor.SessionID)
@@ -346,7 +346,7 @@ func validateSessionRecords(project ProjectRecord) error {
 		sessionIDs[session.Descriptor.SessionID] = struct{}{}
 		for _, source := range session.Sources {
 			if err := source.Validate(); err != nil {
-				return fmt.Errorf("%w: source in session %q: %v", ErrInvalidModel, session.Descriptor.SessionID, err)
+				return fmt.Errorf("%w: source in session %q: %w", ErrInvalidModel, session.Descriptor.SessionID, err)
 			}
 			key := source.Agent + "\x00" + source.NativeSessionID
 			if previous, exists := boundSources[key]; exists && previous != session.Descriptor.SessionID {
@@ -505,7 +505,7 @@ func (r *Registry) EnsureSession(projectID string, descriptor SessionDescriptor)
 		return SessionRecord{}, err
 	}
 	if err := descriptor.Validate(); err != nil {
-		return SessionRecord{}, fmt.Errorf("%w: session descriptor: %v", ErrInvalidModel, err)
+		return SessionRecord{}, fmt.Errorf("%w: session descriptor: %w", ErrInvalidModel, err)
 	}
 	projectIndex, hubIndex := r.findProject(projectID)
 	if hubIndex < 0 || projectIndex < 0 {
@@ -580,7 +580,7 @@ func (r *Registry) EnsureNativeSession(identifierKey []byte, projectID, agent, n
 		Lifecycle: SessionActive,
 	}}
 	if err := session.Descriptor.Validate(); err != nil {
-		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %v", ErrInvalidModel, err)
+		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %w", ErrInvalidModel, err)
 	}
 	projectIndex, hubIndex := r.findProject(projectID)
 	if hubIndex < 0 || projectIndex < 0 {
@@ -623,7 +623,7 @@ func updateNativeSessionRecord(existing SessionRecord, r *Registry, projectID, a
 		project.Sessions[index].Descriptor.CreatedAt = createdAt.UTC().Round(0)
 	}
 	if err := project.Sessions[index].Descriptor.Validate(); err != nil {
-		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %v", ErrInvalidModel, err)
+		return SessionRecord{}, fmt.Errorf("%w: native session descriptor: %w", ErrInvalidModel, err)
 	}
 	// Refresh the optional legacy identity without changing the logical
 	// Session selected by the existing binding.

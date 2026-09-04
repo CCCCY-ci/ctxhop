@@ -17,9 +17,10 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
 
-// materializeRequestID is stable for one exact CLI intent. It deliberately
-// excludes the generated target ID, so a retry can address the same local
-// transaction even after the process that first planned it has exited.
+// materializeRequestID is stable for one exact materialization intent. It
+// deliberately excludes the generated target ID and the post-commit launch
+// request, so a retry can address the same local transaction even after the
+// process that first planned it has exited.
 func materializeRequestID(hubID, projectID string, options materializeOptions) string {
 	heads := append([]string(nil), options.heads...)
 	sort.Strings(heads)
@@ -33,7 +34,6 @@ func materializeRequestID(hubID, projectID string, options materializeOptions) s
 		Heads            []string `json:"heads"`
 		AllowUnsupported bool     `json:"allowUnsupported"`
 		ApplyEnvironment bool     `json:"applyEnvironment"`
-		Launch           bool     `json:"launch"`
 	}{
 		HubID:            hubID,
 		ProjectID:        projectID,
@@ -44,7 +44,6 @@ func materializeRequestID(hubID, projectID string, options materializeOptions) s
 		Heads:            heads,
 		AllowUnsupported: options.allowUnsupported,
 		ApplyEnvironment: options.applyEnvironment,
-		Launch:           options.launch,
 	}
 	data, _ := json.Marshal(wire)
 	digest := sessionhub.DigestBytes(data)

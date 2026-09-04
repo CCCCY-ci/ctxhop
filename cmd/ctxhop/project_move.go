@@ -718,8 +718,14 @@ func moveLocalProjectBindings(configDir, sourceHubID, sourceProjectID, destinati
 			if parseExistingErr != nil {
 				return 0, fmt.Errorf("project move: destination local binding is invalid: %w", parseExistingErr)
 			}
-			existingBytes, _ := existingBinding.MarshalBinary()
-			newBytes, _ := binding.MarshalBinary()
+			existingBytes, marshalErr := existingBinding.MarshalBinary()
+			if marshalErr != nil {
+				return 0, fmt.Errorf("project move: encode destination local binding: %w", marshalErr)
+			}
+			newBytes, marshalErr := binding.MarshalBinary()
+			if marshalErr != nil {
+				return 0, fmt.Errorf("project move: encode source local binding: %w", marshalErr)
+			}
 			if !bytes.Equal(existingBytes, newBytes) {
 				return 0, errors.New("project move: destination local binding conflicts with the source")
 			}

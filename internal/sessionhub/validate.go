@@ -679,13 +679,13 @@ func (b LocalBinding) Validate() error {
 // descriptors. It intentionally does not scan or contact a Remote.
 func ValidateHierarchy(h HubDescriptor, p ProjectDescriptor, s SessionDescriptor) error {
 	if err := h.Validate(); err != nil {
-		return fmt.Errorf("%w: hub: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: hub: %w", ErrInvalidHierarchy, err)
 	}
 	if err := p.Validate(); err != nil {
-		return fmt.Errorf("%w: project: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: project: %w", ErrInvalidHierarchy, err)
 	}
 	if err := s.Validate(); err != nil {
-		return fmt.Errorf("%w: session: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: session: %w", ErrInvalidHierarchy, err)
 	}
 	if h.HubID != p.HubID || p.ProjectID != s.ProjectID {
 		return fmt.Errorf("%w: parent identifiers do not match", ErrInvalidHierarchy)
@@ -697,10 +697,10 @@ func ValidateHierarchy(h HubDescriptor, p ProjectDescriptor, s SessionDescriptor
 // logical Session.
 func ValidateReplicaForSession(r NativeReplicaDescriptor, s SessionDescriptor) error {
 	if err := s.Validate(); err != nil {
-		return fmt.Errorf("%w: session: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: session: %w", ErrInvalidHierarchy, err)
 	}
 	if err := r.Validate(); err != nil {
-		return fmt.Errorf("%w: replica: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: replica: %w", ErrInvalidHierarchy, err)
 	}
 	if r.SessionID != s.SessionID {
 		return fmt.Errorf("%w: replica belongs to another session", ErrInvalidHierarchy)
@@ -712,10 +712,10 @@ func ValidateReplicaForSession(r NativeReplicaDescriptor, s SessionDescriptor) e
 // supplied logical Session.
 func ValidateContributionForSession(c Contribution, s SessionDescriptor) error {
 	if err := s.Validate(); err != nil {
-		return fmt.Errorf("%w: session: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: session: %w", ErrInvalidHierarchy, err)
 	}
 	if err := c.Validate(); err != nil {
-		return fmt.Errorf("%w: contribution: %v", ErrInvalidHierarchy, err)
+		return fmt.Errorf("%w: contribution: %w", ErrInvalidHierarchy, err)
 	}
 	if c.SessionID != s.SessionID {
 		return fmt.Errorf("%w: contribution belongs to another session", ErrInvalidHierarchy)

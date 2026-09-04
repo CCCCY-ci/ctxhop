@@ -208,11 +208,11 @@ func validateMaterializeRange(snapshot syncer.ReplicaSnapshot, sourceRange sessi
 	end := int(sourceRange.EndRecord)
 	prefix, err := syncer.DigestRecords(snapshot.Records[:start])
 	if err != nil {
-		return fmt.Errorf("calculate prefix digest: %v", err)
+		return fmt.Errorf("calculate prefix digest: %w", err)
 	}
 	rangeDigest, err := syncer.DigestRecords(snapshot.Records[start:end])
 	if err != nil {
-		return fmt.Errorf("calculate range digest: %v", err)
+		return fmt.Errorf("calculate range digest: %w", err)
 	}
 	if hex.EncodeToString(prefix[:]) != sourceRange.PrefixDigest {
 		return errors.New("range prefix digest does not match")

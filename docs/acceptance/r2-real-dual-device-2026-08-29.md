@@ -1,7 +1,7 @@
 # Cloudflare R2 real Windows ↔ Linux dual-device acceptance
 
-Date: 2026-08-29  
-Commit: `0b613acf66df2237ccdf271738593952498be136`  
+Date: 2026-08-29
+Commit: `0b613acf66df2237ccdf271738593952498be136`
 Result: **passed**
 
 This run verified the Session Hub session path on two real devices using a

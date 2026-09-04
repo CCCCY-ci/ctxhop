@@ -313,7 +313,9 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, endpoint strin
 	if err != nil {
 		return updateRelease{}, err
 	}
-	defer response.Body.Close()
+	// The bounded read below determines the result; closing an HTTP response
+	// body after that read is best-effort and must not hide the useful error.
+	defer func() { _ = response.Body.Close() }()
 	body, err := readUpdateResponse(response, maxUpdateMetadata)
 	if err != nil {
 		return updateRelease{}, err
@@ -417,7 +419,9 @@ func downloadUpdateFile(ctx context.Context, client *http.Client, rawURL, destin
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	// The download result is determined by the bounded copy and file sync;
+	// response-body cleanup is best-effort after those operations.
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download endpoint returned HTTP %d", response.StatusCode)
 	}
@@ -434,6 +438,8 @@ func downloadUpdateFile(ctx context.Context, client *http.Client, rawURL, destin
 	complete := false
 	defer func() {
 		if !complete {
+			// Preserve the primary download error. Antivirus or another process
+			// may briefly hold either path during best-effort cleanup.
 			_ = file.Close()
 			_ = os.Remove(destination)
 		}
@@ -498,7 +504,9 @@ func verifyUpdateChecksum(path string, checksumContents []byte, assetName string
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	// The hash result is authoritative; closing a read-only file afterward is
+	// best-effort and cannot change the bytes that were already read.
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return err
@@ -515,7 +523,9 @@ func extractUpdateBinary(archivePath, expectedName, destination string) error {
 	if err != nil {
 		return err
 	}
-	defer archive.Close()
+	// The archive has already been fully inspected when this function returns;
+	// closing its read handle is best-effort cleanup.
+	defer func() { _ = archive.Close() }()
 
 	var selected *zip.File
 	for _, file := range archive.File {
@@ -543,7 +553,9 @@ func extractUpdateBinary(archivePath, expectedName, destination string) error {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	// The extracted file is validated by the bounded copy and sync; closing the
+	// source stream afterward is best-effort cleanup.
+	defer func() { _ = source.Close() }()
 	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 	if err != nil {
 		return err
@@ -551,6 +563,8 @@ func extractUpdateBinary(archivePath, expectedName, destination string) error {
 	complete := false
 	defer func() {
 		if !complete {
+			// Preserve the primary extraction error. Antivirus or another process
+			// may briefly hold either path during best-effort cleanup.
 			_ = file.Close()
 			_ = os.Remove(destination)
 		}
@@ -628,6 +642,8 @@ func applyUpdate(ctx context.Context, client *http.Client, current updateVersion
 	keepWorkDir := false
 	defer func() {
 		if !keepWorkDir {
+			// A failed cleanup must not replace the update/download error. A
+			// scanner can briefly hold files in the temporary directory.
 			_ = os.RemoveAll(workDir)
 		}
 	}()
@@ -753,6 +769,8 @@ func maybeOfferUpdate(input io.Reader, output, prompt io.Writer) (bool, error) {
 			// wait for the network on every invocation. A later day will try
 			// the release endpoint again.
 			state.LatestVersion = current.normalized
+			// Update-check state is advisory; a read-only config directory must
+			// not make the normal CLI startup fail.
 			_ = saveUpdateCheckState(state)
 			return false, nil
 		}
@@ -762,6 +780,8 @@ func maybeOfferUpdate(input io.Reader, output, prompt io.Writer) (bool, error) {
 			state.SkippedVersion = ""
 			state.SkipUntil = time.Time{}
 		}
+		// Update-check state is advisory; failure to persist the cache must not
+		// block an otherwise usable CLI startup.
 		_ = saveUpdateCheckState(state)
 	}
 
@@ -779,6 +799,8 @@ func maybeOfferUpdate(input io.Reader, output, prompt io.Writer) (bool, error) {
 	if !strings.EqualFold(strings.TrimSpace(answer), "y") && !strings.EqualFold(strings.TrimSpace(answer), "yes") {
 		state.SkippedVersion = latest.normalized
 		state.SkipUntil = now.Add(updateSkipInterval)
+		// A skipped-version cache miss only causes another prompt later; it is
+		// not a reason to turn a successful user's choice into an error.
 		_ = saveUpdateCheckState(state)
 		return false, nil
 	}
