@@ -33,6 +33,221 @@ var (
 	ErrRemoteObjectTooLarge = errors.New("syncer: remote shard is too large")
 )
 
+// LegacyReplica is a complete, read-only compatibility view of one v1
+// device branch. Metadata and the assembled canonical branch are returned
+// together so migration and v2 resume code cannot accidentally pair a body
+// from one device with metadata from another device.
+//
+// The value is a reader result, not a v2 object. It has no v2 Replica ID and
+// does not authorize a caller to rewrite the v1 namespace. Callers that need
+// a v2 publication must derive a new v2 identity and publish new immutable
+// objects.
+type LegacyReplica struct {
+	LegacySessionID string
+	DeviceID        string
+	Metadata        Metadata
+	Branch          Branch
+}
+
+// LegacyReplicaReader is a bounded-memory reader for one authenticated v1
+// device branch. It keeps only the current shard in memory and verifies the
+// complete metadata count/digest when the stream reaches EOF.
+type LegacyReplicaReader struct {
+	store           remote.Remote
+	identities      []*ecdh.PrivateKey
+	legacySessionID string
+	deviceID        string
+	metadata        Metadata
+	shards          []legacyShardRef
+	shardIndex      int
+	current         Shard
+	currentIndex    int
+	total           uint64
+	totalBytes      uint64
+	digest          [32]byte
+	done            bool
+	closed          bool
+	terminalErr     error
+}
+
+type legacyShardRef struct {
+	number uint64
+	key    string
+}
+
+// OpenLegacyReplicaReader authenticates metadata and discovers the ordered
+// shard keys for one device branch without reading any shard body. The caller
+// must close the returned reader; RecordReader publishers close it
+// automatically.
+func OpenLegacyReplicaReader(ctx context.Context, store remote.Remote, projectID, sessionID, deviceID string, identities []*ecdh.PrivateKey) (*LegacyReplicaReader, error) {
+	if ctx == nil {
+		return nil, errors.New("syncer: context is required")
+	}
+	if store == nil {
+		return nil, errors.New("syncer: remote store is required")
+	}
+	if err := validateIdentities(identities); err != nil {
+		return nil, err
+	}
+	if err := validateIdentifier(deviceID); err != nil {
+		return nil, fmt.Errorf("syncer: invalid legacy device identifier: %w", err)
+	}
+	layout, err := NewSessionLayout(projectID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	allowed := map[string]struct{}{deviceID: {}}
+	metadataRefs, err := FetchMetadataWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
+	if err != nil {
+		return nil, fmt.Errorf("syncer: open legacy Replica reader metadata: %w", err)
+	}
+	if len(metadataRefs) != 1 || metadataRefs[0].DeviceID != deviceID {
+		return nil, fmt.Errorf("%w: device %q metadata is not uniquely readable", ErrIncompleteRemoteSession, deviceID)
+	}
+	prefix, err := layout.Prefix()
+	if err != nil {
+		return nil, err
+	}
+	objects, err := store.List(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("syncer: list legacy Replica shards: %w", err)
+	}
+	refs, err := collectShardRefs(prefix, objects)
+	if err != nil {
+		return nil, err
+	}
+	parts := refs[deviceID]
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("%w: device %q has no shards", ErrIncompleteRemoteSession, deviceID)
+	}
+	numbers := make([]uint64, 0, len(parts))
+	for number := range parts {
+		numbers = append(numbers, number)
+	}
+	sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
+	shards := make([]legacyShardRef, 0, len(numbers))
+	for index, number := range numbers {
+		expected := uint64(index + 1)
+		if number != expected {
+			return nil, fmt.Errorf("%w: device %q has a gap near shard %d", ErrIncompleteRemoteSession, deviceID, number)
+		}
+		shards = append(shards, legacyShardRef{number: number, key: parts[number]})
+	}
+	return &LegacyReplicaReader{
+		store:           store,
+		identities:      append([]*ecdh.PrivateKey(nil), identities...),
+		legacySessionID: sessionID,
+		deviceID:        deviceID,
+		metadata:        metadataRefs[0].Metadata,
+		shards:          shards,
+		digest:          EmptyDigest(),
+	}, nil
+}
+
+// Metadata returns the authenticated v1 metadata discovered when the reader
+// was opened. The payload is copied so callers cannot mutate reader state.
+func (r *LegacyReplicaReader) Metadata() Metadata {
+	if r == nil {
+		return Metadata{}
+	}
+	metadata := r.metadata
+	metadata.Payload = append([]byte(nil), r.metadata.Payload...)
+	return metadata
+}
+
+// DeviceID returns the source device identity of the branch.
+func (r *LegacyReplicaReader) DeviceID() string {
+	if r == nil {
+		return ""
+	}
+	return r.deviceID
+}
+
+// LegacySessionID returns the v1 session identity of the branch.
+func (r *LegacyReplicaReader) LegacySessionID() string {
+	if r == nil {
+		return ""
+	}
+	return r.legacySessionID
+}
+
+// Next returns one canonical v1 record at a time.
+func (r *LegacyReplicaReader) Next(ctx context.Context) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("syncer: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r == nil || r.closed {
+		return nil, ErrRecordStreamClosed
+	}
+	if r.terminalErr != nil {
+		return nil, r.terminalErr
+	}
+	if r.done {
+		return nil, io.EOF
+	}
+
+	for {
+		if r.currentIndex < len(r.current.Records) {
+			record := r.current.Records[r.currentIndex]
+			r.currentIndex++
+			if r.total == maxSessionRecords {
+				return nil, fmt.Errorf("%w: record count exceeds %d", ErrSessionTooLarge, maxSessionRecords)
+			}
+			if uint64(len(record)) > maxSessionBytes-r.totalBytes {
+				return nil, fmt.Errorf("%w: record bytes exceed %d", ErrSessionTooLarge, maxSessionBytes)
+			}
+			r.total++
+			r.totalBytes += uint64(len(record))
+			r.digest = nextDigest(r.digest, record)
+			return append([]byte(nil), record...), nil
+		}
+
+		if r.shardIndex >= len(r.shards) {
+			if r.total != r.metadata.RecordCount || r.digest != r.metadata.HeadDigest {
+				r.terminalErr = fmt.Errorf("%w: device %q metadata expects %d records with digest %x, streamed %d with digest %x", ErrIncompleteRemoteSession, r.deviceID, r.metadata.RecordCount, r.metadata.HeadDigest, r.total, r.digest)
+				return nil, r.terminalErr
+			}
+			r.done = true
+			return nil, io.EOF
+		}
+
+		ref := r.shards[r.shardIndex]
+		sealed, err := readRemoteShard(ctx, r.store, ref.key)
+		if err != nil {
+			r.terminalErr = fmt.Errorf("syncer: read legacy Replica shard %d: %w", ref.number, err)
+			return nil, r.terminalErr
+		}
+		shard, err := openShardWithIdentities(r.identities, ref.key, sealed)
+		if err != nil {
+			r.terminalErr = fmt.Errorf("syncer: open legacy Replica shard %d: %w", ref.number, err)
+			return nil, r.terminalErr
+		}
+		if shard.Base != r.total || shard.PrefixDigest != r.digest {
+			r.terminalErr = fmt.Errorf("%w: device %q shard %d does not follow streamed prefix", ErrIncompleteRemoteSession, r.deviceID, ref.number)
+			return nil, r.terminalErr
+		}
+		r.current = shard
+		r.currentIndex = 0
+		r.shardIndex++
+	}
+}
+
+// Close releases the current shard and retained key references. It is
+// idempotent and does not alter any Remote object.
+func (r *LegacyReplicaReader) Close() error {
+	if r == nil || r.closed {
+		return nil
+	}
+	r.closed = true
+	r.current = Shard{}
+	r.shards = nil
+	r.identities = nil
+	return nil
+}
+
 // SessionLayout identifies the remote prefix shared by every device branch of
 // one session.
 type SessionLayout struct {
@@ -184,6 +399,34 @@ func FetchCompleteBranchesWithIdentities(ctx context.Context, store remote.Remot
 // FetchCompleteBranchesWithIdentitiesAndDevices validates metadata and branches
 // after filtering the current membership set.
 func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]Branch, error) {
+	replicas, err := FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, allowed)
+	if err != nil {
+		return nil, err
+	}
+	branches := make([]Branch, 0, len(replicas))
+	for _, replica := range replicas {
+		branches = append(branches, replica.Branch)
+	}
+	return branches, nil
+}
+
+// FetchCompleteLegacyReplicas reads and verifies one complete v1 Replica for
+// every authorized device branch under a legacy session. It reads metadata and
+// shard bodies exactly once per call, and it rejects stale listings, gaps,
+// duplicate objects, digest mismatches, and metadata/body disagreement.
+func FetchCompleteLegacyReplicas(ctx context.Context, store remote.Remote, projectID, sessionID string, identity *ecdh.PrivateKey) ([]LegacyReplica, error) {
+	return FetchCompleteLegacyReplicasWithIdentities(ctx, store, projectID, sessionID, []*ecdh.PrivateKey{identity})
+}
+
+// FetchCompleteLegacyReplicasWithIdentities reads complete v1 Replicas using
+// any retained content-key generation.
+func FetchCompleteLegacyReplicasWithIdentities(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey) ([]LegacyReplica, error) {
+	return FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx, store, projectID, sessionID, identities, nil)
+}
+
+// FetchCompleteLegacyReplicasWithIdentitiesAndDevices is the device-filtered
+// compatibility reader used by migration and restore paths.
+func FetchCompleteLegacyReplicasWithIdentitiesAndDevices(ctx context.Context, store remote.Remote, projectID, sessionID string, identities []*ecdh.PrivateKey, allowed map[string]struct{}) ([]LegacyReplica, error) {
 	if ctx == nil {
 		return nil, errors.New("syncer: context is required")
 	}
@@ -212,6 +455,7 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 	}
 
 	actual := make(map[string]Branch, len(branches))
+	metadataByDevice := make(map[string]Metadata, len(metadata))
 	for _, branch := range branches {
 		if _, exists := actual[branch.DeviceID]; exists {
 			return nil, fmt.Errorf("%w: duplicate branch for device %q", ErrIncompleteRemoteSession, branch.DeviceID)
@@ -224,6 +468,7 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 			return nil, fmt.Errorf("%w: device %q metadata expects %d records with digest %x, visible branch has %d with digest %x", ErrIncompleteRemoteSession, branch.DeviceID, metadata.RecordCount, metadata.HeadDigest, len(branch.Records), branch.HeadDigest)
 		}
 		actual[branch.DeviceID] = branch
+		metadataByDevice[branch.DeviceID] = metadata
 	}
 
 	for device := range expected {
@@ -232,7 +477,16 @@ func FetchCompleteBranchesWithIdentitiesAndDevices(ctx context.Context, store re
 		}
 	}
 
-	return branches, nil
+	replicas := make([]LegacyReplica, 0, len(branches))
+	for _, branch := range branches {
+		replicas = append(replicas, LegacyReplica{
+			LegacySessionID: sessionID,
+			DeviceID:        branch.DeviceID,
+			Metadata:        metadataByDevice[branch.DeviceID],
+			Branch:          branch,
+		})
+	}
+	return replicas, nil
 }
 
 type shardRefs map[string]map[uint64]string

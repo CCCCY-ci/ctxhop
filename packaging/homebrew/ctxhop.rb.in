@@ -2,7 +2,7 @@ class Ctxhop < Formula
   desc "Encrypted cross-device sync for AI coding agent sessions"
   homepage "https://github.com/CCCCY-ci/ctxhop"
   version "@VERSION@"
-  license "Apache-2.0"
+  license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?

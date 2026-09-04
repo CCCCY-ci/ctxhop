@@ -137,14 +137,30 @@ func deleteRemoteObjects(ctx context.Context, store remote.Remote, keys []string
 	deleteCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Establish a deterministic first delete before opening the worker pool.
+	// Besides making failure reporting stable, this guarantees that a Remote
+	// which cancels the context after its first successful delete can stop the
+	// operation before another worker starts a later key. The remaining keys
+	// still use the worker pool so large scoped deletes do not become fully
+	// serial.
+	if err := deleteRemoteObject(deleteCtx, store, keys[0]); err != nil {
+		return 0, fmt.Errorf("syncer: delete remote object %q: %w", keys[0], err)
+	}
+	removed := 1
+	if err := ctx.Err(); err != nil {
+		return removed, fmt.Errorf("syncer: delete remote objects: %w", err)
+	}
+	if len(keys) == 1 {
+		return removed, nil
+	}
+
 	workers := remoteDeleteWorkers
-	if len(keys) < workers {
-		workers = len(keys)
+	if len(keys)-1 < workers {
+		workers = len(keys) - 1
 	}
 	jobs := make(chan string)
 	var wg sync.WaitGroup
 	var stateMu sync.Mutex
-	removed := 0
 	var firstErr error
 
 	worker := func() {
@@ -178,7 +194,7 @@ func deleteRemoteObjects(ctx context.Context, store remote.Remote, keys []string
 		go worker()
 	}
 
-	for _, key := range keys {
+	for _, key := range keys[1:] {
 		select {
 		case jobs <- key:
 		case <-deleteCtx.Done():

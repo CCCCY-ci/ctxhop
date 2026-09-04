@@ -240,6 +240,29 @@ func (l CodexLayout) ReplaceSession(projectRoot, sessionID string, records [][]b
 	return l.writeCodexSession(projectRoot, sessionID, records, true)
 }
 
+// RemoveSession removes one native session by its already validated ID. It is
+// used only to roll back a newly created materialization target after a
+// failed read-back validation.
+func (l CodexLayout) RemoveSession(projectRoot, sessionID string) error {
+	if err := checkSessionID(sessionID); err != nil {
+		return err
+	}
+	path, err := l.findSessionPath(sessionID)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("remove Codex session: %w", err)
+	}
+	return nil
+}
+
 func (l CodexLayout) writeCodexSession(projectRoot, sessionID string, records [][]byte, replace bool) error {
 	if err := checkSessionID(sessionID); err != nil {
 		return err

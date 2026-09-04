@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/CCCCY-ci/ctxhop/releases/latest"><img src="https://img.shields.io/github/v/release/CCCCY-ci/ctxhop?sort=semver" alt="Latest release"></a>
-  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
+  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
 <p align="center">
@@ -17,17 +17,42 @@
 
 **换设备，不换上下文。**
 
-CtxHop 是一个面向 Claude Code、Codex 等 AI Coding Agent 的跨设备会话与工作区同步工具。你可以在一台设备上开始开发，在另一台设备上恢复原来的 Session 并继续工作；源设备无需保持在线。
+CtxHop 是一个本地优先的 CLI，用于在设备之间传递 Claude Code 和 Codex
+Session。将项目绑定到 Session Hub，通过你控制的存储同步 Session，再在任意已授权
+设备上恢复。
 
-CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 Git 状态。数据在离开设备前完成本地加密，存储后端由你控制，可使用本地目录或 Cloudflare R2 等 S3 兼容对象存储。
+Session Hub 将 Agent 原生 Session 组织为逻辑 Session，保留来源关系，并支持根据所选
+上下文创建目标 Agent 的原生 Session。工作区和 Git 交接由用户显式选择，本地加密和
+设备授权保护同步边界。
 
 ## 主要功能
 
-- **跨设备续接 Session**：同步 Claude Code 和 Codex 的项目级会话，在另一台已授权设备上直接恢复并继续。
-- **可选工作区交接**：使用 `--workspace` 时，同时携带有限的项目文件和 Git 状态，适合处理尚未提交的工作。
-- **项目级同步边界**：只有显式绑定的项目和已授权设备参与同步，不扫描或传输无关项目。
-- **自托管存储**：支持本地目录与 S3 兼容对象存储，包括 Cloudflare R2。
-- **安全恢复**：`resume --preview` 可在写入前预览恢复内容；冲突检查失败时不会修改目标工作区。
+- **跨设备恢复 Session**：在另一台已授权设备上继续项目 Session。
+- **Session Hub**：将 Claude Code 和 Codex Session 组织到同一个逻辑 Session，同时保留原生来源和历史。
+- **Agent 切换**：使用 `ctxhop session switch` 将所选上下文带入另一个 Agent 的新原生 Session。
+- **工作区交接**：按需随 Session 携带指定的工作区文件与 Git 状态。
+- **本地优先存储**：数据在设备本地加密，并保存到由你控制的后端。
+
+## 结构关系
+
+CtxHop 使用清晰的层级关系：
+
+~~~text
+Domain
+└── Hub
+    └── Project
+        └── Session
+            ├── Claude Code 原生 Session / Replica
+            └── Codex 原生 Session / Replica
+~~~
+
+- **Domain**：加密同步边界。Remote 命名空间、密钥文件和已授权设备共同定义一个共享数据空间。
+- **Hub**：Domain 内的项目组织空间，用于分组和隔离项目；新建 Domain 时会自动创建 `default` Hub。
+- **Project**：工作区、Git 状态和 Session 的项目级边界。
+- **Session**：跨 Agent 共享的一段逻辑开发上下文。
+
+在常规操作中，Domain 和 `default` Hub 由系统自动处理，用户直接操作当前 Project 及其
+Session。仅当需要在同一授权 Domain 内划分不同项目组时，才需要切换或创建其他 Hub。
 
 ## 演示
 
@@ -35,39 +60,72 @@ CtxHop 按项目同步 Agent Session，并可按需携带有限的工作区与 G
 
 ## 安装
 
+从 [Releases](https://github.com/CCCCY-ci/ctxhop/releases) 下载对应平台和 CPU 架构的安装包。
+
 ### Windows
 
-从 [Releases](https://github.com/CCCCY-ci/ctxhop/releases) 下载对应架构的安装器：
+下载并运行对应架构的安装器：
 
 - `CtxHop-Setup_<version>_windows_amd64.exe`
 - `CtxHop-Setup_<version>_windows_arm64.exe`
 
-安装完成后，CtxHop 会自动打开命令提示符，显示 ASCII Logo 和下一步操作。可以直接运行：
+安装器将 CtxHop 安装到 `%USERPROFILE%\.ctxhop\bin`，并将目录加入当前用户的 PATH，无需管理员权限。
+重新打开终端后验证：
 
 ```powershell
-ctxhop init
+ctxhop version
 ```
+
+需要便携使用时，下载 `ctxhop_<version>_windows_<arch>.zip`，解压
+`ctxhop.exe`，再将所在目录加入 PATH。
 
 ### macOS / Linux
 
-下载对应平台的 Release 压缩包并安装：
+选择对应平台和 CPU 架构的压缩包：
+
+- macOS Intel：`ctxhop_<version>_darwin_amd64.zip`
+- macOS Apple Silicon：`ctxhop_<version>_darwin_arm64.zip`
+- Linux x86_64：`ctxhop_<version>_linux_amd64.zip`
+- Linux ARM64：`ctxhop_<version>_linux_arm64.zip`
+
+在终端中解压并安装：
 
 ```bash
 unzip ctxhop_<version>_<os>_<arch>.zip
 sh install.sh
 ```
 
-默认安装到 `$XDG_BIN_HOME` 或 `$HOME/.local/bin`。自定义目录：
+默认安装到 `$XDG_BIN_HOME`；未设置时使用 `$HOME/.local/bin`。自定义用户级安装目录：
 
 ```bash
 CTXHOP_INSTALL_DIR=/path/to/bin sh install.sh
 ```
 
-### Go Install
+如果安装目录不在 PATH 中，安装脚本会输出所需的 Shell 配置。重新打开终端后验证：
+
+```bash
+ctxhop version
+```
+
+### 使用 Go 安装（可选）
+
+需要 Go 1.26 或更高版本：
 
 ```bash
 go install github.com/CCCCY-ci/ctxhop/cmd/ctxhop@latest
 ```
+
+请确保 Go 的二进制目录已加入 PATH；需要固定版本时，将 `@latest` 换成发布标签。
+
+### 初始化 CtxHop
+
+在任意平台安装 CLI 后执行：
+
+```bash
+ctxhop init
+```
+
+该命令配置存储、加密、设备身份和 Agent Hook，并创建或加入同步域。
 
 ### 卸载
 
@@ -75,15 +133,15 @@ go install github.com/CCCCY-ci/ctxhop/cmd/ctxhop@latest
 ctxhop uninstall
 ```
 
-卸载会移除 CLI、本地 `~/.ctxhop` 配置目录、设备密钥、本地状态、日志以及
-CtxHop 注册的 Agent Hook。S3 远端对象和已配置的本地目录后端会保留，不会被删除。
-如果本地目录后端与 `.ctxhop` 目录重叠，卸载会停止并提示你先移动同步目录。
+卸载会移除本地 CLI、配置、设备密钥、状态、日志和 CtxHop 注册的 Agent Hook，远端对象及本地目录后端数据会保留。
+如果目录后端与本地配置目录重叠，请先移动同步目录。
 
 ## 快速开始：Cloudflare R2
 
-下面以 Cloudflare R2 为共享后端。完整流程只有四步：初始化设备 A、绑定并上传项目、授权设备 B、恢复 Session。
+下面以 Cloudflare R2 为共享后端，其他 S3 兼容对象存储的流程相同。
+开始前准备 R2 Bucket、Access Key、Secret Access Key，以及两台设备上的项目工作副本。
 
-开始前，请准备好 R2 Bucket、对应的 Access Key / Secret Access Key，以及两台设备上的项目工作副本。
+以下命令使用系统自动创建的 `default` Hub。
 
 R2 配置示例：
 
@@ -94,7 +152,7 @@ Region:   auto
 Prefix:   ctxhop/demo     # 可选
 ```
 
-同一同步域中的所有设备必须使用相同的 Bucket 和 Prefix。多个同步域共用一个 Bucket 时，建议使用不同 Prefix 隔离。
+同一同步域中的所有设备使用相同的 Bucket 和 Prefix。
 
 ### 1. 初始化设备 A
 
@@ -109,40 +167,11 @@ ctxhop init \
 ```
 
 按提示输入 R2 凭据和加密密码。普通 R2 API Token 不需要 Session Token，可直接留空。
-
-首次初始化会生成 **Recovery Key**，请离线保存。加密密码和 Recovery Key 同时丢失后，远端加密数据无法恢复。
-
-初始化过程中，CtxHop 会先检测 Claude Code 和 Codex，再询问 Agent 相关选项。如果检测到其中至少一个，可以输入 `1` 或 `2` 选择自动 SessionEnd Hook 的同步范围：
-
-- `1` — `session`：同步 Session 和过滤后的环境信息；
-- `2` — `session+workspace`：在上述内容之外，再同步项目工作区与 Git 状态。
-
-Hook 步骤完成后（或通过 `--no-hook` 跳过 Hook 安装后），CtxHop 才会询问是否同步检测到的 Agent 的过滤后配置，默认开启。如果同时安装了 Claude Code 和 Codex，这个选择同时适用于两个 Agent。只有白名单中的设置和不含敏感信息的 MCP 传输意图会进入同步范围。
-
-CtxHop 永远不会上传完整的 Agent 配置文件或鉴权文件，包括 Claude Code 的凭据与登录状态、Codex 的鉴权数据、Token、Header、环境变量以及 MCP 的 `env` 值。程序可以在本地读取 Claude 用户配置文件，从中提取当前 Session 实际引用的 MCP 命令、参数或 URL，但不会上传该文件本身。输入 `no` 后，Session 和其他允许同步的环境组件仍会上传，但后续上传会排除设置与 MCP 配置。
-
-Hook 只在会话结束时自动执行对应范围的 `push`。安装后，每次对话结束都会自动上传，不需要在每次对话后手动执行 `ctxhop push`。也可以之后手动安装：
-
-```bash
-ctxhop hook install --agent codex
-# 或
-ctxhop hook install --agent claude-code
-```
-
-不使用 Hook 时，在初始化阶段指定 `--no-hook`。
-
-如果要让已经初始化的设备切换到另一个同步域，再次执行 `ctxhop init` 即可。
-CtxHop 会先询问是否退出当前同步域：
-
-- 输入 `y`：退出当前同步域并继续新的初始化，同时删除本机配置、设备密钥和
-  CtxHop 注册的 Hook；远端 S3 对象和独立的目录后端同步目录会保留。
-- 输入 `n` 或直接回车：保留当前同步域并取消本次初始化。
-
-如果配置的目录后端与本地 CtxHop 配置目录重叠，请先移动同步目录；CtxHop 会在删除本地同步域状态前停止操作。
+首次初始化会生成 **Recovery Key**，请离线保存。
 
 ### 2. 绑定项目并上传
 
-在项目目录中执行：
+设备 A 完成一次 Session 后，在项目目录中执行：
 
 ```bash
 cd /path/to/project
@@ -150,24 +179,11 @@ ctxhop project bind --path .
 ctxhop push
 ```
 
-默认 `push` 只同步当前项目的 Session 和过滤后的环境信息。
-
-如果还需要交接未提交的工作区与 Git 状态：
+需要交接未提交的工作区与 Git 状态时：
 
 ```bash
 ctxhop push --workspace
 ```
-
-没有可用 Git 身份时，可以手动指定项目名；两台设备需使用同一个名称：
-
-```bash
-ctxhop project bind --name "my-project" --path .
-```
-
-手动项目名用于标识项目，与本地目录路径无关。
-
-`pull`、`list` 和 `resume` 只查询当前目录绑定的项目。`ctxhop project discover`
-是例外，它会列出同步域中已授权设备发布的全部项目，方便在绑定新项目之前发现它。
 
 ### 3. 授权设备 B
 
@@ -177,7 +193,7 @@ ctxhop project bind --name "my-project" --path .
 ctxhop device invite --output ctxhop-device-b.json
 ```
 
-通过可信渠道将邀请文件传到设备 B，然后执行：
+将邀请文件传到设备 B，然后执行：
 
 ```bash
 ctxhop init \
@@ -185,15 +201,9 @@ ctxhop init \
   --device-name "device-b"
 ```
 
-设备 B 仍需输入自己的 R2 凭据，以及与设备 A 相同的加密密码。邀请文件本身不包含存储凭据、加密密码或 Session 内容。
+设备 B 输入自己的 R2 凭据，以及与设备 A 相同的加密密码。
 
 ### 4. 恢复 Session
-
-如果需要先查看其他设备发布的项目：
-
-```bash
-ctxhop project discover
-```
 
 在设备 B 准备好对应项目后：
 
@@ -201,34 +211,7 @@ ctxhop project discover
 cd /path/to/project
 ctxhop project bind --path .
 ctxhop list
-```
-
-`list` 列出当前项目可恢复的 Session。源设备安装了 SessionEnd Hook 时，最近一次已结束的对话已经自动上传；在目标设备上直接执行 `list` 或 `resume` 即可读取最新的远端元数据，正常的切换流程不需要额外执行 `ctxhop pull`。如果只想检查远端元数据，再单独使用 `pull`。
-
-恢复指定 Session：
-
-```bash
 ctxhop resume <SESSION_ID>
-```
-
-先预览、不写入：
-
-```bash
-ctxhop resume --preview <SESSION_ID>
-```
-
-如果源设备通过 `push --workspace` 上传了工作区数据，可一并恢复：
-
-```bash
-ctxhop resume --workspace <SESSION_ID>
-```
-
-`resume --workspace` 会先检查目标工作区和 Git 状态；存在冲突时直接停止，不会强制覆盖。
-
-如果只需要 Session，不希望目标工作区差异阻止恢复：
-
-```bash
-ctxhop resume --allow-divergent <SESSION_ID>
 ```
 
 恢复完成后，使用 Agent 原生命令继续会话：
@@ -241,94 +224,166 @@ codex resume <SESSION_ID>
 claude --resume <SESSION_ID>
 ```
 
+### 可选：切换到另一个 Agent
+
+跨 Agent 切换会创建目标 Agent 的新 Session，源 Session 保持不变：
+
+```bash
+# 预览切换
+ctxhop session switch <SESSION_ID> --to codex --preview
+
+# 创建并启动目标 Session
+ctxhop session switch <SESSION_ID> --to codex --launch
+```
+
+切换到 Claude Code 时，将 `--to codex` 替换为 `--to claude-code`。
+
 ## 同步内容
 
-| 内容 | 默认 | 说明 |
-|---|---|---|
-| Agent Session | 同步 | 本地压缩并加密后上传。 |
-| 项目身份与 Git 摘要 | 同步 | 用于跨设备识别项目，不包含项目文件或完整 Git 对象。 |
-| Session 相关环境 | 过滤后同步；可在 `init` 中选择配置是否同步 | Claude Code 和 Codex 通过各自 Adapter 仅恢复白名单中的 Skill、MCP 传输意图和 Session 设置。全局设置仍写回用户级配置，项目级 MCP 保持项目范围。完整配置文件和鉴权数据永不同步。 |
-| 工作区与 Git 状态 | 按需 | 仅在 `push --workspace` / `resume --workspace` 时处理。 |
-| Token、凭据与 `.env` | 永不同步 | Claude Code/Codex 登录状态与鉴权文件、私钥、Header、MCP `env` 值和 Secrets 等不会进入同步数据。 |
+CtxHop 默认同步加密的 Session 上下文和项目识别信息。
+工作区文件与 Git 状态只有在使用 `--workspace` 时才会同步。
+Agent 配置会在同步前经过筛选。
 
-普通 `push`、Hook 和 `watch` 不上传项目文件正文。启用 `--workspace` 后，CtxHop 也不会自动删除本地文件、切换分支，或执行 merge、rebase、commit、push、reset 等 Git 操作。
+| 内容 | 范围 |
+|---|---|
+| Session 上下文 | 默认同步，以加密的 Agent Session 记录保存。 |
+| 项目识别信息与 Git 摘要 | 默认同步，用于在不同设备上匹配同一个项目。 |
+| Agent 环境 | 根据 `init` 配置同步经过筛选的 Skills、MCP 意图和允许的 Session 设置。 |
+| 工作区与 Git 状态 | 可选，仅由 `push --workspace` 和 `resume --workspace` 传输。 |
+| 凭据与敏感信息 | 永不同步，包括 token、私钥、登录文件、headers、环境变量密钥和 `.env` 文件。 |
 
-敏感文件、二进制文件、超出大小限制的文件以及存在冲突的路径会保留给用户手动处理。
+项目文件和完整 Git 仓库不属于默认同步范围。
 
 ## 常用命令
 
-执行 `ctxhop <command> --help` 查看完整参数。直接运行 `ctxhop` 会输出命令索引；使用 `ctxhop help <command>` 查看具体命令说明。下面列出所有一级命令和已支持的二级命令。脚本和 CI 可在支持的命令上使用 `--json`。
+执行 `ctxhop <command> --help` 查看参数，或使用 `ctxhop help <command> [action]`
+浏览命令索引。在终端直接运行 `ctxhop` 打开交互式工作台；重定向输入/输出时显示
+命令索引。输入关键词过滤，用方向键移动，按 Enter 执行。标有 `[--json]` 的命令
+支持机器可读输出。
+
+`<HUB>`、`<PROJECT_ID>`、`<SESSION_ID>`、`<REPLICA_ID>`、`<CONTRIBUTION_ID>`
+和 `<NATIVE_ID>` 表示需要由你提供的选择值。
 
 ### 初始化与帮助
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop init` | 配置存储后端、加密密码、设备和 Agent Hook。 |
-| `ctxhop install` | 将 CtxHop 安装为当前用户的命令。 |
-| `ctxhop uninstall` | 移除本地 CtxHop 文件，不删除远端或后端数据。 |
-| `ctxhop help [<command>]` | 查看命令索引，或查看指定命令的说明和参数。 |
+| `ctxhop` | 打开交互式工作台。 |
+| `ctxhop init [options]` | 配置存储、加密、设备身份和 Agent Hooks。 |
+| `ctxhop install [--dir DIR] [--no-path]` | 安装 CtxHop 命令。 |
+| `ctxhop update` | 检查并安装最新版本。 |
+| `ctxhop uninstall [--dir DIR]` | 移除本地 CtxHop 安装。 |
+| `ctxhop help [<command> [action]]` | 查看命令索引或命令参数。 |
 | `ctxhop version` | 查看已安装的版本。 |
 
 ### 项目与同步
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop project bind` | 将本地项目绑定到稳定的项目身份。 |
-| `ctxhop project unbind` | 移除本地项目绑定。 |
-| `ctxhop project mode <mode>` | 将项目设置为 `normal`、`push-only` 或 `excluded`。 |
-| `ctxhop project list` | 列出本地项目绑定。 |
-| `ctxhop project discover` | 查看其他设备已发布的项目。 |
-| `ctxhop push` | 上传当前项目的 Session 和过滤后的环境。 |
-| `ctxhop push --workspace` | 同时上传有限工作区和 Git 状态。 |
-| `ctxhop pull` | 检查远端元数据，不执行恢复。 |
-| `ctxhop list` | 列出当前项目可恢复的 Session。 |
-| `ctxhop resume` | 恢复 Session 和过滤后的环境；可按需使用 `--preview`、`--workspace` 或 `--allow-divergent`。 |
-| `ctxhop watch` | 监视本地 Session 变化并上传。 |
+| `ctxhop project bind [--path DIR] [--identity ID or --name NAME] [--hub HUB]` | 将项目绑定到稳定身份和 Hub。 |
+| `ctxhop project unbind [--path DIR or --identity ID]` | 移除项目绑定。 |
+| `ctxhop project mode <MODE> [--path DIR or --identity ID]` | 设置项目同步模式：`normal`、`push-only` 或 `excluded`。 |
+| `ctxhop project list [--hub HUB] [--json]` | 列出项目绑定。 |
+| `ctxhop project discover [--json]` | 发现已授权设备上的项目。 |
+| `ctxhop project move <PROJECT_ID> --to <HUB> [--json]` | 将项目移动到另一个 Hub。 |
+| `ctxhop push [--workspace] [--git-stash STASH] [SESSION_ID]` | 推送项目 Session 和所选环境；`--workspace` 包含工作区与 Git 状态。 |
+| `ctxhop pull [--json]` | 读取远端元数据。 |
+| `ctxhop list [--json]` | 列出当前项目的 Session。 |
+| `ctxhop resume [SESSION_ID] [options]` | 恢复 Session 和所选环境。 |
+| `ctxhop watch [--interval DURATION] [--once] [--json]` | 监视本地 Agent Session 并推送更新。 |
+
+`ctxhop list` 或 `ctxhop resume` 未提供选择值时打开 Session 选择器；使用
+`ctxhop session list` 查看逻辑 Session、Agent 来源和 Replica。
+
+### Hub 与逻辑 Session
+
+Session Hub 将 Agent 原生 Session 组织为逻辑 Session，并保留来源关系。同 Agent
+续接使用 `session resume`；跨 Agent 续接使用 `switch`。
+
+| 命令 | 说明 |
+|---|---|
+| `ctxhop hub create [--json] <HUB>` | 创建并发布 Hub。 |
+| `ctxhop hub list [--json]` | 列出 Hub 和当前 Hub。 |
+| `ctxhop hub use [--json] <HUB>` | 选择当前 Hub。 |
+| `ctxhop session discover [--json]` | 发现本机 Agent Session 及其 Hub 关联。 |
+| `ctxhop session list [--json]` | 列出逻辑 Session、Agent 来源和 Replica。 |
+| `ctxhop session show <SESSION_ID> [--json]` | 查看逻辑 Session 及其来源元数据。 |
+| `ctxhop session resume <SESSION_ID> [options]` | 在当前设备恢复原生 Replica。 |
+| `ctxhop session switch <SESSION_ID> [options]` | 预览或根据所选上下文创建目标原生 Session。 |
+| `ctxhop session attach <SESSION_ID> [options] [--json]` | 将已有原生 Session 接入逻辑 Session。 |
+| `ctxhop session reconcile [options] [--json]` | 对比本机原生 Session 与 Hub 绑定状态。 |
+| `ctxhop session migrate [--json] [--preview] [--publish-v2] [--rollback] [SESSION_ID]` | 将旧格式 Session 元数据迁移到逻辑 Session 视图。 |
+
+Switch 参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--to AGENT` | 选择目标 Agent。 |
+| `--context causal-head`、`all-heads` 或 `agent-only` | 选择上下文策略。 |
+| `--head CONTRIBUTION_ID` | 选择 causal head，可重复指定多个。 |
+| `--source AGENT` | 为 `agent-only` 选择来源 Agent。 |
+| `--preview` | 预览转换计划，不修改本地状态；省略后直接执行切换。 |
+| `--with-environment` | 在切换时包含可移植的环境组件。 |
+| `--launch` | 切换完成后启动目标 Agent。 |
+| `--allow-unsupported` | 在预览报告中包含不支持的记录。 |
+
+迁移命令：
+
+```bash
+ctxhop session migrate --preview
+ctxhop session migrate <SESSION_ID> --publish-v2
+ctxhop session migrate <SESSION_ID> --rollback
+```
+
+省略 `--preview` 时立即执行迁移；`--publish-v2` 将所选旧分支发布为 Replica，`--rollback`
+选择旧格式读取器。
 
 ### 设备与安全
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop device invite` | 创建新设备邀请。 |
-| `ctxhop device status` | 查看本地设备身份和模式。 |
-| `ctxhop device mode <mode>` | 将设备设置为 `normal`、`push-only` 或 `disabled`。 |
-| `ctxhop device list` | 查看已授权设备。 |
-| `ctxhop device rename <name>` | 修改本地设备显示名称。 |
-| `ctxhop device remove <device-id>` | 撤销设备后续访问权限。 |
+| `ctxhop device invite [--output PATH]` | 创建设备邀请。 |
+| `ctxhop device status [--json]` | 查看本地设备身份和模式。 |
+| `ctxhop device mode <MODE>` | 设置设备模式。 |
+| `ctxhop device list [--json]` | 列出已授权设备。 |
+| `ctxhop device rename <NAME>` | 修改本地设备名称。 |
+| `ctxhop device remove <DEVICE_ID>` | 撤销设备。 |
 | `ctxhop device rotate-key` | 轮换加密密钥。 |
 | `ctxhop passphrase change` | 修改加密密码。 |
 | `ctxhop passphrase reset` | 使用 Recovery Key 重置加密密码。 |
+| `ctxhop hook install [--agent all, claude-code, or codex]` | 为指定 Agent 安装 SessionEnd Hook。 |
 
 ### 历史与远端数据
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop history <SESSION_ID>` | 查看 Session 可恢复的历史版本。 |
-| `ctxhop history cleanup <SESSION_ID>` | 删除某个 Session 的全部远端版本。 |
-| `ctxhop history prune <SESSION_ID>` | 按保留数量或日期清理 Session 版本。 |
-| `ctxhop remote delete-session <SESSION_ID>` | 确认后删除一个远端 Session。 |
-| `ctxhop remote delete-project` | 确认后删除当前项目的全部远端数据。 |
-| `ctxhop remote delete-all` | 确认后删除当前同步域中的全部远端数据。 |
+| `ctxhop history [--json] <SESSION_ID>` | 列出 Session 版本。 |
+| `ctxhop history cleanup [--remote-id] [--path DIR] <SESSION_ID>` | 删除 Session 的全部远端版本。 |
+| `ctxhop history prune [--remote-id] [--path DIR] (--keep N or --before RFC3339) <SESSION_ID>` | 保留最新版本，或删除指定时间前的版本。 |
+| `ctxhop remote delete-session [--remote-id] [--path DIR] <SESSION_ID>` | 删除远端 Session。 |
+| `ctxhop remote delete-project [--path DIR]` | 删除当前项目的远端数据。 |
+| `ctxhop remote delete-all` | 删除当前同步域的远端数据。 |
+
+使用 `--remote-id` 指定远端 ID。
 
 ### 状态与维护
 
 | 命令 | 说明 |
 |---|---|
-| `ctxhop status` | 查看本地状态；`--remote` 同时检查远端。 |
-| `ctxhop doctor` | 检查配置、存储后端、Agent 和项目状态。 |
-| `ctxhop stats` | 查看跨设备恢复统计。 |
-| `ctxhop hook install` | 安装 Claude Code / Codex SessionEnd Hook。 |
+| `ctxhop status [--remote] [--json]` | 查看同步状态；`--remote` 包含远端状态。 |
+| `ctxhop doctor [--json]` | 检查配置、后端、Agent、项目和 Hook 状态。 |
+| `ctxhop stats [--json]` | 查看跨设备恢复统计。 |
 
 ## 配置
 
-CtxHop 默认使用 `~/.ctxhop` 保存本地配置、设备密钥和同步状态：
+CtxHop 使用以下目录保存本地配置、设备密钥和同步状态：
 
 | 系统 | 默认目录 |
 |---|---|
 | Windows | `%USERPROFILE%\.ctxhop` |
 | macOS / Linux | `~/.ctxhop` |
 
-可通过 `CTXHOP_CONFIG_DIR` 修改配置目录：
+可通过 `CTXHOP_CONFIG_DIR` 指定其他配置目录：
 
 ```bash
 export CTXHOP_CONFIG_DIR="$HOME/.ctxhop-custom"
@@ -340,11 +395,13 @@ PowerShell：
 $env:CTXHOP_CONFIG_DIR = Join-Path $env:USERPROFILE '.ctxhop-custom'
 ```
 
-该目录包含本地加密信息和设备密钥，请勿提交到仓库或公开分享。
+该目录包含本地配置和设备密钥，请勿提交到仓库或公开分享。
 
 ## 开发
 
-从源码构建：
+需要 Go 1.26 或更高版本。
+
+克隆并构建：
 
 ```bash
 git clone https://github.com/CCCCY-ci/ctxhop.git
@@ -360,17 +417,33 @@ go build -trimpath -o ctxhop.exe ./cmd/ctxhop
 .\ctxhop.exe install
 ```
 
-检查：
+基础检查：
 
 ```bash
 go test ./...
-go test -race ./...
 go vet ./...
-go build -trimpath -o ctxhop ./cmd/ctxhop
+```
+
+提交前检查：
+
+```bash
+go test -race ./...
+```
+
+构建全部支持的平台：
+
+```bash
+bash scripts/build.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\build.ps1
 ```
 
 请勿将真实 Session 文件、Token 或后端凭据提交到仓库。
 
 ## 许可证
 
-CtxHop 使用 [Apache License 2.0](LICENSE)。重新分发时请保留 [NOTICE](NOTICE) 文件。
+CtxHop 使用 [MIT License](LICENSE)。

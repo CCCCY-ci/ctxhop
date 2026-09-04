@@ -18,6 +18,7 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/config"
 	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
@@ -30,8 +31,15 @@ func TestParseResumeOptionsUsesPreviewAndWorkspaceScopes(t *testing.T) {
 	if !options.preview || !options.workspace || options.session != "native-session" {
 		t.Fatalf("options = %+v", options)
 	}
-	if _, err := parseResumeOptions([]string{"--apply", "native-session"}); err == nil {
-		t.Fatal("resume accepted the removed --apply flag")
+	options, err = parseResumeOptions([]string{"logical-session", "--agent", " claude-code ", "--replica=replica-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.session != "logical-session" || options.agent != "claude-code" || options.replica != "replica-1" {
+		t.Fatalf("interspersed options = %+v", options)
+	}
+	if _, err := parseResumeOptions([]string{"--agent="}); err == nil {
+		t.Fatal("resume accepted an empty --agent value")
 	}
 }
 
@@ -116,6 +124,7 @@ func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 
 	layoutA := adapter.Layout{Home: homeA}
 	ref := adapter.SessionRef{
+		Agent:     "claude-code",
 		NativeID:  "native-one",
 		Title:     "resume me",
 		CreatedAt: time.Date(2026, 8, 15, 1, 0, 0, 0, time.UTC),
@@ -152,9 +161,45 @@ func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 	if summary.Pushed != 1 || summary.Failed != 0 {
 		t.Fatalf("push summary = %+v", summary)
 	}
+	legacySessionID, err := crypto.SessionID(identifierKey, projectID, ref.NativeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeData, err := layoutA.ReadSession(adapter.SessionRef{NativeID: ref.NativeID, ProjectPath: projectRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishNativeReplica(context.Background(), configDir, deviceID, identifierKey, "github.com/example/project", layoutA, installation, store, publicKey, configDir, ref, legacySessionID, nativeData, space, nil); err != nil {
+		t.Fatalf("publish v2 NativeReplica: %v", err)
+	}
 
 	t.Setenv("CTXHOP_CONFIG_DIR", configDir)
 	t.Setenv("CLAUDE_CONFIG_DIR", homeB)
+	hubID, err := sessionhub.DeriveHubKey(identifierKey, sessionhub.DefaultHubLogicalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2ProjectID, err := sessionhub.DeriveProjectKey(identifierKey, hubID, "github.com/example/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logicalSessionID, err := sessionhub.DeriveNativeLogicalSessionKey(identifierKey, v2ProjectID, "claude-code", ref.NativeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v2PreviewOutput bytes.Buffer
+	v2Preview, err := collectResume(context.Background(), c, configDir, projectRoot, resumeOptions{
+		allowLimited: true,
+		session:      logicalSessionID,
+		agent:        "claude-code",
+		preview:      true,
+	}, strings.NewReader("passphrase\n"), &v2PreviewOutput)
+	if err != nil {
+		t.Fatalf("Session Hub preview resume: %v\noutput: %s", err, v2PreviewOutput.String())
+	}
+	if !v2Preview.Preview || v2Preview.LogicalSession != logicalSessionID || v2Preview.Agent != "claude-code" || v2Preview.ReplicaID == "" || v2Preview.Workspace != "consistent" {
+		t.Fatalf("Session Hub preview report = %+v", v2Preview)
+	}
 	candidateOptions := resumeOptions{allowLimited: true, session: ref.NativeID}
 	previewOptions := candidateOptions
 	previewOptions.preview = true
@@ -168,6 +213,37 @@ func TestCollectResumeRestoresFingerprintCheckedSession(t *testing.T) {
 	}
 	if _, err := os.Stat((adapter.Layout{Home: homeB}).SessionFile(projectRoot, ref.NativeID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preview created a native session, stat err = %v", err)
+	}
+
+	v2Report, err := collectResume(context.Background(), c, configDir, projectRoot, resumeOptions{
+		allowLimited: true,
+		session:      logicalSessionID,
+		agent:        "claude-code",
+	}, strings.NewReader("passphrase\n"), io.Discard)
+	if err != nil {
+		t.Fatalf("Session Hub resume: %v", err)
+	}
+	if v2Report.LogicalSession != logicalSessionID || v2Report.Agent != "claude-code" || v2Report.ReplicaID == "" || v2Report.Workspace != "consistent" || v2Report.LocalState != "missing" || v2Report.RemoteRecords == 0 {
+		t.Fatalf("Session Hub resume report = %+v", v2Report)
+	}
+	binding, err := sessionhub.LoadLocalBinding(configDir, hubID, v2ProjectID, logicalSessionID, v2Report.ReplicaID, "claude-code")
+	if err != nil {
+		t.Fatalf("load LocalBinding: %v", err)
+	}
+	if binding.NativeSessionID != ref.NativeID || binding.Origin.Kind != sessionhub.ReplicaOriginSameAgentRestore || binding.ReplicaCursor.RecordCount == 0 || binding.ReplicaCursor.HeadDigest == "" {
+		t.Fatalf("LocalBinding = %+v", binding)
+	}
+	v2ExactPreview, err := collectResume(context.Background(), c, configDir, projectRoot, resumeOptions{
+		allowLimited: true,
+		session:      logicalSessionID,
+		agent:        "claude-code",
+		preview:      true,
+	}, strings.NewReader("passphrase\n"), io.Discard)
+	if err != nil {
+		t.Fatalf("Session Hub exact preview: %v", err)
+	}
+	if v2ExactPreview.LocalState != "exact" || v2ExactPreview.LocalRecords != v2ExactPreview.RemoteRecords || v2ExactPreview.AppendRecords != 0 {
+		t.Fatalf("Session Hub exact state = %+v", v2ExactPreview)
 	}
 
 	var output bytes.Buffer

@@ -350,4 +350,18 @@ func TestFetchCompleteBranchesAcceptsMatchingMetadataAndShards(t *testing.T) {
 	if len(branches) != 1 || len(branches[0].Records) != len(records) {
 		t.Fatalf("branches = %+v", branches)
 	}
+
+	replicas, err := FetchCompleteLegacyReplicas(context.Background(), store, "project", "session", private)
+	if err != nil {
+		t.Fatalf("FetchCompleteLegacyReplicas: %v", err)
+	}
+	if len(replicas) != 1 || replicas[0].LegacySessionID != "session" || replicas[0].DeviceID != "device" {
+		t.Fatalf("legacy replicas = %+v", replicas)
+	}
+	if replicas[0].Metadata.RecordCount != metadata.RecordCount || replicas[0].Metadata.HeadDigest != metadata.HeadDigest || !bytes.Equal(replicas[0].Metadata.Payload, metadata.Payload) {
+		t.Fatalf("legacy metadata = %+v, want %+v", replicas[0].Metadata, metadata)
+	}
+	if len(replicas[0].Branch.Records) != len(records) || replicas[0].Branch.HeadDigest != digest {
+		t.Fatalf("legacy branch = %+v", replicas[0].Branch)
+	}
 }

@@ -40,6 +40,9 @@ func init() {
 }
 
 func runPassphrase(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractivePassphraseMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runPassphraseWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 

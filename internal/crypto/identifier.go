@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -51,6 +52,22 @@ func DeviceID(idKey []byte, localIdentity string) (string, error) {
 		return "", fmt.Errorf("crypto: device identity is required")
 	}
 	return derive(idKey, domainDevice, localIdentity)
+}
+
+// DeriveIdentifier computes one keyed, domain-separated opaque identifier for
+// a higher-level namespace. The caller owns the domain label; it must be
+// stable, non-empty text and must not contain the NUL separator. This keeps the
+// existing identifier derivation in one place while allowing v2 namespaces to
+// add their own versioned domains without duplicating the cryptographic code.
+func DeriveIdentifier(idKey []byte, domain string, parts ...string) (string, error) {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return "", errors.New("crypto: identifier domain is required")
+	}
+	if strings.ContainsRune(domain, 0) {
+		return "", errors.New("crypto: identifier domain contains a NUL byte")
+	}
+	return derive(idKey, domain, parts...)
 }
 
 // derive computes a keyed, domain-separated identifier.

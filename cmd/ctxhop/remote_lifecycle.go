@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -32,7 +31,6 @@ type remoteOptions struct {
 	target   string
 	path     string
 	remoteID bool
-	yes      bool
 }
 
 func init() {
@@ -44,6 +42,9 @@ func init() {
 }
 
 func runRemote(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveRemoteMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runRemoteWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
@@ -58,14 +59,6 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 	options, err := parseRemoteOptions(args)
 	if err != nil {
 		return err
-	}
-	if !options.yes {
-		if input == nil {
-			return fmt.Errorf("remote %s: input is required", options.action)
-		}
-		if prompt == nil {
-			return fmt.Errorf("remote %s: prompt output is required", options.action)
-		}
 	}
 
 	configDir, err := config.Dir()
@@ -85,15 +78,6 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 		if err != nil {
 			return err
 		}
-		if !options.yes {
-			confirmed, err := confirmRemoteDeletion(input, prompt, options.action, sessionID)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				return fmt.Errorf("remote %s: cancelled", options.action)
-			}
-		}
 		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
@@ -110,15 +94,6 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 		if err != nil {
 			return err
 		}
-		if !options.yes {
-			confirmed, err := confirmRemoteDeletion(input, prompt, options.action, projectID)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				return fmt.Errorf("remote %s: cancelled", options.action)
-			}
-		}
 		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
@@ -131,15 +106,6 @@ func runRemoteWithStreams(args []string, input io.Reader, output, prompt io.Writ
 		}
 		return writeRemoteDeletionResult(output, options.action, removed)
 	case remoteActionDeleteAll:
-		if !options.yes {
-			confirmed, err := confirmRemoteDeletion(input, prompt, options.action, "")
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				return fmt.Errorf("remote %s: cancelled", options.action)
-			}
-		}
 		access, err := openAuthorizedDomain(ctx, c, configDir, "remote "+options.action)
 		if err != nil {
 			return err
@@ -165,7 +131,6 @@ func parseRemoteOptions(args []string) (remoteOptions, error) {
 	case remoteActionDeleteSession:
 		flags := flag.NewFlagSet("remote delete-session", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
-		yes := flags.Bool("yes", false, "skip the confirmation prompt")
 		remoteID := flags.Bool("remote-id", false, "treat the session argument as its opaque remote ID")
 		path := flags.String("path", ".", "project directory used to derive the project ID")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -179,12 +144,10 @@ func parseRemoteOptions(args []string) (remoteOptions, error) {
 			target:   strings.TrimSpace(flags.Arg(0)),
 			path:     *path,
 			remoteID: *remoteID,
-			yes:      *yes,
 		}, nil
 	case remoteActionDeleteProject:
 		flags := flag.NewFlagSet("remote delete-project", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
-		yes := flags.Bool("yes", false, "skip the confirmation prompt")
 		path := flags.String("path", ".", "project directory used to derive the project ID")
 		if err := flags.Parse(args[1:]); err != nil {
 			return remoteOptions{}, fmt.Errorf("remote delete-project: %w", err)
@@ -192,18 +155,17 @@ func parseRemoteOptions(args []string) (remoteOptions, error) {
 		if flags.NArg() != 0 {
 			return remoteOptions{}, fmt.Errorf("remote delete-project: unexpected argument %q", flags.Arg(0))
 		}
-		return remoteOptions{action: action, path: *path, yes: *yes}, nil
+		return remoteOptions{action: action, path: *path}, nil
 	case remoteActionDeleteAll:
 		flags := flag.NewFlagSet("remote delete-all", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
-		yes := flags.Bool("yes", false, "skip the confirmation prompt")
 		if err := flags.Parse(args[1:]); err != nil {
 			return remoteOptions{}, fmt.Errorf("remote delete-all: %w", err)
 		}
 		if flags.NArg() != 0 {
 			return remoteOptions{}, fmt.Errorf("remote delete-all: unexpected argument %q", flags.Arg(0))
 		}
-		return remoteOptions{action: action, yes: *yes}, nil
+		return remoteOptions{action: action}, nil
 	default:
 		return remoteOptions{}, fmt.Errorf("remote: unknown action %q; expected delete-session, delete-project, or delete-all", args[0])
 	}
@@ -268,39 +230,6 @@ func zeroRemoteIdentifierKey(key []byte) {
 	for i := range key {
 		key[i] = 0
 	}
-}
-
-func confirmRemoteDeletion(input io.Reader, prompt io.Writer, action, target string) (bool, error) {
-	if input == nil {
-		return false, fmt.Errorf("remote %s: input is required", action)
-	}
-	if prompt == nil {
-		return false, fmt.Errorf("remote %s: prompt output is required", action)
-	}
-
-	switch action {
-	case remoteActionDeleteSession:
-		if _, err := fmt.Fprintf(prompt, "Delete remote session %q for this project? This removes all device branches and metadata. [y/N]: ", target); err != nil {
-			return false, err
-		}
-	case remoteActionDeleteProject:
-		if _, err := fmt.Fprintf(prompt, "Delete all remote sessions for project %q? Device records and the keyfile remain. [y/N]: ", target); err != nil {
-			return false, err
-		}
-	case remoteActionDeleteAll:
-		if _, err := fmt.Fprint(prompt, "Delete every object in the configured Remote, including the keyfile and device records? [y/N]: "); err != nil {
-			return false, err
-		}
-	default:
-		return false, fmt.Errorf("remote: unsupported confirmation action %q", action)
-	}
-
-	line, err := bufio.NewReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("remote %s: read confirmation: %w", action, err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
 }
 
 func remoteDeletionError(action string, removed int, err error) error {

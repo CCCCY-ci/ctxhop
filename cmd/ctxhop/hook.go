@@ -30,6 +30,9 @@ func init() {
 }
 
 func runHook(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveHookMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runHookWithIO(args, os.Stdin, os.Stdout, "")
 }
 

@@ -99,6 +99,13 @@ func openAuthorizedDomain(ctx context.Context, c *config.Config, configDir, comm
 // openDomainForRead prefers the local grant. Legacy/v2 bootstrap configs
 // without a device private key fall back to an explicitly typed passphrase.
 func openDomainForRead(ctx context.Context, c *config.Config, configDir string, input io.Reader, prompt io.Writer, command string) (*domainAccess, error) {
+	return openDomainForReadWithSecretReader(ctx, c, configDir, newCommandSecretReader(input), prompt, command)
+}
+
+// openDomainForReadWithSecretReader keeps the buffered input alive across the
+// complete authenticated read operation. This avoids losing buffered input
+// when a caller performs more than one secret read.
+func openDomainForReadWithSecretReader(ctx context.Context, c *config.Config, configDir string, secretReader *commandSecretReader, prompt io.Writer, command string) (*domainAccess, error) {
 	store, keyfile, err := openDeviceRemote(ctx, c, configDir, command)
 	if err != nil {
 		return nil, err
@@ -121,13 +128,13 @@ func openDomainForRead(ctx context.Context, c *config.Config, configDir string, 
 			return newDomainAccess(store, keyfile, ring, true, command)
 		}
 	}
-	if input == nil {
+	if secretReader == nil || secretReader.raw == nil {
 		return nil, fmt.Errorf("%s: input is required", command)
 	}
 	if prompt == nil {
 		return nil, fmt.Errorf("%s: prompt output is required", command)
 	}
-	passphrase, err := readCommandPassphrase(input, prompt, command)
+	passphrase, err := secretReader.read(command, prompt, "Encryption password: ")
 	if err != nil {
 		return nil, err
 	}

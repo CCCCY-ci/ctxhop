@@ -61,9 +61,16 @@ func init() {
 }
 
 func runDoctor(args []string) error {
+	return runDoctorWithIO(args, os.Stdout)
+}
+
+func runDoctorWithIO(args []string, output io.Writer) error {
 	jsonOutput, err := parseDoctorOptions(args)
 	if err != nil {
 		return err
+	}
+	if output == nil {
+		return errors.New("doctor: output is required")
 	}
 
 	configDir, err := config.Dir()
@@ -80,9 +87,9 @@ func runDoctor(args []string) error {
 		return err
 	}
 	if jsonOutput {
-		return writeDoctorJSON(os.Stdout, report)
+		return writeDoctorJSON(output, report)
 	}
-	return writeDoctorText(os.Stdout, report)
+	return writeDoctorText(output, report)
 }
 
 func parseDoctorOptions(args []string) (bool, error) {

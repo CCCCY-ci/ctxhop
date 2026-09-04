@@ -226,6 +226,9 @@ func runInitWithIO(args []string, input io.Reader, output io.Writer, executable 
 	if err := c.Save(configDir); err != nil {
 		return fmt.Errorf("init: save local configuration: %w", err)
 	}
+	if err := ensureDefaultSessionRegistry(configDir, identifierKey); err != nil {
+		return fmt.Errorf("init: initialize default Session Hub: %w", err)
+	}
 
 	if !options.noHook {
 		if err := maybeInstallInitHook(c, configDir, prompter, executable); err != nil {

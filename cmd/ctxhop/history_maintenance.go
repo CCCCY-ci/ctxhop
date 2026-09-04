@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -25,7 +24,6 @@ type historyPruneOptions struct {
 	session  string
 	path     string
 	remoteID bool
-	yes      bool
 	keep     int
 	before   *time.Time
 }
@@ -65,7 +63,6 @@ func runHistoryMaintenanceWithStreams(args []string, input io.Reader, output, pr
 func parseHistoryPruneOptions(args []string) (historyPruneOptions, error) {
 	flags := flag.NewFlagSet("history prune", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	yes := flags.Bool("yes", false, "skip the confirmation prompt")
 	remoteID := flags.Bool("remote-id", false, "treat the session argument as its opaque remote ID")
 	path := flags.String("path", ".", "project directory used to derive the project ID")
 	keep := flags.Int("keep", -1, "retain this many newest maximal versions")
@@ -102,7 +99,6 @@ func parseHistoryPruneOptions(args []string) (historyPruneOptions, error) {
 		session:  session,
 		path:     *path,
 		remoteID: *remoteID,
-		yes:      *yes,
 		keep:     *keep,
 		before:   before,
 	}, nil
@@ -113,14 +109,8 @@ func runHistoryPruneWithStreams(args []string, input io.Reader, output, prompt i
 	if err != nil {
 		return err
 	}
-	if input == nil {
-		return errors.New("history prune: input is required")
-	}
 	if output == nil {
 		return errors.New("history prune: output is required")
-	}
-	if prompt == nil {
-		return errors.New("history prune: prompt output is required")
 	}
 
 	configDir, err := config.Dir()
@@ -162,16 +152,6 @@ func runHistoryPruneWithStreams(args []string, input io.Reader, output, prompt i
 	if len(targets) == 0 {
 		_, err := fmt.Fprintf(output, "history prune: session=%s nothing to remove retained-versions=%d\n", sessionID, retained)
 		return err
-	}
-
-	if !options.yes {
-		confirmed, err := confirmHistoryPrune(input, prompt, sessionID, len(targets), retained, options)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			return errors.New("history prune: cancelled")
-		}
 	}
 
 	removedObjects := 0
@@ -253,28 +233,6 @@ func selectHistoryPruneDevices(metadata []syncer.MetadataRef, resolution syncer.
 	}
 	sort.Strings(targets)
 	return targets, retainedVersions
-}
-
-func confirmHistoryPrune(input io.Reader, prompt io.Writer, sessionID string, branches, retained int, options historyPruneOptions) (bool, error) {
-	if input == nil {
-		return false, errors.New("history prune: input is required")
-	}
-	if prompt == nil {
-		return false, errors.New("history prune: prompt output is required")
-	}
-	policy := fmt.Sprintf("keep=%d", options.keep)
-	if options.before != nil {
-		policy = "before=" + options.before.Format(time.RFC3339)
-	}
-	if _, err := fmt.Fprintf(prompt, "Prune remote history for session %q: remove %d device branches and retain %d maximal versions (%s)? [y/N]: ", sessionID, branches, retained, policy); err != nil {
-		return false, err
-	}
-	line, err := bufio.NewReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("history prune: read confirmation: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
 }
 
 func safeHistoryPruneReadError(ctx context.Context, err error) error {

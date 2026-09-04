@@ -6,42 +6,62 @@
 
 <p align="center">
   <a href="https://github.com/CCCCY-ci/ctxhop/releases/latest"><img src="https://img.shields.io/github/v/release/CCCCY-ci/ctxhop?sort=semver" alt="Latest release"></a>
-  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache-2.0 License"></a>
+  <a href="https://github.com/CCCCY-ci/ctxhop/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
 <p align="center">
-  <img src="assets/home.png" alt="CtxHop welcome screen" width="900">
+  <img src="assets/home.png" alt="CtxHop installation complete" width="900">
 </p>
 
 English | [简体中文](README.zh-CN.md)
 
 **Switch devices. Keep your context.**
 
-CtxHop is a cross-device session and workspace synchronization tool for Claude
-Code, Codex, and other AI coding agents. Start development on one device,
-restore the original Session on another, and continue working without keeping
-the source device online.
+CtxHop is a local-first CLI for carrying Claude Code and Codex Sessions between
+devices. Bind a project, sync its Session records through storage you control,
+and resume on any authorized device.
 
-CtxHop synchronizes Agent Sessions by project and can optionally include a
-limited set of workspace files and Git state. Data is encrypted locally before
-it leaves the device. You control the storage backend, which can be a local
-directory or an S3-compatible object store such as Cloudflare R2.
+Session Hub groups Agent-native Sessions into logical Sessions, preserves their
+source history, and lets you switch Agents by creating a target-native Session
+from selected context. Workspace and Git handoff are explicit, while local
+encryption and device authorization protect the sync boundary.
 
 ## Key Features
 
-- **Continue Agent Sessions across devices**: Synchronize project-scoped Claude
-  Code and Codex Sessions so an authorized device can restore and continue the
-  existing development context.
-- **Optional workspace handoff**: Use --workspace to include a limited set of
-  project files and Git state, including work that has not been committed.
-- **Project-scoped synchronization boundaries**: Only explicitly bound
-  projects and authorized devices participate in synchronization. Unrelated
-  projects are not scanned or transferred.
-- **Self-hosted storage**: Use a local directory or an S3-compatible object
-  store, including Cloudflare R2.
-- **Safe restore**: Use resume --preview to inspect the restore before any
-  files are written. A failed conflict check leaves the target workspace
-  unchanged.
+- **Cross-device Session resume**: Continue a project Session on another
+  authorized device.
+- **Session Hub**: Bring Claude Code and Codex Sessions into one logical
+  Session while preserving their native sources and history.
+- **Agent switching**: Use `ctxhop session switch` to carry selected context
+  into a new native Session for another Agent.
+- **Workspace handoff**: Move selected workspace files and Git state with the
+  Session when needed.
+- **Local-first storage**: Encrypt data on the device and store it in a backend
+  you control.
+
+## How It Fits Together
+
+CtxHop uses a simple hierarchy:
+
+~~~text
+Domain
+└── Hub
+    └── Project
+        └── Session
+            ├── Claude Code native Session / Replica
+            └── Codex native Session / Replica
+~~~
+
+- **Domain** is the encrypted sync boundary: its Remote namespace, keyfile,
+  and authorized devices define one shared data space.
+- **Hub** is a logical project space inside a Domain. It groups and isolates
+  projects; a new Domain starts with a `default` Hub.
+- **Project** is the project-level boundary for workspace, Git state, and Sessions.
+- **Session** is the logical development context shared across Agents.
+
+In normal use, Domain and the `default` Hub stay in the background. You work
+with the current Project and its Sessions. Use another Hub only when you want
+to keep groups of projects separate within the same authorized Domain.
 
 ## Demo
 
@@ -49,59 +69,79 @@ directory or an S3-compatible object store such as Cloudflare R2.
 
 ## Installation
 
+Download the package for your operating system and CPU architecture from
+[Releases](https://github.com/CCCCY-ci/ctxhop/releases).
+
 ### Windows
 
-Download the installer for your CPU architecture from
-[Releases](https://github.com/CCCCY-ci/ctxhop/releases):
+Download and run the installer for your CPU architecture:
 
 - CtxHop-Setup_<version>_windows_amd64.exe
 - CtxHop-Setup_<version>_windows_arm64.exe
 
-Run the installer. When installation completes, CtxHop opens a Command Prompt
-that displays its ASCII logo and the next step. You can continue directly with:
+The installer places CtxHop in `%USERPROFILE%\.ctxhop\bin` and adds that
+directory to the current user's PATH. Administrator privileges are not required.
+Open a new terminal and verify the installation:
 
 ~~~powershell
-ctxhop init
+ctxhop version
 ~~~
 
-The installer places CtxHop in %USERPROFILE%\.ctxhop\bin and adds that
-directory to the current user's PATH. Administrator privileges are not
-required. Windows releases provide an installer rather than a portable
-standalone ctxhop.exe.
+For portable use, download `ctxhop_<version>_windows_<arch>.zip`, extract
+`ctxhop.exe`, and add its directory to PATH.
 
 ### macOS / Linux
 
-Download the ZIP archive for the target platform and install it from a
-terminal:
+Choose the archive for your platform and CPU architecture:
+
+- macOS Intel: `ctxhop_<version>_darwin_amd64.zip`
+- macOS Apple Silicon: `ctxhop_<version>_darwin_arm64.zip`
+- Linux x86_64: `ctxhop_<version>_linux_amd64.zip`
+- Linux ARM64: `ctxhop_<version>_linux_arm64.zip`
+
+In a terminal, extract and install the archive:
 
 ~~~bash
 unzip ctxhop_<version>_<os>_<arch>.zip
 sh install.sh
 ~~~
 
-The installer uses $XDG_BIN_HOME when set, otherwise $HOME/.local/bin.
-Set CTXHOP_INSTALL_DIR to select another user-level installation directory:
+The default installation directory is `$XDG_BIN_HOME` when set, otherwise
+`$HOME/.local/bin`. Set `CTXHOP_INSTALL_DIR` to use another user-level
+directory:
 
 ~~~bash
 CTXHOP_INSTALL_DIR=/path/to/bin sh install.sh
 ~~~
 
-If the installation directory is not on PATH, the script prints the required
-shell configuration. Run the script from a terminal rather than double-clicking
-the binary, then open a new shell and verify the installation:
+If the directory is not on PATH, the installer prints the required shell
+configuration. Open a new terminal and verify the installation:
 
 ~~~bash
 ctxhop version
 ~~~
 
-### Go Install
+### Install with Go (optional)
+
+Requires Go 1.26 or later:
 
 ~~~bash
 go install github.com/CCCCY-ci/ctxhop/cmd/ctxhop@latest
 ~~~
 
-Use a release tag instead of latest when a reproducible installation is
-required.
+Ensure Go's binary directory is on PATH. Replace `@latest` with a release tag
+when a pinned version is required.
+
+### Initialize CtxHop
+
+After installing the CLI on any platform:
+
+~~~bash
+ctxhop init
+~~~
+
+This configures storage, encryption, device identity, and Agent Hooks, then
+creates or joins a sync domain.
 
 ### Uninstall
 
@@ -109,21 +149,18 @@ required.
 ctxhop uninstall
 ~~~
 
-Uninstalling removes the CLI, the local `~/.ctxhop` configuration directory,
-device keys, local state, logs, and CtxHop-installed agent hooks. Remote S3
-objects and a configured local directory backend are left untouched.
-If a directory backend overlaps the local CtxHop directory, uninstall stops
-and asks you to move the backend first.
+Uninstalling removes the local CLI, configuration, device keys, state, logs,
+and CtxHop-installed Agent Hooks. Remote objects and local directory-backend
+data are kept. If the directory backend overlaps the local configuration
+directory, move the backend first.
 
 ## Quick Start: Cloudflare R2
 
-This example uses Cloudflare R2 as the shared backend. The same workflow works
-with other S3-compatible object stores. The complete workflow has four steps:
-initialize device A, bind and push a project, authorize device B, and restore a
-Session.
-
-Before starting, prepare an R2 bucket, its Access Key and Secret Access Key,
+This quick start uses Cloudflare R2. Other S3-compatible object stores follow
+the same steps. Prepare an R2 bucket, its Access Key and Secret Access Key,
 and a working copy of the project on both devices.
+
+The commands use the automatically created `default` Hub.
 
 Example R2 configuration:
 
@@ -134,9 +171,7 @@ Region:   auto
 Prefix:   ctxhop/demo     # optional
 ~~~
 
-All devices in the same sync domain must use the same bucket and prefix. When
-multiple sync domains share one bucket, use different prefixes to keep their
-data separate.
+Use the same bucket and prefix on every device in one sync domain.
 
 ### 1. Initialize device A
 
@@ -144,62 +179,17 @@ data separate.
 ctxhop init --backend s3 --endpoint "https://<ACCOUNT_ID>.r2.cloudflarestorage.com" --bucket "<BUCKET_NAME>" --region "auto" --prefix "ctxhop/demo" --device-name "device-a"
 ~~~
 
-Follow the prompts for the R2 credentials and encryption password. A standard
-R2 API token does not use a session token, so leave that prompt empty.
+Follow the prompts for the R2 credentials and encryption password. Leave the
+R2 session-token prompt empty when using a standard R2 API token. Store the
+**Recovery Key** generated by the first initialization offline.
 
-The first initialization generates a **Recovery Key**. Store it offline. If
-both the encryption password and Recovery Key are lost, the encrypted remote
-data cannot be recovered.
-
-During initialization, CtxHop checks for Claude Code and Codex before asking
-about Agent-specific options. If at least one of them is detected, choose the
-automatic SessionEnd Hook scope by entering `1` or `2`:
-
-- `1` — `session`: the Session and its filtered environment;
-- `2` — `session+workspace`: the same data plus the project workspace and Git state.
-
-After the Hook step (or after `--no-hook` skips Hook installation), CtxHop asks
-whether to synchronize filtered configuration for the detected Agent(s). The
-default is enabled. The same choice applies to Claude Code and Codex when both
-are installed. Only allowlisted settings and non-sensitive MCP transport
-intents are eligible for synchronization.
-
-CtxHop never uploads a raw Agent configuration file or authentication file.
-This includes Claude Code credentials and login state, Codex auth data, tokens,
-headers, environment variables, and MCP `env` values. A Claude user
-configuration file may be read locally to extract a referenced MCP command,
-arguments, or URL, but the file itself is never uploaded. Answer `no` to
-keep the Session and other allowed environment components while excluding
-settings and MCP configuration from future uploads.
-
-The Hook runs `push` with the selected scope when a Session ends. After it is
-installed, each completed conversation is uploaded automatically, so you do
-not need to run `ctxhop push` after every conversation. You can install the
-Hook later:
-
-~~~bash
-ctxhop hook install --agent codex
-# or
-ctxhop hook install --agent claude-code
-~~~
-
-Use --no-hook during initialization when the Hook should not be installed.
-
-To switch an initialized device to another sync domain, run `ctxhop init`
-again. CtxHop asks whether to leave the current domain first:
-
-- Enter `y` to leave it and continue initialization. This removes the local
-  configuration, device keys, and CtxHop-installed Hooks. Remote S3 objects and
-  an independent directory backend are kept.
-- Enter `n` or press Enter to keep the current domain and cancel initialization.
-
-If the configured directory backend overlaps the local CtxHop configuration
-directory, move the backend first; CtxHop will stop before removing the local
-domain state.
+Choose whether to install Agent Hooks during initialization. Hooks push a
+completed Session automatically; use `--no-hook` to skip them.
 
 ### 2. Bind the project and push
 
-Run these commands from the project directory on device A:
+After completing a Session on device A, run these commands from the project
+directory:
 
 ~~~bash
 cd /path/to/project
@@ -207,26 +197,11 @@ ctxhop project bind --path .
 ctxhop push
 ~~~
 
-The default push synchronizes the current project's Session and filtered
-environment. To include uncommitted workspace files and Git state, use:
+To include uncommitted workspace files and Git state, use:
 
 ~~~bash
 ctxhop push --workspace
 ~~~
-
-For a project without a usable Git identity, use the same manual project name
-on both devices:
-
-~~~bash
-ctxhop project bind --name "my-project" --path .
-~~~
-
-The manual name identifies the project and is independent of its local path.
-
-`pull`, `list`, and `resume` query only the project bound to the current
-directory. `ctxhop project discover` is the exception: it intentionally lists
-all projects announced in the sync domain so an authorized device can find a
-new project before binding it.
 
 ### 3. Authorize device B
 
@@ -236,69 +211,26 @@ Create an invitation on device A:
 ctxhop device invite --output ctxhop-device-b.json
 ~~~
 
-Transfer the invitation file to device B through a trusted channel, then run:
+Transfer the invitation file to device B, then run:
 
 ~~~bash
 ctxhop init --invite ./ctxhop-device-b.json --device-name "device-b"
 ~~~
 
-Device B must enter its own R2 credentials and the same encryption password.
-The invitation does not contain storage credentials, the encryption password,
-or Session contents.
+Use device B's R2 credentials and the same encryption password.
 
 ### 4. Restore the Session
 
-To see projects announced by authorized devices:
-
-~~~bash
-ctxhop project discover
-~~~
-
-Prepare the corresponding project working copy on device B and bind it:
+Prepare the project working copy on device B and bind it:
 
 ~~~bash
 cd /path/to/project
 ctxhop project bind --path .
 ctxhop list
-~~~
-
-list displays the Sessions available for the current project. When a
-SessionEnd Hook is installed on the source device, the latest completed
-conversation is already uploaded. Run `list` or `resume` on the target device
-to read the latest remote metadata; a separate `ctxhop pull` is not required
-for the normal handoff flow. Use `pull` when you specifically want a
-metadata-only remote check.
-
-Restore a Session:
-
-~~~bash
 ctxhop resume <SESSION_ID>
 ~~~
 
-Preview the restore without writing anything:
-
-~~~bash
-ctxhop resume --preview <SESSION_ID>
-~~~
-
-If device A used push --workspace, restore the uploaded workspace and Git
-state as well:
-
-~~~bash
-ctxhop resume --workspace <SESSION_ID>
-~~~
-
-resume --workspace checks the target workspace and Git state before writing.
-If a conflict is found, it stops without forcing changes to the target.
-
-If you only need the Session and do not want differences in the target
-workspace to block the restore:
-
-~~~bash
-ctxhop resume --allow-divergent <SESSION_ID>
-~~~
-
-After the restore, open the Session with the native Agent command:
+After the restore, continue with the native Agent command:
 
 ~~~bash
 # Codex
@@ -308,104 +240,172 @@ codex resume <SESSION_ID>
 claude --resume <SESSION_ID>
 ~~~
 
-You can then continue the existing Session without starting a new conversation
-or repeating its previous context.
+### Optional: Switch to another Agent
+
+Cross-Agent switching creates a new target-native Session and keeps the source
+Session unchanged:
+
+~~~bash
+# Preview the switch
+ctxhop session switch <SESSION_ID> --to codex --preview
+
+# Create and launch the target Session
+ctxhop session switch <SESSION_ID> --to codex --launch
+~~~
+
+Use `--to claude-code` to switch to Claude Code.
 
 ## Synchronized Data
 
-| Data | Default | Description |
-|---|---|---|
-| Agent Session | Synchronized | Compressed when useful and encrypted locally. |
-| Project identity and Git summary | Synchronized | Used to identify the project across devices; project files and complete Git objects are not included. |
-| Session-related environment | Filtered; configuration selectable during `init` | Claude Code and Codex use their adapters to restore only allowlisted Skills, MCP transport intents, and Session settings. Global settings remain user-scoped and project MCP remains project-scoped. Raw Agent configuration files and authentication data are never uploaded. |
-| Workspace and Git state | Optional | Processed only with push --workspace and resume --workspace. |
-| Tokens, credentials, and .env files | Never synchronized | Login state, Claude Code/Codex auth files, private keys, headers, MCP `env` values, and secrets are excluded. |
+CtxHop synchronizes encrypted Session context and project identity by default.
+Workspace files and Git state are included only when `--workspace` is used.
+Agent configuration is filtered before synchronization.
 
-Normal push, Hooks, and watch do not upload project file contents. When
---workspace is enabled, CtxHop also does not delete local files, switch
-branches, or run merge, rebase, commit, push, or reset.
+| Data | Scope |
+|---|---|
+| Session context | Synchronized by default. Stored as encrypted Agent session records. |
+| Project identity and Git summary | Synchronized by default. Used to match the same project across devices. |
+| Agent environment | Filtered components selected during `init`, such as Skills, MCP intents, and allowed Session settings. |
+| Workspace and Git state | Optional. Included only with `push --workspace` and `resume --workspace`. |
+| Credentials and secrets | Never synchronized. This includes tokens, private keys, authentication files, headers, environment secrets, and `.env` files. |
 
-Sensitive files, binary files, files over the size limit, unavailable files,
-and conflicting paths are left for manual handling.
+Project files and complete Git repositories are outside the default
+synchronization scope.
 
 ## CLI
 
-Run `ctxhop <command> --help` for the complete options of a command. Running
-`ctxhop` without arguments prints the command index. Use `ctxhop help
-<command>` for command details. The table includes the supported top-level
-commands and their second-level actions.
+Run `ctxhop <command> --help` for options. Use `ctxhop help <command> [action]`
+to browse the command index. Run `ctxhop` in a terminal for the interactive
+workspace; redirected input/output prints the command index. Type to filter,
+use the arrow keys to move, and press Enter to run an action. Commands marked
+`[--json]` support machine-readable output.
+
+`<HUB>`, `<PROJECT_ID>`, `<SESSION_ID>`, `<REPLICA_ID>`, `<CONTRIBUTION_ID>`,
+and `<NATIVE_ID>` are selectors supplied by you.
 
 ### Setup and navigation
 
 | Command | Description |
 |---|---|
-| `ctxhop init` | Configure the storage backend, encryption password, device, and Agent hooks. |
-| `ctxhop install` | Install CtxHop as a user-level command. |
-| `ctxhop uninstall` | Remove local CtxHop files without deleting remote or backend data. |
-| `ctxhop help [<command>]` | Show the command index or details and available options. |
+| `ctxhop` | Open the interactive workspace. |
+| `ctxhop init [options]` | Configure storage, encryption, device identity, and Agent Hooks. |
+| `ctxhop install [--dir DIR] [--no-path]` | Install the CtxHop command. |
+| `ctxhop update` | Check for and install the latest release. |
+| `ctxhop uninstall [--dir DIR]` | Remove the local CtxHop installation. |
+| `ctxhop help [<command> [action]]` | Show the command index or command options. |
 | `ctxhop version` | Show the installed version. |
 
-### Project and synchronization
+### Projects and synchronization
 
 | Command | Description |
 |---|---|
-| `ctxhop project bind` | Bind a local project to a stable project identity. |
-| `ctxhop project unbind` | Remove a local project binding. |
-| `ctxhop project mode <mode>` | Set a project to `normal`, `push-only`, or `excluded` mode. |
-| `ctxhop project list` | List local project bindings. |
-| `ctxhop project discover` | View projects announced by other devices. |
-| `ctxhop push` | Upload the current project's Session and filtered environment. |
-| `ctxhop push --workspace` | Also upload the limited workspace and Git state. |
-| `ctxhop pull` | Check remote metadata without restoring anything. |
-| `ctxhop list` | List Sessions available for the current project. |
-| `ctxhop resume` | Restore a Session and its filtered environment. Use `--preview`, `--workspace`, or `--allow-divergent` as needed. |
-| `ctxhop watch` | Watch local Session changes and upload them. |
+| `ctxhop project bind [--path DIR] [--identity ID or --name NAME] [--hub HUB]` | Bind a project to a stable identity and Hub. |
+| `ctxhop project unbind [--path DIR or --identity ID]` | Remove a project binding. |
+| `ctxhop project mode <MODE> [--path DIR or --identity ID]` | Set project sync mode: `normal`, `push-only`, or `excluded`. |
+| `ctxhop project list [--hub HUB] [--json]` | List project bindings. |
+| `ctxhop project discover [--json]` | Discover projects from authorized devices. |
+| `ctxhop project move <PROJECT_ID> --to <HUB> [--json]` | Move a project to another Hub. |
+| `ctxhop push [--workspace] [--git-stash STASH] [SESSION_ID]` | Push project Sessions and selected environment; `--workspace` includes workspace and Git state. |
+| `ctxhop pull [--json]` | Read remote metadata. |
+| `ctxhop list [--json]` | List Sessions in the current project. |
+| `ctxhop resume [SESSION_ID] [options]` | Restore a Session and selected environment. |
+| `ctxhop watch [--interval DURATION] [--once] [--json]` | Monitor local Agent Sessions and push updates. |
+
+When no selector is provided, `ctxhop list` and `ctxhop resume` open the Session
+picker. Use `ctxhop session list` to view logical Sessions, Agent sources, and
+Replicas.
+
+### Hubs and logical Sessions
+
+Session Hub organizes Agent-native Sessions into logical Sessions and keeps
+their source relationships. Resume within the same Agent with `session resume`;
+continue in another Agent with `switch`.
+
+| Command | Description |
+|---|---|
+| `ctxhop hub create [--json] <HUB>` | Create and publish a Hub. |
+| `ctxhop hub list [--json]` | List Hubs and the current Hub. |
+| `ctxhop hub use [--json] <HUB>` | Select the current Hub. |
+| `ctxhop session discover [--json]` | Find local Agent Sessions and their Hub links. |
+| `ctxhop session list [--json]` | List logical Sessions, Agent sources, and Replicas. |
+| `ctxhop session show <SESSION_ID> [--json]` | Show a logical Session and its source metadata. |
+| `ctxhop session resume <SESSION_ID> [options]` | Resume a native Replica on the current device. |
+| `ctxhop session switch <SESSION_ID> [options]` | Preview or create a target-native Session from selected context. |
+| `ctxhop session attach <SESSION_ID> [options] [--json]` | Attach an existing native Session to a logical Session. |
+| `ctxhop session reconcile [options] [--json]` | Compare native Session state with its Hub binding. |
+| `ctxhop session migrate [--json] [--preview] [--publish-v2] [--rollback] [SESSION_ID]` | Migrate legacy Session metadata into the logical Session view. |
+
+Switch options:
+
+| Option | Description |
+|---|---|
+| `--to AGENT` | Select the target Agent. |
+| `--context causal-head`, `all-heads`, or `agent-only` | Select the context policy. |
+| `--head CONTRIBUTION_ID` | Select a causal head; repeat for multiple heads. |
+| `--source AGENT` | Select the source Agent for `agent-only`. |
+| `--preview` | Preview the conversion plan without changing local state. Omit it to switch immediately. |
+| `--with-environment` | Include portable environment components in the switch. |
+| `--launch` | Launch the target Agent after the switch. |
+| `--allow-unsupported` | Include unsupported records in the preview report. |
+
+Migration commands:
+
+~~~bash
+ctxhop session migrate --preview
+ctxhop session migrate <SESSION_ID> --publish-v2
+ctxhop session migrate <SESSION_ID> --rollback
+~~~
+
+Without `--preview`, the selected migration runs immediately. `--publish-v2`
+publishes the selected legacy branch as a Replica, and `--rollback` selects the
+legacy reader.
 
 ### Devices and security
 
 | Command | Description |
 |---|---|
-| `ctxhop device invite` | Create an invitation for a new device. |
-| `ctxhop device status` | Show the local device identity and mode. |
-| `ctxhop device mode <mode>` | Set the device to `normal`, `push-only`, or `disabled` mode. |
-| `ctxhop device list` | List authorized devices. |
-| `ctxhop device rename <name>` | Change the local device display name. |
-| `ctxhop device remove <device-id>` | Revoke a device's future access. |
+| `ctxhop device invite [--output PATH]` | Create a device invitation. |
+| `ctxhop device status [--json]` | Show local device identity and mode. |
+| `ctxhop device mode <MODE>` | Set the device mode. |
+| `ctxhop device list [--json]` | List authorized devices. |
+| `ctxhop device rename <NAME>` | Rename the local device. |
+| `ctxhop device remove <DEVICE_ID>` | Revoke a device. |
 | `ctxhop device rotate-key` | Rotate the encryption key. |
 | `ctxhop passphrase change` | Change the encryption password. |
 | `ctxhop passphrase reset` | Reset the encryption password with the Recovery Key. |
+| `ctxhop hook install [--agent all, claude-code, or codex]` | Install SessionEnd Hooks for selected Agents. |
 
 ### History and remote data
 
 | Command | Description |
 |---|---|
-| `ctxhop history <SESSION_ID>` | List recoverable versions for a Session. |
-| `ctxhop history cleanup <SESSION_ID>` | Delete all remote versions for a Session. |
-| `ctxhop history prune <SESSION_ID>` | Keep selected Session versions or remove versions before a date. |
-| `ctxhop remote delete-session <SESSION_ID>` | Delete one remote Session after confirmation. |
-| `ctxhop remote delete-project` | Delete all remote data for the current project after confirmation. |
-| `ctxhop remote delete-all` | Delete all remote data in the current sync domain after confirmation. |
+| `ctxhop history [--json] <SESSION_ID>` | List Session versions. |
+| `ctxhop history cleanup [--remote-id] [--path DIR] <SESSION_ID>` | Delete all remote versions for a Session. |
+| `ctxhop history prune [--remote-id] [--path DIR] (--keep N or --before RFC3339) <SESSION_ID>` | Keep the latest versions or remove versions before a time. |
+| `ctxhop remote delete-session [--remote-id] [--path DIR] <SESSION_ID>` | Delete a remote Session. |
+| `ctxhop remote delete-project [--path DIR]` | Delete remote data for the current project. |
+| `ctxhop remote delete-all` | Delete remote data in the current sync domain. |
+
+Use `--remote-id` to target an opaque remote ID.
 
 ### Status and maintenance
 
 | Command | Description |
 |---|---|
-| `ctxhop status` | Show local status; `--remote` also checks the backend. |
-| `ctxhop doctor` | Check configuration, backend, Agent, and project status. |
-| `ctxhop stats` | Show cross-device restore statistics. |
-| `ctxhop hook install` | Install the Claude Code or Codex SessionEnd Hook. |
+| `ctxhop status [--remote] [--json]` | Show sync status; `--remote` includes the remote status. |
+| `ctxhop doctor [--json]` | Check configuration, backend, Agent, project, and Hook state. |
+| `ctxhop stats [--json]` | Show cross-device restore statistics. |
 
 ## Configuration
 
-CtxHop stores local configuration, device keys, and synchronization state in
-~/.ctxhop by default:
+CtxHop stores local configuration, device keys, and sync state in:
 
 | System | Default directory |
 |---|---|
-| Windows | %USERPROFILE%\.ctxhop |
-| macOS / Linux | ~/.ctxhop |
+| Windows | `%USERPROFILE%\.ctxhop` |
+| macOS / Linux | `~/.ctxhop` |
 
-Set CTXHOP_CONFIG_DIR to use another directory:
+Set `CTXHOP_CONFIG_DIR` to use another directory:
 
 ~~~bash
 export CTXHOP_CONFIG_DIR="$HOME/.ctxhop-custom"
@@ -417,12 +417,14 @@ PowerShell:
 $env:CTXHOP_CONFIG_DIR = Join-Path $env:USERPROFILE '.ctxhop-custom'
 ~~~
 
-This directory contains local encrypted data and device keys. Do not commit it
+This directory contains local configuration and device keys. Do not commit it
 to a repository or share it publicly.
 
 ## Development
 
-Build from source:
+Requires Go 1.26 or later.
+
+Clone and build:
 
 ~~~bash
 git clone https://github.com/CCCCY-ci/ctxhop.git
@@ -438,18 +440,33 @@ go build -trimpath -o ctxhop.exe ./cmd/ctxhop
 .\ctxhop.exe install
 ~~~
 
-Run checks:
+Run the basic checks:
 
 ~~~bash
 go test ./...
-go test -race ./...
 go vet ./...
-go build -trimpath -o ctxhop ./cmd/ctxhop
+~~~
+
+Before submitting changes:
+
+~~~bash
+go test -race ./...
+~~~
+
+Build all supported targets:
+
+~~~bash
+bash scripts/build.sh
+~~~
+
+On Windows PowerShell:
+
+~~~powershell
+.\scripts\build.ps1
 ~~~
 
 Do not commit real Session files, tokens, or backend credentials.
 
 ## License
 
-CtxHop is licensed under the [Apache License 2.0](LICENSE). Retain the
-[NOTICE](NOTICE) file when redistributing the project.
+CtxHop is licensed under the [MIT License](LICENSE).

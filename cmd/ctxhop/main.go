@@ -36,10 +36,11 @@ type command struct {
 var commands = []command{
 	{name: "init", summary: "configure storage backend, encryption password and agent hooks"},
 	{name: "install", summary: "install ctxhop as a user-level command"},
-	{name: "uninstall", summary: "remove local CtxHop files without deleting sync data"},
+	{name: "update", summary: "check for and install the latest release"},
+	{name: "uninstall", summary: "remove local CtxHop files"},
 	{name: "status", summary: "show sync state for this project or globally"},
 	{name: "list", summary: "list sessions available for this project"},
-	{name: "resume", summary: "restore a session and its filtered environment"},
+	{name: "resume", summary: "restore a session and its filtered environment (interactive when no ID)"},
 	{name: "history", summary: "list recoverable versions for a session"},
 	{name: "passphrase", summary: "change or reset the storage encryption password"},
 	{name: "stats", summary: "show local cross-device restore statistics"},
@@ -49,8 +50,10 @@ var commands = []command{
 	{name: "doctor", summary: "diagnose agent, backend and configuration problems"},
 	{name: "device", summary: "inspect or change local device settings"},
 	{name: "remote", summary: "delete scoped or all remote data"},
+	{name: "hub", summary: "create, list, or select a Session Hub"},
 	{name: "project", summary: "bind projects and manage synchronization policy"},
-	{name: "pull", summary: "check remote metadata without restoring sessions"},
+	{name: "session", summary: "inspect logical Session Hub sessions"},
+	{name: "pull", summary: "read remote metadata"},
 	{name: "version", summary: "print version information", run: runVersion},
 	{name: "help", summary: "print this message"},
 }
@@ -65,18 +68,39 @@ func init() {
 
 func main() {
 	args := os.Args[1:]
-	startCommandLogging(args)
-	defer func() {
-		commandLogger = nil
-	}()
+	metadataOnly := commandIsMetadataOnly(args)
+	if !metadataOnly {
+		startCommandLogging(args)
+		defer func() {
+			commandLogger = nil
+		}()
+	}
 
 	err := run(args)
-	finishCommandLogging(args, err)
+	if !metadataOnly {
+		finishCommandLogging(args, err)
+	}
 	if err != nil {
-		recordCommandFailure(os.Args[1:], err)
+		if !metadataOnly {
+			recordCommandFailure(os.Args[1:], err)
+		}
 		fmt.Fprintf(os.Stderr, "%s: %v\n", cliName, err)
 		os.Exit(1)
 	}
+}
+
+// commandIsMetadataOnly identifies commands that must be safe to run without
+// touching the local CtxHop state, such as help and version output.
+func commandIsMetadataOnly(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "help", "version":
+		return true
+	}
+	_, helpRequested := commandHelpPath(args)
+	return helpRequested
 }
 
 func run(args []string) error {
@@ -113,7 +137,10 @@ func commandHelpPath(args []string) ([]string, bool) {
 	return nil, false
 }
 
-func runVersion([]string) error {
+func runVersion(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("version: unexpected argument %q", args[0])
+	}
 	_, err := fmt.Fprintf(os.Stdout, "%s %s\n", cliName, version)
 	return err
 }
@@ -128,11 +155,21 @@ func runHelp(args []string) error {
 }
 
 func runDefaultEntry() error {
+	if isInteractiveTerminal(os.Stdin, os.Stdout) {
+		offered, err := maybeOfferUpdate(os.Stdin, os.Stdout, os.Stderr)
+		if err != nil {
+			return err
+		}
+		if offered {
+			return nil
+		}
+		return runInteractiveApp(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runHelp(nil)
 }
 
 func writeHelp(w io.Writer) error {
-	if _, err := fmt.Fprintf(w, "%s - cross-device sync for AI coding agent sessions\n\nusage:\n  %s <command> [arguments]\n\ncommands:\n", cliName, cliName); err != nil {
+	if _, err := fmt.Fprintf(w, "%s - cross-device sync for AI coding agent sessions\n\nusage:\n  %s\n  %s <command> [arguments]\n\ncommands:\n", cliName, cliName, cliName); err != nil {
 		return err
 	}
 	for _, c := range commands {
@@ -144,6 +181,6 @@ func writeHelp(w io.Writer) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(w, "\nYour sessions are encrypted locally and stored in a backend you own.\nThis tool collects no data of any kind.\nRun `%s help <command>` for command details.\n", cliName)
+	_, err := fmt.Fprintf(w, "\nRun `%s` without a command in a terminal to open the interactive workspace.\nYour sessions are encrypted locally and stored in a backend you own.\nUpdate checks request release metadata only; session and workspace data are not sent.\nRun `%s help <command>` for command details.\n", cliName, cliName)
 	return err
 }

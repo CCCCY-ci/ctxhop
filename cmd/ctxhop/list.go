@@ -17,6 +17,7 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/config"
 	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 	"github.com/CCCCY-ci/ctxhop/internal/environment"
+	"github.com/CCCCY-ci/ctxhop/internal/project"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
@@ -55,6 +56,9 @@ func init() {
 }
 
 func runList(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveSessionBrowser(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runListWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
@@ -116,67 +120,145 @@ func collectList(ctx context.Context, c *config.Config, configDir, projectDir st
 }
 
 func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, output, prompt io.Writer) (listReport, error) {
+	collection, err := collectListCollection(ctx, c, configDir, projectDir, input, prompt, "list")
+	if err != nil {
+		return listReport{}, err
+	}
+	return mergeListSessions(collection.localDeviceID, collection.identifierKey, collection.projectID, collection.localSessions, collection.remoteSessions), nil
+}
+
+// listCollection is the common metadata-only input for the legacy v1 list
+// view and the Phase 1 logical Session view. Keeping the raw references here
+// lets the new view expose every Agent source without changing the old list's
+// output or scope rules.
+type listCollection struct {
+	current        project.Project
+	hubName        string
+	identifierKey  []byte
+	projectID      string
+	localDeviceID  string
+	localSessions  []adapter.SessionRef
+	remoteSessions []syncer.ProjectMetadataRef
+	remoteReplicas []syncer.ProjectReplicaMetadataRef
+}
+
+func collectListCollection(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, error) {
+	collection, access, err := collectListCollectionWithAccess(ctx, c, configDir, projectDir, input, prompt, command)
+	if access != nil {
+		access.close()
+	}
+	return collection, err
+}
+
+// collectListCollectionWithAccess is the authenticated variant used by
+// commands that need to continue from metadata-only discovery into an
+// explicit body operation, such as legacy full publish. The caller owns the
+// returned access object and must close it after the operation completes.
+func collectListCollectionWithAccess(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
+	return collectListCollectionWithSecretReader(ctx, c, configDir, projectDir, newCommandSecretReader(input), prompt, command)
+}
+
+// collectListCollectionWithSecretReader is the shared metadata discovery
+// path for commands that continue into an authenticated body operation. The
+// secret reader stays alive for the complete unlock and read sequence.
+func collectListCollectionWithSecretReader(ctx context.Context, c *config.Config, configDir, projectDir string, secretReader *commandSecretReader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
 	if c == nil {
-		return listReport{}, errors.New("list: configuration is unavailable")
+		return listCollection{}, nil, fmt.Errorf("%s: configuration is unavailable", command)
 	}
 	if err := ctx.Err(); err != nil {
-		return listReport{}, fmt.Errorf("list: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: %w", command, err)
 	}
 
-	if err := devicePullError("list", c); err != nil {
-		return listReport{}, err
+	if err := devicePullError(command, c); err != nil {
+		return listCollection{}, nil, err
 	}
 	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
-		return listReport{}, fmt.Errorf("list: identify the current project: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: identify the current project: %w", command, err)
 	}
 	if !current.Identity.Stable() {
 		reason := current.Reason
 		if reason == "" {
 			reason = "the current directory has no stable project identity"
 		}
-		return listReport{}, fmt.Errorf("list: %s", reason)
+		return listCollection{}, nil, fmt.Errorf("%s: %s", command, reason)
 	}
 
 	switch projectPullMode(c, current.Identity.Value) {
 	case projectModeExcluded:
-		return listReport{}, errors.New("list: project is excluded from synchronization")
+		return listCollection{}, nil, fmt.Errorf("%s: project is excluded from synchronization", command)
 	case projectModePushOnly:
-		return listReport{}, errors.New("list: project is configured as push-only; remote sessions are unavailable")
+		return listCollection{}, nil, fmt.Errorf("%s: project is configured as push-only; remote sessions are unavailable", command)
 	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
-		return listReport{}, fmt.Errorf("list: local device identity is invalid: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: local device identity is invalid: %w", command, err)
 	}
 	secrets, err := config.LoadSecrets(configDir)
 	if err != nil {
-		return listReport{}, fmt.Errorf("list: load local sync material: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: load local sync material: %w", command, err)
 	}
 	projectID, err := crypto.ProjectID(secrets.IdentifierKey, current.Identity.Value)
 	if err != nil {
-		return listReport{}, fmt.Errorf("list: derive project identity: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: derive project identity: %w", command, err)
 	}
 
-	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "list")
+	access, err := openDomainForReadWithSecretReader(ctx, c, configDir, secretReader, prompt, command)
 	if err != nil {
-		return listReport{}, err
+		return listCollection{}, nil, err
 	}
-	defer access.close()
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			access.close()
+		}
+	}()
 	store := access.Store
 	identities := access.Identities
 
 	remoteSessions, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
 	if err != nil && !errors.Is(err, syncer.ErrNoRemoteMetadata) {
-		return listReport{}, fmt.Errorf("list: read encrypted session metadata: %w", err)
+		return listCollection{}, nil, fmt.Errorf("%s: read encrypted session metadata: %w", command, err)
 	}
-	localSessions, err := discoverListSessions(current.Root)
+	var remoteReplicas []syncer.ProjectReplicaMetadataRef
+	hubName := configuredProjectHub(c, current.Identity.Value)
+	if command == "session list" {
+		hubScope, _, v2ProjectID, err := sessionHubAndProjectInHub(secrets.IdentifierKey, current, hubName)
+		if err != nil {
+			return listCollection{}, nil, err
+		}
+		v2ProjectLayout, err := syncer.NewProjectHubLayout(hubScope.ID, v2ProjectID)
+		if err != nil {
+			return listCollection{}, nil, fmt.Errorf("%s: prepare Session Hub metadata: %w", command, err)
+		}
+		remoteReplicas, err = syncer.FetchProjectReplicaMetadataWithDevices(ctx, store, v2ProjectLayout, identities, access.allowedDevices())
+		if err != nil && !errors.Is(err, syncer.ErrNoReplicaMetadata) {
+			return listCollection{}, nil, fmt.Errorf("%s: read Session Hub Replica metadata: %w", command, err)
+		}
+	}
+	localSessions, err := discoverListSessionsWithContext(ctx, current.Root)
 	if err != nil {
-		return listReport{}, err
+		return listCollection{}, nil, err
 	}
-	return mergeListSessions(c.Device.ID, secrets.IdentifierKey, projectID, localSessions, remoteSessions), nil
+	collection := listCollection{
+		current:        current,
+		hubName:        hubName,
+		identifierKey:  append([]byte(nil), secrets.IdentifierKey...),
+		projectID:      projectID,
+		localDeviceID:  c.Device.ID,
+		localSessions:  localSessions,
+		remoteSessions: remoteSessions,
+		remoteReplicas: remoteReplicas,
+	}
+	closeOnError = false
+	return collection, access, nil
 }
 
 func discoverListSessions(projectRoot string) ([]adapter.SessionRef, error) {
-	agents, err := adapter.DiscoverInstalled(context.Background(), projectRoot)
+	return discoverListSessionsWithContext(context.Background(), projectRoot)
+}
+
+func discoverListSessionsWithContext(ctx context.Context, projectRoot string) ([]adapter.SessionRef, error) {
+	agents, err := adapter.DiscoverInstalled(ctx, projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("list: discover local agents: %w", err)
 	}
