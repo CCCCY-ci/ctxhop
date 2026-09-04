@@ -23,9 +23,25 @@ func TestCommandTableIsUniqueAndFullyImplemented(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"init", "install", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "pull", "version", "help"} {
+	for _, name := range []string{"init", "install", "update", "uninstall", "status", "list", "resume", "history", "passphrase", "stats", "push", "watch", "hook", "doctor", "device", "remote", "project", "session", "pull", "version", "help"} {
 		if _, exists := seen[name]; !exists {
 			t.Errorf("expected command %q is missing", name)
+		}
+	}
+}
+
+func TestCommandIsMetadataOnly(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{args: []string{"help", "resume"}, want: true},
+		{args: []string{"version"}, want: true},
+		{args: []string{"status", "--help"}, want: true},
+		{args: []string{"status"}, want: false},
+	} {
+		if got := commandIsMetadataOnly(tc.args); got != tc.want {
+			t.Errorf("commandIsMetadataOnly(%v) = %v, want %v", tc.args, got, tc.want)
 		}
 	}
 }
@@ -80,12 +96,18 @@ func TestVersionUsesCtxHopName(t *testing.T) {
 	}
 }
 
+func TestVersionRejectsArguments(t *testing.T) {
+	if err := runVersion([]string{"unexpected"}); err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("runVersion accepted an argument: %v", err)
+	}
+}
+
 func TestRunRejectsUnknownCommands(t *testing.T) {
 	err := run([]string{"does-not-exist"})
 	if err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("run error = %v, want unknown command", err)
 	}
-	for _, removed := range []string{"session", "state", "restore"} {
+	for _, removed := range []string{"state", "restore", "completion"} {
 		err := run([]string{removed})
 		if err == nil || !strings.Contains(err.Error(), "unknown command") {
 			t.Fatalf("removed command %q returned %v", removed, err)

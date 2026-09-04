@@ -17,7 +17,12 @@
 !.github/
 !.github/workflows/
 !.github/workflows/*.yml
-docs/
+# Local agent instructions and project notes are kept on the developer
+# workspace and are never part of the repository.
+/AGENTS.md
+/.agents/
+/docs/
+/UI_REVIEW_BACKLOG.md
 # Keep only the build and release entry points versioned. Ad-hoc local scripts
 # remain ignored.
 scripts/*
@@ -65,6 +70,15 @@ vendor/
 go.work
 go.work.sum
 
+# Local build and browser-test caches
+/.edge-profile*/
+**/.edge-profile*/
+/.gocache-*/
+/.gotmp-*/
+/.tmp-go-*/
+/.tmp-release-*
+/.npm-cache-figma/
+
 # === Secrets and local configuration ===
 # Nothing resembling a credential may ever be committed: this repository is
 # meant to be public, and git history is permanent.
@@ -84,6 +98,7 @@ config.local.*
 *.pfx
 id_rsa*
 .netrc
+/r2test
 
 # === Real agent data ===
 # Working copies taken from a real installation while investigating. Session
@@ -111,3 +126,9 @@ desktop.ini
 # settings are not.
 .claude/settings.local.json
 .claude/*.local.json
+
+# === Deferred UI build output (not part of the CLI release) ===
+web/node_modules/
+web/dist/
+/cmd/ctxhop/webdist/
+.npm-cache-ui/

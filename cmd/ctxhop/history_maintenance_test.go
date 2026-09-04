@@ -12,11 +12,11 @@ import (
 )
 
 func TestParseHistoryPruneOptions(t *testing.T) {
-	options, err := parseHistoryPruneOptions([]string{"--keep", "2", "--yes", "native-session"})
+	options, err := parseHistoryPruneOptions([]string{"--keep", "2", "native-session"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.keep != 2 || !options.yes || options.session != "native-session" {
+	if options.keep != 2 || options.session != "native-session" {
 		t.Fatalf("options = %+v", options)
 	}
 	options, err = parseHistoryPruneOptions([]string{"--before", "2026-08-15T00:00:00Z", "native-session"})

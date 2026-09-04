@@ -83,6 +83,100 @@ func TestReadRecordsRejectsCorruptionInTheMiddle(t *testing.T) {
 	}
 }
 
+type appendDuringReadReader struct {
+	file         *os.File
+	firstRead    chan struct{}
+	continueRead chan struct{}
+	blocked      bool
+}
+
+func (r *appendDuringReadReader) Read(p []byte) (int, error) {
+	if !r.blocked {
+		r.blocked = true
+		n, err := r.file.Read(p)
+		close(r.firstRead)
+		<-r.continueRead
+		return n, err
+	}
+	return r.file.Read(p)
+}
+
+func TestReadRecordsDuringFileAppendKeepsOnlyCompleteRecords(t *testing.T) {
+	tests := []struct {
+		name        string
+		suffix      string
+		wantRecords int
+		wantDropped bool
+	}{
+		{name: "append completes the record", suffix: "2}\n", wantRecords: 2},
+		{name: "append leaves an unfinished tail", suffix: "2}", wantRecords: 1, wantDropped: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "session.jsonl")
+			if err := os.WriteFile(path, []byte("{\"n\":1}\n{\"n\":"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+
+			reader := &appendDuringReadReader{
+				file:         file,
+				firstRead:    make(chan struct{}),
+				continueRead: make(chan struct{}),
+			}
+			result := make(chan struct {
+				data SessionData
+				err  error
+			}, 1)
+			go func() {
+				data, readErr := ReadRecords(reader)
+				result <- struct {
+					data SessionData
+					err  error
+				}{data: data, err: readErr}
+			}()
+
+			select {
+			case <-reader.firstRead:
+			case <-time.After(time.Second):
+				close(reader.continueRead)
+				t.Fatal("ReadRecords did not start reading the session")
+			}
+			appendFile, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+			if openErr == nil {
+				_, openErr = appendFile.WriteString(tt.suffix)
+				closeErr := appendFile.Close()
+				if openErr == nil {
+					openErr = closeErr
+				}
+			}
+			close(reader.continueRead)
+			if openErr != nil {
+				<-result
+				t.Fatalf("append session: %v", openErr)
+			}
+
+			select {
+			case got := <-result:
+				if got.err != nil {
+					t.Fatalf("ReadRecords: %v", got.err)
+				}
+				if len(got.data.Records) != tt.wantRecords || got.data.DroppedTail != tt.wantDropped {
+					t.Fatalf("read result = records:%d dropped:%t, want records:%d dropped:%t", len(got.data.Records), got.data.DroppedTail, tt.wantRecords, tt.wantDropped)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("ReadRecords did not finish after the append")
+			}
+		})
+	}
+}
+
 // erroringReader yields some data and then fails, standing in for a file on a
 // disconnected drive or a filesystem error partway through a read.
 type erroringReader struct {

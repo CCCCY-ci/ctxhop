@@ -7,12 +7,23 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
 )
+
+type metadataReadTrackingRemote struct {
+	remote.Remote
+	getKeys []string
+}
+
+func (r *metadataReadTrackingRemote) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	r.getKeys = append(r.getKeys, key)
+	return r.Remote.Get(ctx, key)
+}
 
 func TestMetadataRoundTripIsDeterministicAndKeyBound(t *testing.T) {
 	payload := []byte(`{"session":"opaque","version":1}`)
@@ -133,10 +144,11 @@ func TestMetadataRejectsMalformedEnvelopesAndPayloads(t *testing.T) {
 
 func TestPutAndFetchMetadataSortsDevicesAndIgnoresShards(t *testing.T) {
 	root := t.TempDir()
-	store, err := remote.NewDir(root)
+	dirStore, err := remote.NewDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store := &metadataReadTrackingRemote{Remote: dirStore}
 	dataKey := crypto.NewDataKey()
 	defer dataKey.Close()
 	public, err := dataKey.IdentityPublic()
@@ -195,6 +207,11 @@ func TestPutAndFetchMetadataSortsDevicesAndIgnoresShards(t *testing.T) {
 	}
 	if !bytes.Equal(refs[0].Metadata.Payload, metadataA.Payload) || !bytes.Equal(refs[1].Metadata.Payload, metadataB.Payload) {
 		t.Fatalf("metadata refs payloads = %q, %q", refs[0].Metadata.Payload, refs[1].Metadata.Payload)
+	}
+	for _, key := range store.getKeys {
+		if key == shardKey {
+			t.Fatalf("metadata fetch read immutable shard body %q", key)
+		}
 	}
 }
 

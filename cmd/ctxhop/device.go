@@ -26,7 +26,6 @@ type deviceOptions struct {
 	mode   config.DeviceMode
 	name   string
 	target string
-	yes    bool
 	output string
 }
 
@@ -48,6 +47,9 @@ func init() {
 }
 
 func runDevice(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveDeviceMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runDeviceWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
@@ -112,14 +114,13 @@ func parseDeviceOptions(args []string) (deviceOptions, error) {
 	case deviceActionRemove:
 		flags := flag.NewFlagSet("device remove", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
-		yes := flags.Bool("yes", false, "skip the confirmation prompt")
 		if err := flags.Parse(args[1:]); err != nil {
 			return deviceOptions{}, fmt.Errorf("device remove: %w", err)
 		}
 		if flags.NArg() != 1 {
 			return deviceOptions{}, errors.New("device remove: expected one device ID")
 		}
-		return deviceOptions{action: deviceActionRemove, target: flags.Arg(0), yes: *yes}, nil
+		return deviceOptions{action: deviceActionRemove, target: flags.Arg(0)}, nil
 	default:
 		return deviceOptions{}, fmt.Errorf("device: unknown action %q; expected 'status', 'mode', 'list', 'rename', 'remove', 'rotate-key', or 'invite'", args[0])
 	}

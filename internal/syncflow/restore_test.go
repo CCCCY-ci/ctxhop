@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/ecdh"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/crypto"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 )
 
@@ -189,6 +192,123 @@ func TestPlanRestoreLocalizesAndOwnsBuffers(t *testing.T) {
 	if bytes.Equal(plan.CanonicalRecords[0], plan.LocalizedRecords[0]) {
 		t.Fatal("canonical and localized buffers share storage")
 	}
+}
+
+func TestPlanNativeReplicaRestoreUsesTheSingleSelectedSource(t *testing.T) {
+	records := [][]byte{
+		[]byte(`{"cwd":"${AS_PROJECT}","message":"from-claude"}`),
+		[]byte(`{"file_path":"${AS_PROJECT}/main.go"}`),
+	}
+	snapshot := syncer.ReplicaSnapshot{
+		Layout:     syncerTestReplicaLayout(t, "deviceclaude"),
+		Records:    records,
+		HeadDigest: mustDigest(t, records),
+	}
+	snapshot.Descriptor = syncerTestReplicaDescriptor(t, snapshot.Layout, "claude-code")
+	snapshot.Tip = syncerTestReplicaTip(t, snapshot.Descriptor.ReplicaID, records, snapshot.HeadDigest)
+
+	plan, err := PlanNativeReplicaRestore(
+		snapshot,
+		adapter.PathSpace{ProjectRoot: `D:\Target\Project`, AgentHome: `D:\Target\Agent`},
+		adapter.Installation{Compatibility: adapter.CompatFull},
+		RestoreOptions{},
+	)
+	if err != nil {
+		t.Fatalf("PlanNativeReplicaRestore: %v", err)
+	}
+	if plan.ResolutionKind != syncer.ResolutionConsistent || plan.CommonPrefix != 0 || plan.VersionIndex != 0 {
+		t.Fatalf("resolution metadata = kind %v, prefix %d, index %d", plan.ResolutionKind, plan.CommonPrefix, plan.VersionIndex)
+	}
+	if len(plan.Devices) != 1 || plan.Devices[0] != "deviceclaude" {
+		t.Fatalf("selected devices = %v", plan.Devices)
+	}
+	if string(plan.LocalizedRecords[0]) != `{"cwd":"D:\\Target\\Project","message":"from-claude"}` {
+		t.Fatalf("localized record = %s", plan.LocalizedRecords[0])
+	}
+	if string(plan.CanonicalRecords[1]) != string(records[1]) {
+		t.Fatalf("canonical record changed = %s", plan.CanonicalRecords[1])
+	}
+
+	plan.CanonicalRecords[0][0] = 'x'
+	if string(snapshot.Records[0]) != `{"cwd":"${AS_PROJECT}","message":"from-claude"}` {
+		t.Fatal("plan retained or mutated the snapshot record buffer")
+	}
+}
+
+func TestPlanNativeReplicaRestoreRejectsAnUnverifiedOrEmptySnapshot(t *testing.T) {
+	layout := syncerTestReplicaLayout(t, "deviceclaude")
+	descriptor := syncerTestReplicaDescriptor(t, layout, "claude-code")
+	space := adapter.PathSpace{ProjectRoot: "/target/project", AgentHome: "/target/agent"}
+	installation := adapter.Installation{Compatibility: adapter.CompatFull}
+
+	_, err := PlanNativeReplicaRestore(syncer.ReplicaSnapshot{
+		Layout:     layout,
+		Descriptor: descriptor,
+		Tip:        sessionhub.ReplicaTip{ReplicaID: descriptor.ReplicaID},
+	}, space, installation, RestoreOptions{})
+	if err == nil || !errors.Is(err, ErrInvalidRestoreResolution) {
+		t.Fatalf("empty snapshot error = %v, want ErrInvalidRestoreResolution", err)
+	}
+
+	records := [][]byte{[]byte(`{"ok":true}`)}
+	snapshot := syncer.ReplicaSnapshot{
+		Layout:     layout,
+		Descriptor: descriptor,
+		Tip:        syncerTestReplicaTip(t, descriptor.ReplicaID, records, mustDigest(t, records)),
+		Records:    records,
+		HeadDigest: [32]byte{1},
+	}
+	if _, err := PlanNativeReplicaRestore(snapshot, space, installation, RestoreOptions{}); err == nil || !errors.Is(err, ErrInvalidRestoreResolution) {
+		t.Fatalf("digest mismatch error = %v, want ErrInvalidRestoreResolution", err)
+	}
+}
+
+func syncerTestReplicaLayout(t *testing.T, deviceID string) syncer.ReplicaLayout {
+	t.Helper()
+	layout, err := syncer.NewReplicaLayout("hub", "project", "session", "replicaclaude", deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return layout
+}
+
+func syncerTestReplicaDescriptor(t *testing.T, layout syncer.ReplicaLayout, agent string) sessionhub.NativeReplicaDescriptor {
+	t.Helper()
+	descriptor := sessionhub.NativeReplicaDescriptor{
+		Version:   sessionhub.ModelVersion,
+		ReplicaID: layout.ReplicaKey(),
+		SessionID: layout.SessionKey(),
+		Source: sessionhub.NativeSource{
+			Agent:            agent,
+			NativeSessionKey: strings.Repeat("a", 26),
+			DeviceID:         layout.DeviceID(),
+			Generation:       1,
+			NativeFormat:     agent + "-jsonl",
+		},
+		Origin:    sessionhub.ReplicaOrigin{Kind: sessionhub.ReplicaOriginNative, BaseHeads: []string{}},
+		CreatedAt: time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC),
+	}
+	if err := descriptor.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
+func syncerTestReplicaTip(t *testing.T, replicaID string, records [][]byte, digest [32]byte) sessionhub.ReplicaTip {
+	t.Helper()
+	tip := sessionhub.ReplicaTip{
+		Version:     sessionhub.ModelVersion,
+		ReplicaID:   replicaID,
+		RecordCount: uint64(len(records)),
+		ShardCount:  1,
+		LastShard:   1,
+		HeadDigest:  fmt.Sprintf("%x", digest),
+		UpdatedAt:   time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC),
+	}
+	if err := tip.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return tip
 }
 
 func TestPlanRestoreRejectsInvalidSpaceSelectionResolutionAndTokens(t *testing.T) {

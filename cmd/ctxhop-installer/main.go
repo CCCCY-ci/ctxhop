@@ -92,7 +92,15 @@ func runPack(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve output path: %w", err)
 	}
-	if sameFilePath(options.stub, output) || sameFilePath(options.payload, output) {
+	sameStub, err := sameFilePath(options.stub, output)
+	if err != nil {
+		return fmt.Errorf("compare stub and output paths: %w", err)
+	}
+	samePayload, err := sameFilePath(options.payload, output)
+	if err != nil {
+		return fmt.Errorf("compare payload and output paths: %w", err)
+	}
+	if sameStub || samePayload {
 		return errors.New("output must be different from the stub and payload")
 	}
 	if err := writePackedInstaller(output, stub, compressed, trailer); err != nil {
@@ -220,6 +228,10 @@ func readInstallerPayload() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readInstallerPayloadPath(executable)
+}
+
+func readInstallerPayloadPath(executable string) ([]byte, error) {
 	file, err := os.Open(executable)
 	if err != nil {
 		return nil, err
@@ -287,8 +299,14 @@ func readInstallerPayload() ([]byte, error) {
 	return payload, nil
 }
 
-func sameFilePath(first, second string) bool {
-	first, _ = filepath.Abs(first)
-	second, _ = filepath.Abs(second)
-	return filepath.Clean(first) == filepath.Clean(second)
+func sameFilePath(first, second string) (bool, error) {
+	first, err := filepath.Abs(first)
+	if err != nil {
+		return false, err
+	}
+	second, err = filepath.Abs(second)
+	if err != nil {
+		return false, err
+	}
+	return filepath.Clean(first) == filepath.Clean(second), nil
 }

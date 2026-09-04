@@ -112,6 +112,68 @@ func PlanRestore(resolution syncer.Resolution, space adapter.PathSpace, installa
 	return planRestore(resolution, space, installation, options, true)
 }
 
+// PlanNativeReplicaRestore adapts one already verified v2 NativeReplica into
+// the same RestorePlan used by the legacy multi-device resolver.
+//
+// Selection happens before this function is called. Consequently a native
+// resume never resolves, merges, or localises another Agent's Replica. The
+// single source is represented as a consistent one-version resolution so the
+// existing compatibility and ApplyRestore safety gates remain shared by both
+// v1 and v2 restore paths.
+func PlanNativeReplicaRestore(snapshot syncer.ReplicaSnapshot, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions) (RestorePlan, error) {
+	if err := validateRestoreRequest(space, installation, options); err != nil {
+		return RestorePlan{}, err
+	}
+
+	if err := snapshot.Descriptor.Validate(); err != nil {
+		return RestorePlan{}, fmt.Errorf("%w: Replica descriptor: %v", ErrInvalidRestoreResolution, err)
+	}
+	if err := snapshot.Tip.Validate(); err != nil {
+		return RestorePlan{}, fmt.Errorf("%w: Replica tip: %v", ErrInvalidRestoreResolution, err)
+	}
+	if _, err := snapshot.Layout.ReplicaPrefix(); err != nil {
+		return RestorePlan{}, fmt.Errorf("%w: Replica layout: %v", ErrInvalidRestoreResolution, err)
+	}
+	if snapshot.Descriptor.ReplicaID != snapshot.Layout.ReplicaKey() || snapshot.Descriptor.SessionID != snapshot.Layout.SessionKey() || snapshot.Descriptor.Source.DeviceID != snapshot.Layout.DeviceID() {
+		return RestorePlan{}, fmt.Errorf("%w: Replica descriptor does not match its namespace", ErrInvalidRestoreResolution)
+	}
+	if snapshot.Tip.ReplicaID != snapshot.Descriptor.ReplicaID {
+		return RestorePlan{}, fmt.Errorf("%w: Replica tip belongs to another Replica", ErrInvalidRestoreResolution)
+	}
+	if snapshot.Tip.RecordCount != uint64(len(snapshot.Records)) || snapshot.Tip.RecordCount == 0 {
+		return RestorePlan{}, fmt.Errorf("%w: Replica tip record count does not match the complete body", ErrInvalidRestoreResolution)
+	}
+	digest, err := syncer.DigestRecords(snapshot.Records)
+	if err != nil {
+		return RestorePlan{}, fmt.Errorf("%w: Replica records: %v", ErrInvalidRestoreResolution, err)
+	}
+	if digest != snapshot.HeadDigest {
+		return RestorePlan{}, fmt.Errorf("%w: Replica body digest does not match the verified snapshot", ErrInvalidRestoreResolution)
+	}
+	if fmt.Sprintf("%x", snapshot.HeadDigest) != snapshot.Tip.HeadDigest {
+		return RestorePlan{}, fmt.Errorf("%w: Replica tip digest does not match the verified snapshot", ErrInvalidRestoreResolution)
+	}
+
+	deviceID := snapshot.Layout.DeviceID()
+	if deviceID == "" {
+		return RestorePlan{}, fmt.Errorf("%w: Replica source device is empty", ErrInvalidRestoreResolution)
+	}
+	// Passing the single stream through PlanRestore intentionally keeps record
+	// cloning, path localisation and compatibility handling identical to the
+	// v1 path. PlanRestore validates the canonical record sequence again before
+	// any adapter writer can see it.
+	resolution := syncer.Resolution{
+		Kind:         syncer.ResolutionConsistent,
+		CommonPrefix: 0,
+		Versions: []syncer.Version{{
+			Records:    snapshot.Records,
+			Devices:    []string{deviceID},
+			HeadDigest: snapshot.HeadDigest,
+		}},
+	}
+	return PlanRestore(resolution, space, installation, options)
+}
+
 func planRestore(resolution syncer.Resolution, space adapter.PathSpace, installation adapter.Installation, options RestoreOptions, cloneCanonical bool) (RestorePlan, error) {
 	if err := validateRestoreRequest(space, installation, options); err != nil {
 		return RestorePlan{}, err

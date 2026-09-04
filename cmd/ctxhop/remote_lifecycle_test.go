@@ -14,11 +14,11 @@ import (
 )
 
 func TestParseRemoteLifecycleOptions(t *testing.T) {
-	session, err := parseRemoteOptions([]string{"delete-session", "--yes", "--remote-id", "abc123"})
+	session, err := parseRemoteOptions([]string{"delete-session", "--remote-id", "abc123"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.action != remoteActionDeleteSession || session.target != "abc123" || !session.remoteID || !session.yes || session.path != "." {
+	if session.action != remoteActionDeleteSession || session.target != "abc123" || !session.remoteID || session.path != "." {
 		t.Fatalf("session options = %+v", session)
 	}
 	project, err := parseRemoteOptions([]string{"delete-project", "--path", "C:\\work"})
@@ -28,31 +28,12 @@ func TestParseRemoteLifecycleOptions(t *testing.T) {
 	if project.action != remoteActionDeleteProject || project.path != "C:\\work" {
 		t.Fatalf("project options = %+v", project)
 	}
-	all, err := parseRemoteOptions([]string{"delete-all", "--yes"})
+	all, err := parseRemoteOptions([]string{"delete-all"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if all.action != remoteActionDeleteAll || !all.yes {
+	if all.action != remoteActionDeleteAll {
 		t.Fatalf("all options = %+v", all)
-	}
-}
-
-func TestConfirmRemoteDeletion(t *testing.T) {
-	var prompt bytes.Buffer
-	confirmed, err := confirmRemoteDeletion(strings.NewReader("yes\n"), &prompt, remoteActionDeleteAll, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !confirmed || !strings.Contains(prompt.String(), "keyfile") {
-		t.Fatalf("confirmation = %v, prompt = %q", confirmed, prompt.String())
-	}
-
-	confirmed, err = confirmRemoteDeletion(strings.NewReader("no\n"), &prompt, remoteActionDeleteProject, "abc123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if confirmed {
-		t.Fatal("negative confirmation was accepted")
 	}
 }
 
@@ -74,7 +55,7 @@ func TestRunRemoteDeleteAllUsesValidatedRemoteAndReportsCount(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := runRemoteWithIO([]string{"delete-all", "--yes"}, strings.NewReader(""), &output); err != nil {
+	if err := runRemoteWithIO([]string{"delete-all"}, strings.NewReader(""), &output); err != nil {
 		t.Fatalf("runRemoteWithIO(delete-all): %v", err)
 	}
 	if got := output.String(); !strings.Contains(got, "remote deleted: scope=delete-all objects=3") {
@@ -110,7 +91,7 @@ func TestRunRemoteDeleteProjectKeepsOtherProjectAndGlobalObjects(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := runRemoteWithIO([]string{"delete-project", "--yes", "--path", projectDir}, strings.NewReader(""), &output); err != nil {
+	if err := runRemoteWithIO([]string{"delete-project", "--path", projectDir}, strings.NewReader(""), &output); err != nil {
 		t.Fatalf("runRemoteWithIO(delete-project): %v", err)
 	}
 	if got := output.String(); !strings.Contains(got, "remote deleted: scope=delete-project objects=1") {
@@ -151,7 +132,7 @@ func TestRunRemoteDeleteSessionKeepsOtherSessionObjects(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := runRemoteWithIO([]string{"delete-session", "--yes", "--path", projectDir, "native-session"}, strings.NewReader(""), &output); err != nil {
+	if err := runRemoteWithIO([]string{"delete-session", "--path", projectDir, "native-session"}, strings.NewReader(""), &output); err != nil {
 		t.Fatalf("runRemoteWithIO(delete-session): %v", err)
 	}
 	if got := output.String(); !strings.Contains(got, "remote deleted: scope=delete-session objects=1") {

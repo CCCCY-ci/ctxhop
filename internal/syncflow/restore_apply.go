@@ -86,6 +86,12 @@ type RestoreApplyOptions struct {
 	// Agent selects the local record shape for the explanation. Empty keeps the
 	// historical Claude Code record for existing callers.
 	Agent string
+	// SkipWorkspacePreflight is used by the v2 source-native resume path when
+	// the selected Replica has no legacy workspace fingerprint. It is explicit
+	// and narrow: callers still get the normal adapter compatibility, plan and
+	// atomic session-write checks, but this option must not be used to pretend
+	// that workspace state was checked.
+	SkipWorkspacePreflight bool
 }
 
 // RestoreApplyResult reports the workspace decision and whether an existing
@@ -120,13 +126,13 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 	if writer == nil {
 		return RestoreApplyResult{}, errors.New("syncflow: session writer is required")
 	}
-	if compare == nil {
+	if compare == nil && !options.SkipWorkspacePreflight {
 		return RestoreApplyResult{}, errors.New("syncflow: workspace comparer is required")
 	}
 	if strings.TrimSpace(projectRoot) == "" || !safeRestoreSessionID(sessionID) {
 		return RestoreApplyResult{}, ErrInvalidRestoreTarget
 	}
-	if options.Fingerprint == nil {
+	if options.Fingerprint == nil && !options.SkipWorkspacePreflight {
 		return RestoreApplyResult{}, ErrWorkspaceFingerprintRequired
 	}
 	if err := validateApplyCompatibility(plan, options); err != nil {
@@ -136,23 +142,33 @@ func applyRestore(ctx context.Context, writer SessionWriter, projectRoot, sessio
 		return RestoreApplyResult{}, err
 	}
 
-	report, err := compare(ctx, projectRoot, *options.Fingerprint)
-	if err != nil {
-		return RestoreApplyResult{}, fmt.Errorf("%w: %w", ErrWorkspaceCheck, err)
-	}
-	result := RestoreApplyResult{Workspace: report}
-	if err := validateWorkspaceVerdict(report.Verdict); err != nil {
-		return result, err
-	}
-	if report.Verdict == project.Divergent && !options.AllowDivergent {
-		return result, fmt.Errorf("%w: workspace verdict is divergent", ErrWorkspaceDiverged)
+	result := RestoreApplyResult{}
+	var report project.Report
+	if options.SkipWorkspacePreflight {
+		// A zero-value project.Report is not a safe "consistent" claim. Keep
+		// the result explicitly out of the workspace verdict vocabulary; the
+		// command layer reports this as not-checked for a pure v2 Replica.
+		result.Workspace = project.Report{}
+	} else {
+		var err error
+		report, err = compare(ctx, projectRoot, *options.Fingerprint)
+		if err != nil {
+			return RestoreApplyResult{}, fmt.Errorf("%w: %w", ErrWorkspaceCheck, err)
+		}
+		result.Workspace = report
+		if err := validateWorkspaceVerdict(report.Verdict); err != nil {
+			return result, err
+		}
+		if report.Verdict == project.Divergent && !options.AllowDivergent {
+			return result, fmt.Errorf("%w: workspace verdict is divergent", ErrWorkspaceDiverged)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return result, fmt.Errorf("syncflow: apply restore: %w", err)
 	}
 
 	localized := plan.LocalizedRecords
-	if options.InjectWorkspaceContext && report.Verdict != project.Consistent {
+	if options.InjectWorkspaceContext && !options.SkipWorkspacePreflight && result.Workspace.Verdict != project.Consistent {
 		contextRecord, err := workspaceContextRecordForAgent(options.Agent, report, plan.LocalizedRecords)
 		if err != nil {
 			return result, fmt.Errorf("%w: %v", ErrWorkspaceContextInjection, err)

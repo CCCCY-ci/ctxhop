@@ -139,7 +139,7 @@ func runDeviceWithStreams(args []string, input io.Reader, output, prompt io.Writ
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), deviceManagementTimeout)
 		defer cancel()
-		result, err := removeDevice(ctx, c, configDir, options.target, options.yes, asBufferedReader(input), prompt)
+		result, err := removeDevice(ctx, c, configDir, options.target, asBufferedReader(input), prompt)
 		if err != nil {
 			return err
 		}
@@ -346,7 +346,7 @@ type deviceKeyRotationResult struct {
 	Removed     int
 }
 
-func removeDevice(ctx context.Context, c *config.Config, configDir, target string, yes bool, input io.Reader, prompt io.Writer) (deviceKeyRotationResult, error) {
+func removeDevice(ctx context.Context, c *config.Config, configDir, target string, input io.Reader, prompt io.Writer) (deviceKeyRotationResult, error) {
 	if c == nil {
 		return deviceKeyRotationResult{}, errors.New("device remove: configuration is unavailable")
 	}
@@ -364,15 +364,6 @@ func removeDevice(ctx context.Context, c *config.Config, configDir, target strin
 	}
 	if prompt == nil {
 		return deviceKeyRotationResult{}, errors.New("device remove: prompt output is required")
-	}
-	if !yes {
-		confirmed, err := confirmDeviceRemoval(input, prompt, target)
-		if err != nil {
-			return deviceKeyRotationResult{}, err
-		}
-		if !confirmed {
-			return deviceKeyRotationResult{}, errors.New("device remove: cancelled")
-		}
 	}
 	if result, handled, err := retryRevokedDeviceCleanup(ctx, c, configDir, target); handled {
 		return result, err
@@ -516,22 +507,4 @@ func readDeviceRecoveryConfirmation(input *bufio.Reader, prompt io.Writer, comma
 		return false, err
 	}
 	return strings.EqualFold(value, "saved"), nil
-}
-
-func confirmDeviceRemoval(input io.Reader, prompt io.Writer, target string) (bool, error) {
-	if input == nil {
-		return false, errors.New("device remove: input is required")
-	}
-	if prompt == nil {
-		return false, errors.New("device remove: prompt output is required")
-	}
-	if _, err := fmt.Fprintf(prompt, "Remove all remote data for device %q? [y/N]: ", target); err != nil {
-		return false, err
-	}
-	line, err := asBufferedReader(input).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("device remove: read confirmation: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
 }

@@ -56,6 +56,18 @@ func init() {
 }
 
 func runHistory(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveAction(os.Stdin, os.Stdout, os.Stderr, "View session history", func() error {
+			selected, err := chooseInteractiveSessionForHistory(os.Stdin, os.Stdout, os.Stderr, "View session history")
+			if err != nil {
+				return err
+			}
+			if selected.source.ReplicaID != "" {
+				return runInteractiveNativeReplicaState(os.Stdin, os.Stdout, os.Stderr, selected)
+			}
+			return runHistoryWithStreams([]string{interactiveLegacyActionID(selected)}, os.Stdin, os.Stdout, os.Stderr)
+		})
+	}
 	if isHistoryMaintenance(args) {
 		return runHistoryMaintenanceWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 	}
