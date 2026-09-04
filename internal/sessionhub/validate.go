@@ -254,6 +254,11 @@ func (s NativeSource) Validate() error {
 	if err := validateOpaqueID(s.NativeSessionKey); err != nil {
 		return fmt.Errorf("%w: source native session key", err)
 	}
+	if s.NativeSessionID != "" {
+		if err := validateNativeSessionID(s.NativeSessionID); err != nil {
+			return fmt.Errorf("%w: source native session id", err)
+		}
+	}
 	if err := validateOpaqueID(s.DeviceID); err != nil {
 		return fmt.Errorf("%w: source device id", err)
 	}
@@ -576,7 +581,10 @@ func (o BindingOrigin) Validate() error {
 	}
 	switch o.Kind {
 	case ReplicaOriginNative:
-		if len(o.BaseHeads) != 0 || o.ImportBoundary != nil || o.Converter != nil {
+		if len(o.BaseHeads) != 0 {
+			return fmt.Errorf("%w: native origin has base heads", ErrInvalidModel)
+		}
+		if o.ImportBoundary != nil || o.Converter != nil {
 			return fmt.Errorf("%w: native origin has conversion state", ErrInvalidModel)
 		}
 	case ReplicaOriginSameAgentRestore:

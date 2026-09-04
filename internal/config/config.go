@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/CCCCY-ci/ctxhop/internal/atomicfile"
 )
@@ -57,6 +58,11 @@ type Projects struct {
 	Bindings []Binding `json:"bindings,omitempty"`
 	Excluded []string  `json:"excluded,omitempty"`
 	PushOnly []string  `json:"pushOnly,omitempty"`
+	// HubByIdentity records an explicit Session Hub assignment for a stable
+	// project identity. An empty map preserves the historical current-Hub
+	// behavior; entries let one installation work on projects in different
+	// Hubs without silently moving either project's remote namespace.
+	HubByIdentity map[string]string `json:"hubByIdentity,omitempty"`
 }
 
 // AgentState is what has been done to one agent's installation.
@@ -150,12 +156,16 @@ type Config struct {
 	// user's bucket, so anyone holding it could swap the advertised key and
 	// every later push would be encrypted to them and unreadable by its owner
 	// (crypto-spec §3.4).
-	IdentityPublic   []byte                `json:"identityPublic"`
-	DomainGeneration uint64                `json:"domainGeneration,omitempty"`
-	Projects         Projects              `json:"projects"`
-	Agents           map[string]AgentState `json:"agents,omitempty"`
-	HookScope        HookScope             `json:"hookScope,omitempty"`
-	SyncConfig       ConfigSyncMode        `json:"syncConfig,omitempty"`
+	IdentityPublic   []byte `json:"identityPublic"`
+	DomainGeneration uint64 `json:"domainGeneration,omitempty"`
+	// CurrentHub is the logical Session Hub used by commands that operate on
+	// the v2 namespace. Empty is kept backward-compatible with installations
+	// created before explicit Hub selection and resolves to "default".
+	CurrentHub string                `json:"currentHub,omitempty"`
+	Projects   Projects              `json:"projects"`
+	Agents     map[string]AgentState `json:"agents,omitempty"`
+	HookScope  HookScope             `json:"hookScope,omitempty"`
+	SyncConfig ConfigSyncMode        `json:"syncConfig,omitempty"`
 }
 
 // Load reads the configuration from dir.
@@ -216,6 +226,14 @@ func (c *Config) check() error {
 	if c.Remote.Type == "" {
 		return errors.New("config: the configuration names no storage backend; run 'ctxhop init'")
 	}
+	for identity, hub := range c.Projects.HubByIdentity {
+		if strings.TrimSpace(identity) == "" || strings.ContainsRune(identity, 0) {
+			return errors.New("config: project Hub mapping contains an invalid project identity")
+		}
+		if strings.TrimSpace(hub) == "" || strings.ContainsRune(hub, 0) {
+			return errors.New("config: project Hub mapping contains an invalid Hub name")
+		}
+	}
 	return nil
 }
 
@@ -250,5 +268,6 @@ func New() *Config {
 		Agents:     map[string]AgentState{},
 		HookScope:  HookScopeSession,
 		SyncConfig: ConfigSyncEnabled,
+		CurrentHub: "default",
 	}
 }

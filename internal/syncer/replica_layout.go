@@ -16,9 +16,13 @@ const (
 	// identity are different.
 	replicaShardNameWidth = shardNameWidth
 
-	replicaDescriptorName = "meta"
-	replicaTipName        = "tip"
-	contributionDirName   = "contributions"
+	replicaDescriptorName         = "meta"
+	replicaTipName                = "tip"
+	contributionDirName           = "contributions"
+	environmentDirName            = "environment"
+	environmentComponentsDirName  = "components"
+	environmentAttachmentsDirName = "environments"
+	environmentBodyName           = "000001"
 
 	descriptorMetaName = "meta"
 )
@@ -42,6 +46,67 @@ type ProjectHubLayout struct {
 	projectKey string
 }
 
+// EnvironmentHubLayout identifies the Hub-scoped environment component pool.
+// Component bodies are keyed by their filtered content fingerprint and may be
+// reused by Sessions in the same Hub without copying them into every branch.
+type EnvironmentHubLayout struct {
+	hubKey string
+}
+
+// NewEnvironmentHubLayout validates the opaque Hub key used by the shared
+// environment component pool.
+func NewEnvironmentHubLayout(hubKey string) (EnvironmentHubLayout, error) {
+	if err := validateIdentifier(hubKey); err != nil {
+		return EnvironmentHubLayout{}, fmt.Errorf("%w: hub key: %v", errInvalidReplicaLayout, err)
+	}
+	return EnvironmentHubLayout{hubKey: hubKey}, nil
+}
+
+// HubKey returns the validated Hub key carried by this environment layout.
+func (l EnvironmentHubLayout) HubKey() string { return l.hubKey }
+
+// HubPrefix returns the root of this Hub's environment component pool.
+func (l EnvironmentHubLayout) HubPrefix() (string, error) {
+	if err := l.validate(); err != nil {
+		return "", err
+	}
+	return v2ObjectPrefix + "/" + l.hubKey + "/" + environmentDirName, nil
+}
+
+// ComponentPrefix returns one device-owned filtered component namespace.
+func (l EnvironmentHubLayout) ComponentPrefix(componentKey, deviceID string) (string, error) {
+	prefix, err := l.HubPrefix()
+	if err != nil {
+		return "", err
+	}
+	if err := validateIdentifier(componentKey); err != nil {
+		return "", fmt.Errorf("%w: component key: %v", errInvalidReplicaLayout, err)
+	}
+	if err := validateIdentifier(deviceID); err != nil {
+		return "", fmt.Errorf("%w: device key: %v", errInvalidReplicaLayout, err)
+	}
+	return checkedKey(prefix + "/" + environmentComponentsDirName + "/" + componentKey + "/" + deviceID)
+}
+
+// ComponentDescriptorKey returns the immutable filtered component metadata
+// object key.
+func (l EnvironmentHubLayout) ComponentDescriptorKey(componentKey, deviceID string) (string, error) {
+	prefix, err := l.ComponentPrefix(componentKey, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + descriptorMetaName)
+}
+
+// ComponentBodyKey returns the first immutable filtered component body shard.
+func (l EnvironmentHubLayout) ComponentBodyKey(componentKey, deviceID string) (string, error) {
+	prefix, err := l.ComponentPrefix(componentKey, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + environmentBodyName)
+}
+
 // NewProjectHubLayout validates the opaque keys used by a v2 Project prefix.
 func NewProjectHubLayout(hubKey, projectKey string) (ProjectHubLayout, error) {
 	if err := validateIdentifier(hubKey); err != nil {
@@ -60,6 +125,12 @@ func (l ProjectHubLayout) HubPrefix() (string, error) {
 	}
 	return v2ObjectPrefix + "/" + l.hubKey, nil
 }
+
+// HubKey returns the validated opaque Hub key carried by this Project layout.
+func (l ProjectHubLayout) HubKey() string { return l.hubKey }
+
+// ProjectKey returns the validated opaque Project key carried by this layout.
+func (l ProjectHubLayout) ProjectKey() string { return l.projectKey }
 
 // ProjectPrefix returns the root containing all logical Sessions in this
 // Project.
@@ -134,6 +205,17 @@ func (l SessionHubLayout) HubPrefix() (string, error) {
 	return v2ObjectPrefix + "/" + l.hubKey, nil
 }
 
+// HubKey returns the validated opaque Hub key carried by this Session layout.
+func (l SessionHubLayout) HubKey() string { return l.hubKey }
+
+// ProjectKey returns the validated opaque Project key carried by this Session
+// layout.
+func (l SessionHubLayout) ProjectKey() string { return l.projectKey }
+
+// SessionKey returns the validated opaque logical Session key carried by this
+// layout.
+func (l SessionHubLayout) SessionKey() string { return l.sessionKey }
+
 // ProjectPrefix returns the root of one v2 Project.
 func (l SessionHubLayout) ProjectPrefix() (string, error) {
 	hub, err := l.HubPrefix()
@@ -191,6 +273,43 @@ func (l SessionHubLayout) ContributionKey(contributionID, deviceID string) (stri
 		return "", fmt.Errorf("%w: contribution key: %v", errInvalidReplicaLayout, err)
 	}
 	return checkedKey(prefix + "/" + contributionID)
+}
+
+// EnvironmentAttachmentPrefix returns one device-owned Session environment
+// attachment namespace. The attachment binds a filtered component set to the
+// Contribution at which it was observed.
+func (l SessionHubLayout) EnvironmentAttachmentPrefix(environmentKey, deviceID string) (string, error) {
+	prefix, err := l.SessionPrefix()
+	if err != nil {
+		return "", err
+	}
+	if err := validateIdentifier(environmentKey); err != nil {
+		return "", fmt.Errorf("%w: environment key: %v", errInvalidReplicaLayout, err)
+	}
+	if err := validateIdentifier(deviceID); err != nil {
+		return "", fmt.Errorf("%w: environment device key: %v", errInvalidReplicaLayout, err)
+	}
+	return checkedKey(prefix + "/" + environmentAttachmentsDirName + "/" + environmentKey + "/" + deviceID)
+}
+
+// EnvironmentAttachmentDescriptorKey returns the immutable attachment
+// metadata object key.
+func (l SessionHubLayout) EnvironmentAttachmentDescriptorKey(environmentKey, deviceID string) (string, error) {
+	prefix, err := l.EnvironmentAttachmentPrefix(environmentKey, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + descriptorMetaName)
+}
+
+// EnvironmentAttachmentBodyKey returns the first immutable attachment body
+// shard.
+func (l SessionHubLayout) EnvironmentAttachmentBodyKey(environmentKey, deviceID string) (string, error) {
+	prefix, err := l.EnvironmentAttachmentPrefix(environmentKey, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return checkedKey(prefix + "/" + environmentBodyName)
 }
 
 // DescriptorKey returns this device's logical Session descriptor object.
@@ -357,6 +476,13 @@ func (l ProjectHubLayout) validate() error {
 	}
 	if err := validateIdentifier(l.projectKey); err != nil {
 		return fmt.Errorf("%w: project key: %v", errInvalidReplicaLayout, err)
+	}
+	return nil
+}
+
+func (l EnvironmentHubLayout) validate() error {
+	if err := validateIdentifier(l.hubKey); err != nil {
+		return fmt.Errorf("%w: hub key: %v", errInvalidReplicaLayout, err)
 	}
 	return nil
 }

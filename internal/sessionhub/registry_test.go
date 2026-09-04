@@ -130,3 +130,75 @@ func TestRegistryRejectsMissingFileWithoutCreatingIt(t *testing.T) {
 		t.Fatalf("LoadRegistry error = %v, want ErrRegistryNotFound", err)
 	}
 }
+
+func TestRegistryMergesRemoteHubAndKeepsLocalProjects(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	registry, err := NewDefaultRegistry(key, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	localProject, err := registry.EnsureProject(key, ProjectIdentityManual, "manual:local", time.Unix(200, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteHubID, err := DeriveHubKey(key, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := registry.MergeHubDescriptor(key, HubDescriptor{
+		Version:   ModelVersion,
+		HubID:     remoteHubID,
+		Name:      "work",
+		CreatedAt: time.Unix(300, 0).UTC(),
+		Lifecycle: HubActive,
+	})
+	if err != nil || !changed {
+		t.Fatalf("first merge = changed:%t err:%v", changed, err)
+	}
+	work, ok := registry.HubByName("work")
+	if !ok || len(work.Projects) != 0 {
+		t.Fatalf("merged Hub = %+v, want empty remote cache", work)
+	}
+	changed, err = registry.MergeHubDescriptor(key, HubDescriptor{
+		Version:   ModelVersion,
+		HubID:     remoteHubID,
+		Name:      "work",
+		CreatedAt: time.Unix(250, 0).UTC(),
+		Lifecycle: HubArchived,
+	})
+	if err != nil || !changed {
+		t.Fatalf("second merge = changed:%t err:%v", changed, err)
+	}
+	work, ok = registry.HubByName("work")
+	if !ok || work.Descriptor.Lifecycle != HubArchived || !work.Descriptor.CreatedAt.Equal(time.Unix(250, 0).UTC()) {
+		t.Fatalf("merged lifecycle/time = %+v", work.Descriptor)
+	}
+	if found, ok := registry.Project(localProject.Descriptor.ProjectID); !ok || found.Descriptor.ProjectID != localProject.Descriptor.ProjectID {
+		t.Fatalf("default Hub project was lost: %+v, ok=%t", found, ok)
+	}
+	if err := registry.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryRejectsRemoteHubIdentityConflict(t *testing.T) {
+	key := []byte(strings.Repeat("k", 32))
+	registry, err := NewDefaultRegistry(key, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub, ok := registry.DefaultHub()
+	if !ok {
+		t.Fatal("default Hub missing")
+	}
+	changed, err := registry.MergeHubDescriptor(key, HubDescriptor{
+		Version:   ModelVersion,
+		HubID:     hub.Descriptor.HubID,
+		Name:      "renamed-default",
+		CreatedAt: hub.Descriptor.CreatedAt,
+		Lifecycle: HubActive,
+	})
+	if changed || err == nil {
+		t.Fatalf("identity conflict = changed:%t err:%v", changed, err)
+	}
+}

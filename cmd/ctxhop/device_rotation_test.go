@@ -62,7 +62,7 @@ func TestDeviceRemoveRotatesKeyAndRevokesDevice(t *testing.T) {
 	t.Setenv("CTXHOP_CONFIG_DIR", firstConfig)
 	var removeOutput bytes.Buffer
 	removeInput := strings.NewReader(oldPass + line + newPass + line + newPass + line + "saved" + line)
-	if err := runDeviceWithStreams([]string{"remove", "--yes", second.Device.ID}, removeInput, &removeOutput, &removeOutput); err != nil {
+	if err := runDeviceWithStreams([]string{"remove", second.Device.ID}, removeInput, &removeOutput, &removeOutput); err != nil {
 		t.Fatalf("remove device: %v; output=%s", err, removeOutput.String())
 	}
 	if !strings.Contains(removeOutput.String(), "generation=2") || !strings.Contains(removeOutput.String(), "New Recovery Key") {

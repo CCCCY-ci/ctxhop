@@ -19,6 +19,7 @@ import (
 	"github.com/CCCCY-ci/ctxhop/internal/gitstate"
 	"github.com/CCCCY-ci/ctxhop/internal/project"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
+	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 	workspacepkg "github.com/CCCCY-ci/ctxhop/internal/workspace"
@@ -89,7 +90,7 @@ func (s *pushSummary) failContext(agent, stage string, err error) {
 
 func pushFailureStageHasClass(stage string) bool {
 	switch stage {
-	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "replica-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record", "session-registry":
+	case "context", "session-id", "object-layout", "queue-key", "cursor-store", "cursor", "executor", "session-read", "workspace-fingerprint", "metadata", "remote-push", "replica-push", "contribution-push", "queue-blocked", "environment-record", "workspace-record", "git-state-record", "git-transfer-capture", "git-transfer-upload", "git-transfer-record", "device-record", "project-record", "session-registry":
 		return true
 	default:
 		return false
@@ -239,6 +240,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 	if err != nil {
 		return pushSummary{}, fmt.Errorf("push: derive project identity: %w", err)
 	}
+	hubName := configuredProjectHub(c, current.Identity.Value)
 	access, err := openAuthorizedDomain(ctx, c, configDir, "push")
 	if err != nil {
 		return pushSummary{}, err
@@ -276,7 +278,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 	}
 	if needsReplicaScope {
-		if err := publishReplicaProjectScope(ctx, c.Device.ID, secrets.IdentifierKey, current.Identity.Value, current.Identity.Kind, store, public); err != nil {
+		if err := publishReplicaProjectScopeInHub(ctx, c.Device.ID, secrets.IdentifierKey, hubName, current.Identity.Value, current.Identity.Kind, store, public); err != nil {
 			summary.fail("replica-push", err)
 			return summary, nil
 		}
@@ -292,7 +294,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 		found = true
 		space := adapter.PathSpace{ProjectRoot: current.Root, AgentHome: agent.Installation.DataDir}
-		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash, skipConfig: !c.SyncConfigEnabled(), replicaIdentities: access.Identities})
+		partial := pushDiscoveredSessionsWithOptions(ctx, c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, agent.Layout, agent.Installation, space, store, public, pusher, configDir, current.Root, refs, pushSessionOptions{includeWorkspace: options.workspace, includeDirectoryWorkspace: options.workspace && !current.GitBacked, includeGitTransfer: options.workspace, gitStash: options.gitStash, skipConfig: !c.SyncConfigEnabled(), replicaIdentities: access.Identities, hubName: hubName})
 		summary.Pushed += partial.Pushed
 		summary.Failed += partial.Failed
 		summary.Skipped += partial.Skipped
@@ -320,7 +322,7 @@ func collectPush(ctx context.Context, c *config.Config, configDir, projectDir st
 		}
 	}
 	if lenPushedSessions(summary) != 0 {
-		if err := registerPushedSessions(configDir, secrets.IdentifierKey, c.Device.ID, current.Identity, *summary.pushedSessions); err != nil {
+		if err := registerPushedSessionsInHub(configDir, secrets.IdentifierKey, c.Device.ID, hubName, current.Identity, *summary.pushedSessions); err != nil {
 			summary.fail("session-registry", err)
 		}
 	}
@@ -351,6 +353,7 @@ type pushSessionOptions struct {
 	gitStash                  string
 	skipConfig                bool
 	projectIdentity           string
+	hubName                   string
 	replicaIdentities         []*ecdh.PrivateKey
 }
 
@@ -399,6 +402,9 @@ func pushDiscoveredSessions(ctx context.Context, deviceID string, identifierKey 
 
 func pushDiscoveredSessionsWithOptions(ctx context.Context, deviceID string, identifierKey []byte, projectID, projectIdentity string, layout adapter.SessionLayout, installation adapter.Installation, space adapter.PathSpace, store remote.Remote, public *ecdh.PublicKey, pusher syncflow.QueuedPusher, stateRoot, projectRoot string, refs []adapter.SessionRef, options pushSessionOptions) pushSummary {
 	options.projectIdentity = projectIdentity
+	if strings.TrimSpace(options.hubName) == "" {
+		options.hubName = sessionhub.DefaultHubLogicalID
+	}
 	refs = deduplicatePushRefs(refs)
 	if len(refs) == 0 {
 		return pushSummary{}
@@ -522,17 +528,37 @@ func pushOneDiscoveredSession(ctx context.Context, deviceID string, identifierKe
 		fail("remote-push", err)
 		return summary
 	}
-	if err := publishNativeReplica(ctx, stateRoot, deviceID, identifierKey, options.projectIdentity, layout, installation, store, public, stateRoot, ref, sessionID, data, space, options.replicaIdentities); err != nil {
+	publication, err := publishNativeReplicaInHubResult(ctx, stateRoot, deviceID, identifierKey, options.hubName, options.projectIdentity, layout, installation, store, public, stateRoot, ref, sessionID, data, space, options.replicaIdentities)
+	if err != nil {
 		fail("replica-push", err)
 		return summary
 	}
-	environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, projectID)
+	environmentCapture := adapter.EnvironmentFor(layout).Capture(data.Records, installation.Version, installation.DataDir, projectRoot, publication.Layout.ProjectKey())
 	if options.skipConfig {
 		environmentCapture = environmentCapture.WithoutConfig()
 	}
 	if err := syncer.PutEnvironmentManifest(ctx, store, public, objectLayout, environmentCapture.References, environmentCapture.Components); err != nil {
 		fail("environment-record", err)
 		return summary
+	}
+	environmentPublication, err := publishNativeEnvironmentComponents(ctx, identifierKey, publication.Layout.HubKey(), publication.Layout.ProjectKey(), deviceID, store, public, options.replicaIdentities, environmentCapture.Components)
+	if err != nil {
+		fail("environment-record", err)
+		return summary
+	}
+	var contribution *sessionhub.Contribution
+	if publication.Binding == nil || publication.Binding.Origin.Kind != sessionhub.ReplicaOriginLocalMaterialize {
+		contribution, err = publishNativeContribution(ctx, stateRoot, identifierKey, store, public, options.replicaIdentities, publication, deviceID, environmentPublication.EnvironmentRefs)
+		if err != nil {
+			fail("contribution-push", err)
+			return summary
+		}
+	}
+	if contribution != nil && environmentPublication.EnvironmentID != "" && containsString(contribution.EnvironmentRefs, environmentPublication.EnvironmentID) {
+		if err := publishNativeEnvironmentAttachment(ctx, store, public, options.replicaIdentities, publication, deviceID, environmentPublication, contribution.ContributionID); err != nil {
+			fail("environment-record", err)
+			return summary
+		}
 	}
 	if options.includeWorkspace {
 		var snapshot workspacepkg.Snapshot
@@ -671,6 +697,8 @@ func classifyPushFailure(err error) syncer.FailureClass {
 	case errors.Is(err, syncer.ErrReplicaImmutableConflict), errors.Is(err, syncer.ErrReplicaIdentityMismatch), errors.Is(err, syncer.ErrReplicaIncomplete), errors.Is(err, syncer.ErrReplicaCursorCommit), errors.Is(err, syncer.ErrReplicaObjectTooLarge):
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, syncflow.ErrMaterializeBoundaryUnknown), errors.Is(err, syncflow.ErrMaterializePrefixRewrite), errors.Is(err, syncflow.ErrMaterializeContributionConflict):
+		return syncer.FailureSessionCorrupt
+	case errors.Is(err, syncflow.ErrNativeContributionConflict):
 		return syncer.FailureSessionCorrupt
 	case errors.Is(err, syncer.ErrContributionImmutableConflict), errors.Is(err, syncer.ErrContributionIdentityMismatch), errors.Is(err, syncer.ErrContributionSnapshotIncomplete), errors.Is(err, syncer.ErrContributionObjectTooLarge):
 		return syncer.FailureSessionCorrupt

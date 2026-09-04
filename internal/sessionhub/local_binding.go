@@ -89,6 +89,68 @@ func LoadLocalBinding(root, hubID, projectID, sessionID, replicaID, agent string
 	return binding, nil
 }
 
+// FindLocalBindingByNativeSession finds the one local binding for a native
+// session below a known logical Session. It is used when a same-Agent restore
+// was performed on a different device: the restore marker is initially keyed
+// by the selected source Replica, then must be re-homed to the new device's
+// Replica on the first push. A missing binding is reported with the same
+// sentinel as a direct lookup.
+func FindLocalBindingByNativeSession(root, hubID, projectID, sessionID, agent, nativeSessionID string) (LocalBinding, error) {
+	if strings.TrimSpace(root) == "" {
+		return LocalBinding{}, errors.New("sessionhub: local binding root is required")
+	}
+	for name, value := range map[string]string{
+		"hub": hubID, "project": projectID, "session": sessionID,
+	} {
+		if err := validateOpaqueID(value); err != nil {
+			return LocalBinding{}, fmt.Errorf("%w: %s id", ErrInvalidIdentity, name)
+		}
+	}
+	if err := validateAgent(agent); err != nil {
+		return LocalBinding{}, fmt.Errorf("%w: agent", ErrInvalidIdentity)
+	}
+	if err := validateNativeSessionID(nativeSessionID); err != nil {
+		return LocalBinding{}, fmt.Errorf("%w: native session id", ErrInvalidIdentity)
+	}
+
+	bindingsRoot := filepath.Join(root, "state", "v2", "hubs", hubID, "projects", projectID, "sessions", sessionID, "bindings")
+	replicaDirs, err := os.ReadDir(bindingsRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return LocalBinding{}, ErrLocalBindingNotFound
+	}
+	if err != nil {
+		return LocalBinding{}, fmt.Errorf("sessionhub: read local binding index: %w", err)
+	}
+	var found *LocalBinding
+	for _, replicaDir := range replicaDirs {
+		if !replicaDir.IsDir() {
+			continue
+		}
+		if err := validateOpaqueID(replicaDir.Name()); err != nil {
+			return LocalBinding{}, fmt.Errorf("%w: local binding Replica directory", ErrInvalidIdentity)
+		}
+		binding, loadErr := LoadLocalBinding(root, hubID, projectID, sessionID, replicaDir.Name(), agent)
+		if errors.Is(loadErr, ErrLocalBindingNotFound) {
+			continue
+		}
+		if loadErr != nil {
+			return LocalBinding{}, loadErr
+		}
+		if binding.NativeSessionID != nativeSessionID {
+			continue
+		}
+		if found != nil && found.ReplicaID != binding.ReplicaID {
+			return LocalBinding{}, fmt.Errorf("%w: native session has multiple local Replica bindings", ErrInvalidModel)
+		}
+		copyValue := binding
+		found = &copyValue
+	}
+	if found == nil {
+		return LocalBinding{}, ErrLocalBindingNotFound
+	}
+	return *found, nil
+}
+
 func localBindingLookupPath(root, hubID, projectID, sessionID, replicaID, agent string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("sessionhub: local binding root is required")

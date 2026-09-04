@@ -56,6 +56,9 @@ func init() {
 }
 
 func runList(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveSessionBrowser(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runListWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
@@ -130,6 +133,7 @@ func collectListWithPrompt(ctx context.Context, c *config.Config, configDir, pro
 // output or scope rules.
 type listCollection struct {
 	current        project.Project
+	hubName        string
 	identifierKey  []byte
 	projectID      string
 	localDeviceID  string
@@ -155,9 +159,8 @@ func collectListCollectionWithAccess(ctx context.Context, c *config.Config, conf
 }
 
 // collectListCollectionWithSecretReader is the shared metadata discovery
-// path for commands that may continue with a confirmation after unlocking
-// the domain. The secret reader must remain alive until that confirmation has
-// consumed its line.
+// path for commands that continue into an authenticated body operation. The
+// secret reader stays alive for the complete unlock and read sequence.
 func collectListCollectionWithSecretReader(ctx context.Context, c *config.Config, configDir, projectDir string, secretReader *commandSecretReader, prompt io.Writer, command string) (listCollection, *domainAccess, error) {
 	if c == nil {
 		return listCollection{}, nil, fmt.Errorf("%s: configuration is unavailable", command)
@@ -217,8 +220,9 @@ func collectListCollectionWithSecretReader(ctx context.Context, c *config.Config
 		return listCollection{}, nil, fmt.Errorf("%s: read encrypted session metadata: %w", command, err)
 	}
 	var remoteReplicas []syncer.ProjectReplicaMetadataRef
+	hubName := configuredProjectHub(c, current.Identity.Value)
 	if command == "session list" {
-		hubScope, _, v2ProjectID, err := sessionHubAndProject(secrets.IdentifierKey, current)
+		hubScope, _, v2ProjectID, err := sessionHubAndProjectInHub(secrets.IdentifierKey, current, hubName)
 		if err != nil {
 			return listCollection{}, nil, err
 		}
@@ -237,6 +241,7 @@ func collectListCollectionWithSecretReader(ctx context.Context, c *config.Config
 	}
 	collection := listCollection{
 		current:        current,
+		hubName:        hubName,
 		identifierKey:  append([]byte(nil), secrets.IdentifierKey...),
 		projectID:      projectID,
 		localDeviceID:  c.Device.ID,

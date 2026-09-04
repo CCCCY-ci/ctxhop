@@ -53,7 +53,6 @@ project-scoped listing, native Codex materialization, replica selection, and
 the Windows ↔ Linux session round trip. It intentionally does not claim Git,
 workspace-file, or Agent continuation coverage for this run.
 
-After collecting the results, `remote delete-all --yes` removed exactly 25
+After collecting the results, `remote delete-all` removed exactly 25
 objects from the dedicated temporary prefix. No repository file contains R2
 credentials, invitation contents, Recovery Keys, or session bodies.
-

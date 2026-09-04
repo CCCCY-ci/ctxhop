@@ -17,7 +17,7 @@ rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
 build_windows_installer() {
-  local arch="$1"
+	local arch="$1"
 	local cli="dist/ctxhop_windows_${arch}.exe"
 	local stub="dist/ctxhop-installer_windows_${arch}.exe"
 	local output="$RELEASE_DIR/CtxHop-Setup_${VERSION}_windows_${arch}.exe"
@@ -30,28 +30,57 @@ build_windows_installer() {
     --pack --stub "$stub" --payload "$cli" --output "$output"
 }
 
-build_unix_zip() {
-  local os_name="$1"
-  local arch="$2"
-	local binary="dist/ctxhop_${os_name}_${arch}"
-	local archive="$RELEASE_DIR/ctxhop_${VERSION}_${os_name}_${arch}.zip"
+build_windows_zip() {
+  local arch="$1"
+  local binary="dist/ctxhop_windows_${arch}.exe"
+  local archive="$RELEASE_DIR/ctxhop_${VERSION}_windows_${arch}.zip"
   local staging
 
   staging="$(mktemp -d "${TMPDIR:-/tmp}/ctxhop-release.XXXXXX")"
-	cp "$binary" "$staging/ctxhop"
-  cp packaging/unix/install.sh LICENSE NOTICE "$staging/"
-	chmod 755 "$staging/ctxhop" "$staging/install.sh"
-	zip -q -9 -j "$archive" "$staging/ctxhop" "$staging/install.sh" "$staging/LICENSE" "$staging/NOTICE"
-  rm -rf "$staging"
+  if cp "$binary" "$staging/ctxhop.exe" && \
+    cp LICENSE "$staging/" && \
+    chmod 755 "$staging/ctxhop.exe" && \
+    zip -q -9 -j "$archive" "$staging/ctxhop.exe" "$staging/LICENSE"; then
+    :
+  else
+    rm -rf -- "$staging"
+    return 1
+  fi
+  rm -rf -- "$staging"
+}
+
+build_unix_zip() {
+  local os_name="$1"
+  local arch="$2"
+  local binary="dist/ctxhop_${os_name}_${arch}"
+  local archive="$RELEASE_DIR/ctxhop_${VERSION}_${os_name}_${arch}.zip"
+  local staging
+
+  staging="$(mktemp -d "${TMPDIR:-/tmp}/ctxhop-release.XXXXXX")"
+  # Keep the staging directory private to this package. The explicit failure
+  # path matters because set -e would otherwise leave a partial release tree
+  # behind when a copy, chmod, or archive operation fails.
+  if cp "$binary" "$staging/ctxhop" && \
+    cp packaging/unix/install.sh LICENSE "$staging/" && \
+    chmod 755 "$staging/ctxhop" "$staging/install.sh" && \
+    zip -q -9 -j "$archive" "$staging/ctxhop" "$staging/install.sh" "$staging/LICENSE"; then
+    :
+  else
+    rm -rf -- "$staging"
+    return 1
+  fi
+  rm -rf -- "$staging"
 }
 
 if ! command -v zip > /dev/null 2>&1; then
-  echo "release: zip is required to create Unix release packages" >&2
+  echo "release: zip is required to create release packages" >&2
   exit 1
 fi
 
 build_windows_installer amd64
 build_windows_installer arm64
+build_windows_zip amd64
+build_windows_zip arm64
 build_unix_zip darwin amd64
 build_unix_zip darwin arm64
 build_unix_zip linux amd64
@@ -60,6 +89,8 @@ build_unix_zip linux arm64
 expected_assets=(
 	"CtxHop-Setup_${VERSION}_windows_amd64.exe"
 	"CtxHop-Setup_${VERSION}_windows_arm64.exe"
+	"ctxhop_${VERSION}_windows_amd64.zip"
+	"ctxhop_${VERSION}_windows_arm64.zip"
 	"ctxhop_${VERSION}_darwin_amd64.zip"
 	"ctxhop_${VERSION}_darwin_arm64.zip"
 	"ctxhop_${VERSION}_linux_amd64.zip"

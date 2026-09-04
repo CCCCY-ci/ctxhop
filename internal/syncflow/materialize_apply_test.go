@@ -236,3 +236,35 @@ func TestApplyMaterializeRetainsVerifiedTargetWhenBindingCommitFails(t *testing.
 		t.Fatalf("verified target was not retained: exists=%t removes=%d", installer.exists, installer.removeCalls)
 	}
 }
+
+func TestApplyMaterializeValidatesCanonicalBoundaryAndKeepsNativeOutput(t *testing.T) {
+	preview, binding, capability := applyPreviewAndBinding(t)
+	canonicalRecords := [][]byte{
+		[]byte(`{"canonical":"one"}`),
+		[]byte(`{"canonical":"two"}`),
+	}
+	digest, err := syncer.DigestRecords(canonicalRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hexDigest := fmtDigest(digest)
+	binding.LocalSnapshot = &sessionhub.LocalSessionSnapshot{
+		RecordCount: uint64(len(canonicalRecords)),
+		HeadDigest:  hexDigest,
+	}
+	binding.Origin.ImportBoundary = &sessionhub.ImportBoundary{
+		RecordCount:  uint64(len(canonicalRecords)),
+		PrefixDigest: "sha256:" + hexDigest,
+	}
+	binding.ContributionCursor = sessionhub.ContributionCursor{EndRecord: uint64(len(canonicalRecords))}
+
+	installer := &materializeInstallerStub{}
+	request := newApplyRequest(t, installer, capability, preview, binding)
+	request.CanonicalRecords = canonicalRecords
+	if _, err := ApplyMaterialize(context.Background(), request); err != nil {
+		t.Fatalf("ApplyMaterialize() error = %v", err)
+	}
+	if !equalMaterializeRecords(installer.records, preview.EncodedRecords) {
+		t.Fatalf("installed records = %q, want native preview records %q", installer.records, preview.EncodedRecords)
+	}
+}

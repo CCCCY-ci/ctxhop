@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/project"
+	"github.com/CCCCY-ci/ctxhop/internal/remote"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
@@ -25,6 +27,7 @@ type resumeSelection struct {
 	Plan              syncflow.RestorePlan
 	Agent             adapter.AgentSessions
 	HubID             string
+	HubName           string
 	ProjectID         string
 	SessionDescriptor sessionhub.SessionDescriptor
 	ReplicaGeneration uint64
@@ -35,6 +38,12 @@ type resumeSelection struct {
 	ReplicaID         string
 	OmittedAgents     []string
 	OmittedReplicas   []string
+	SelectedHeads     []string
+	OmittedHeads      []string
+	IncludedByAgent   map[string]uint64
+	OmittedByAgent    map[string]uint64
+	UnreadableHeads   []string
+	LegacySessionID   string
 }
 
 type nativeResumeCandidate struct {
@@ -67,14 +76,14 @@ type nativeResumeSource struct {
 // Session/Agent/Replica tuple, and only then downloads the selected Replica
 // body. It is deliberately separate from the v1 resolver: a v2 native resume
 // must never combine branches from different Agents into one plan.
-func selectNativeResume(ctx context.Context, configDir string, current project.Project, identifierKey []byte, legacyGroups []syncer.ProjectMetadataRef, options resumeOptions, prompter *resumePrompter, access *domainAccess) (resumeSelection, error) {
+func selectNativeResume(ctx context.Context, configDir string, current project.Project, hubName string, identifierKey []byte, legacyGroups []syncer.ProjectMetadataRef, options resumeOptions, prompter *resumePrompter, access *domainAccess) (resumeSelection, error) {
 	if access == nil {
 		return resumeSelection{}, errors.New("resume: remote access is unavailable")
 	}
 	if options.version > 0 {
 		return resumeSelection{}, errors.New("resume: Session Hub Replica has one append-only version; --version must be zero or omitted")
 	}
-	hubScope, _, v2ProjectID, err := sessionHubAndProject(identifierKey, current)
+	hubScope, _, v2ProjectID, err := sessionHubAndProjectInHub(identifierKey, current, hubName)
 	if err != nil {
 		return resumeSelection{}, fmt.Errorf("resume: prepare Session Hub identity: %w", err)
 	}
@@ -107,11 +116,30 @@ func selectNativeResume(ctx context.Context, configDir string, current project.P
 			return resumeSelection{}, errors.New("resume: v2 mapping is rolled back locally; use the legacy resume path or publish the Session again")
 		}
 	}
-	if !candidate.HasLegacy || candidate.Summary.Fingerprint == nil {
-		return resumeSelection{}, errors.New("resume: selected Replica has no matching workspace fingerprint; push it again from the source device")
+	// A v2 descriptor carries the native ID as encrypted recovery metadata, so
+	// same-Agent resume does not depend on the legacy v1 summary being present
+	// on this device. The legacy summary is still used when available for the
+	// optional workspace/environment compatibility path.
+	if candidate.NativeID == "" {
+		candidate.NativeID = candidate.Replica.Descriptor.Source.NativeSessionID
 	}
 	if candidate.NativeID == "" {
 		return resumeSelection{}, errors.New("resume: selected Replica has no recoverable native session identity; refresh its compatibility metadata or establish a local binding")
+	}
+	if candidate.Summary.Agent == "" {
+		candidate.Summary.Agent = candidate.Replica.Descriptor.Source.Agent
+	}
+	if candidate.Summary.NativeID == "" {
+		candidate.Summary.NativeID = candidate.NativeID
+	}
+	if candidate.Summary.Title == "" && candidate.Group.SessionDescriptor != nil {
+		candidate.Summary.Title = candidate.Group.SessionDescriptor.Title
+	}
+	if candidate.Summary.CreatedAt.IsZero() {
+		candidate.Summary.CreatedAt = candidate.Replica.Descriptor.CreatedAt
+	}
+	if candidate.Summary.UpdatedAt.IsZero() && candidate.Replica.Tip != nil {
+		candidate.Summary.UpdatedAt = candidate.Replica.Tip.UpdatedAt
 	}
 
 	selectedAgent, err := selectResumeAgent(ctx, current.Root, syncflow.SessionSummary{
@@ -154,11 +182,20 @@ func selectNativeResume(ctx context.Context, configDir string, current project.P
 		return resumeSelection{}, errors.New("resume: selected Replica cursor exceeds the supported local range")
 	}
 	omittedAgents, omittedReplicas := nativeResumeOmissions(candidate.Group, candidate.Replica)
+	coverage, err := collectNativeResumeCoverage(ctx, access.Store, candidate.Replica.Layout, access.Identities, candidate.Replica)
+	if err != nil {
+		return resumeSelection{}, err
+	}
+	compatibilityGroup := candidate.LegacyGroup
+	if compatibilityGroup.SessionID == "" {
+		compatibilityGroup = syncer.ProjectMetadataRef{SessionID: candidate.Group.SessionID}
+	}
 	return resumeSelection{
-		Candidate:         resumeCandidate{Group: candidate.LegacyGroup, Summary: candidate.Summary},
+		Candidate:         resumeCandidate{Group: compatibilityGroup, Summary: candidate.Summary},
 		Plan:              plan,
 		Agent:             selectedAgent,
 		HubID:             hubScope.ID,
+		HubName:           hubName,
 		ProjectID:         v2ProjectID,
 		SessionDescriptor: sessionDescriptor,
 		ReplicaGeneration: candidate.Replica.Descriptor.Source.Generation,
@@ -172,7 +209,127 @@ func selectNativeResume(ctx context.Context, configDir string, current project.P
 		ReplicaID:       candidate.Replica.Descriptor.ReplicaID,
 		OmittedAgents:   omittedAgents,
 		OmittedReplicas: omittedReplicas,
+		SelectedHeads:   coverage.SelectedHeads,
+		OmittedHeads:    coverage.OmittedHeads,
+		IncludedByAgent: coverage.IncludedByAgent,
+		OmittedByAgent:  coverage.OmittedByAgent,
+		UnreadableHeads: coverage.UnreadableHeads,
+		LegacySessionID: func() string {
+			if candidate.HasLegacy {
+				return candidate.LegacyGroup.SessionID
+			}
+			return ""
+		}(),
 	}, nil
+}
+
+type nativeResumeCoverage struct {
+	SelectedHeads   []string
+	OmittedHeads    []string
+	IncludedByAgent map[string]uint64
+	OmittedByAgent  map[string]uint64
+	UnreadableHeads []string
+}
+
+// collectNativeResumeCoverage turns the complete logical Contribution graph
+// into the omission facts shown by resume. A selected Replica is represented
+// by its last Contribution range; every other current graph head remains
+// visible as an omission instead of being silently folded into the restore.
+func collectNativeResumeCoverage(ctx context.Context, store remote.Remote, replicaLayout syncer.ReplicaLayout, identities []*ecdh.PrivateKey, selected syncer.ReplicaMetadata) (nativeResumeCoverage, error) {
+	sessionLayout, err := replicaLayout.SessionLayout()
+	if err != nil {
+		return nativeResumeCoverage{}, err
+	}
+	contributions, err := syncer.FetchSessionContributions(ctx, store, sessionLayout, identities)
+	if errors.Is(err, syncer.ErrNoContributions) {
+		return nativeResumeCoverage{IncludedByAgent: map[string]uint64{}, OmittedByAgent: map[string]uint64{}}, nil
+	}
+	if err != nil {
+		return nativeResumeCoverage{}, fmt.Errorf("resume: read Contribution graph: %w", err)
+	}
+	graph, err := sessionhub.NewContributionGraph(selected.Descriptor.SessionID, contributions)
+	if err != nil {
+		return nativeResumeCoverage{}, fmt.Errorf("resume: build Contribution graph: %w", err)
+	}
+	selectedEnd := uint64(0)
+	selectedHeads := make([]string, 0)
+	for _, contribution := range contributions {
+		if contribution.Source.ReplicaID != selected.Descriptor.ReplicaID || contribution.Source.DeviceID != selected.Layout.DeviceID() || contribution.Source.Generation != selected.Descriptor.Source.Generation || len(contribution.Ranges) == 0 {
+			continue
+		}
+		end := contribution.Ranges[len(contribution.Ranges)-1].EndRecord
+		if selected.Tip != nil && end != selected.Tip.RecordCount {
+			continue
+		}
+		if end > selectedEnd {
+			selectedEnd = end
+			selectedHeads = selectedHeads[:0]
+		}
+		if end == selectedEnd {
+			selectedHeads = append(selectedHeads, contribution.ContributionID)
+		}
+	}
+	selectedHeads = uniqueSortedResumeStrings(selectedHeads)
+	coverage := nativeResumeCoverage{
+		SelectedHeads:   selectedHeads,
+		IncludedByAgent: map[string]uint64{},
+		OmittedByAgent:  map[string]uint64{},
+	}
+	if len(selectedHeads) == 0 {
+		for _, contribution := range contributions {
+			coverage.OmittedByAgent[contribution.Source.Agent]++
+		}
+		coverage.OmittedHeads = graph.Heads()
+		return coverage, nil
+	}
+	selectedGraph, err := graph.Select(selectedHeads...)
+	if err != nil {
+		return nativeResumeCoverage{}, fmt.Errorf("resume: select Contribution ancestry: %w", err)
+	}
+	for _, id := range selectedGraph.SelectedIDs {
+		contribution, ok := graph.Contribution(id)
+		if ok {
+			coverage.IncludedByAgent[contribution.Source.Agent]++
+		}
+	}
+	for _, id := range selectedGraph.OmittedIDs {
+		contribution, ok := graph.Contribution(id)
+		if ok {
+			coverage.OmittedByAgent[contribution.Source.Agent]++
+		}
+	}
+	for _, head := range graph.Heads() {
+		if !containsResumeString(selectedGraph.SelectedIDs, head) {
+			coverage.OmittedHeads = append(coverage.OmittedHeads, head)
+		}
+	}
+	return coverage, nil
+}
+
+func uniqueSortedResumeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func containsResumeString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // saveNativeResumeState updates the local metadata index after a successful
@@ -201,7 +358,11 @@ func saveNativeResumeState(configDir string, identifierKey []byte, identity proj
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	projectRecord, err := registry.EnsureProject(identifierKey, identityKind, identity.Identity.Value, createdAt)
+	hubName := selection.HubName
+	if hubName == "" {
+		hubName = sessionhub.DefaultHubLogicalID
+	}
+	projectRecord, err := registry.EnsureProjectInHub(identifierKey, hubName, identityKind, identity.Identity.Value, createdAt)
 	if err != nil {
 		return err
 	}
@@ -214,7 +375,7 @@ func saveNativeResumeState(configDir string, identifierKey []byte, identity proj
 	if err := registry.BindNativeSession(selection.ProjectID, selection.LogicalSession, sessionhub.NativeSessionBinding{
 		Agent:           selection.AgentName,
 		NativeSessionID: selection.Candidate.Summary.NativeID,
-		LegacySessionID: selection.Candidate.Group.SessionID,
+		LegacySessionID: selection.LegacySessionID,
 		BoundAt:         time.Now().UTC().Round(0),
 	}); err != nil {
 		return err
@@ -224,19 +385,23 @@ func saveNativeResumeState(configDir string, identifierKey []byte, identity proj
 	}
 
 	binding := sessionhub.LocalBinding{
-		Version:            sessionhub.ModelVersion,
-		HubID:              selection.HubID,
-		ProjectID:          selection.ProjectID,
-		SessionID:          selection.LogicalSession,
-		Agent:              selection.AgentName,
-		NativeSessionID:    selection.Candidate.Summary.NativeID,
-		ReplicaID:          selection.ReplicaID,
-		Generation:         selection.ReplicaGeneration,
-		ReplicaCursor:      selection.ReplicaCursor,
-		ContributionCursor: sessionhub.ContributionCursor{},
+		Version:         sessionhub.ModelVersion,
+		HubID:           selection.HubID,
+		ProjectID:       selection.ProjectID,
+		SessionID:       selection.LogicalSession,
+		Agent:           selection.AgentName,
+		NativeSessionID: selection.Candidate.Summary.NativeID,
+		ReplicaID:       selection.ReplicaID,
+		Generation:      selection.ReplicaGeneration,
+		ReplicaCursor:   selection.ReplicaCursor,
+		// The restored records are already covered by the selected source
+		// Replica. Keep that prefix out of the new device's Contribution stream;
+		// publishNativeContribution will begin at this boundary when the local
+		// Agent later appends new records.
+		ContributionCursor: sessionhub.ContributionCursor{EndRecord: selection.ReplicaCursor.RecordCount},
 		Origin: sessionhub.BindingOrigin{
 			Kind:      sessionhub.ReplicaOriginSameAgentRestore,
-			BaseHeads: []string{},
+			BaseHeads: append([]string(nil), selection.SelectedHeads...),
 		},
 	}
 	if err := sessionhub.SaveLocalBinding(configDir, binding); err != nil {
@@ -505,40 +670,16 @@ func uniqueNativeResumeAgents(candidates []nativeResumeCandidate) []string {
 }
 
 func promptNativeResumeSession(candidates []nativeResumeCandidate, sessionIDs []string, prompter *resumePrompter) (string, error) {
-	if prompter == nil {
-		return "", errors.New("resume: interactive Session selection is unavailable; specify a Session ID")
-	}
-	if _, err := fmt.Fprintln(prompter.output, "Available Session Hub sessions:"); err != nil {
-		return "", err
-	}
-	for index, sessionID := range sessionIDs {
-		var title string
-		var agents []string
-		for _, candidate := range candidates {
-			if candidate.Group.SessionID != sessionID {
-				continue
-			}
-			if title == "" && candidate.Group.SessionDescriptor != nil {
-				title = candidate.Group.SessionDescriptor.Title
-			}
-			agents = appendUnique(agents, candidate.Replica.Descriptor.Source.Agent)
-		}
-		if title == "" {
-			title = "encrypted session metadata"
-		}
-		if _, err := fmt.Fprintf(prompter.output, "  %d. %s [%s] agents=%s\n", index+1, safeListText(title), safeListText(sessionID), strings.Join(agents, ",")); err != nil {
-			return "", err
-		}
-	}
-	value, err := prompter.line("Select Session number: ")
+	selectedID, err := prompter.pickSession(nativeResumePickerItems(candidates, sessionIDs))
 	if err != nil {
 		return "", err
 	}
-	choice := 0
-	if _, scanErr := fmt.Sscanf(strings.TrimSpace(value), "%d", &choice); scanErr != nil || choice < 1 || choice > len(sessionIDs) {
-		return "", errors.New("resume: Session selection is invalid")
+	for _, sessionID := range sessionIDs {
+		if sessionID == selectedID {
+			return selectedID, nil
+		}
 	}
-	return sessionIDs[choice-1], nil
+	return "", errors.New("resume: selected Session is no longer available")
 }
 
 func nativeResumeOmissions(group syncer.ProjectReplicaMetadataRef, selected syncer.ReplicaMetadata) ([]string, []string) {

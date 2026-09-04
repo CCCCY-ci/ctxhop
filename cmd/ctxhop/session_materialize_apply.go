@@ -32,6 +32,8 @@ func materializeRequestID(hubID, projectID string, options materializeOptions) s
 		SourceAgent      string   `json:"sourceAgent"`
 		Heads            []string `json:"heads"`
 		AllowUnsupported bool     `json:"allowUnsupported"`
+		ApplyEnvironment bool     `json:"applyEnvironment"`
+		Launch           bool     `json:"launch"`
 	}{
 		HubID:            hubID,
 		ProjectID:        projectID,
@@ -41,6 +43,8 @@ func materializeRequestID(hubID, projectID string, options materializeOptions) s
 		SourceAgent:      options.sourceAgent,
 		Heads:            heads,
 		AllowUnsupported: options.allowUnsupported,
+		ApplyEnvironment: options.applyEnvironment,
+		Launch:           options.launch,
 	}
 	data, _ := json.Marshal(wire)
 	digest := sessionhub.DigestBytes(data)
@@ -70,26 +74,30 @@ func materializeStableTargetTime(transactionID string) time.Time {
 
 func applyMaterializeExecution(ctx context.Context, execution materializeExecution, output io.Writer, jsonOutput bool) error {
 	if ctx == nil {
-		return errors.New("session materialize: context is required")
+		return errors.New("session switch: context is required")
 	}
 	if execution.TransactionID == "" {
-		return errors.New("session materialize: apply transaction identity is unavailable")
+		return errors.New("session switch: apply transaction identity is unavailable")
 	}
 	installer, ok := execution.Target.Layout.(syncflow.MaterializeSessionInstaller)
 	if !ok {
-		return errors.New("session materialize: target Agent layout cannot roll back an unverified target")
+		return errors.New("session switch: target Agent layout cannot roll back an unverified target")
 	}
 
 	previewDigest, err := syncflow.DigestMaterializePreview(execution.Preview)
 	if err != nil {
-		return fmt.Errorf("session materialize: digest preview: %w", err)
+		return fmt.Errorf("session switch: digest preview: %w", err)
 	}
 	previewDigestText := hex.EncodeToString(previewDigest[:])
-	binding, err := materializeLocalBinding(execution)
+	canonicalRecords, err := canonicalizeMaterializeTarget(execution)
 	if err != nil {
-		return fmt.Errorf("session materialize: prepare local binding: %w", err)
+		return fmt.Errorf("session switch: canonicalize target output: %w", err)
 	}
-	mutationLock, err := acquireLocalMutationLock(ctx, execution.ConfigDir, "session materialize")
+	binding, err := materializeLocalBindingForRecords(execution, canonicalRecords)
+	if err != nil {
+		return fmt.Errorf("session switch: prepare local binding: %w", err)
+	}
+	mutationLock, err := acquireLocalMutationLock(ctx, execution.ConfigDir, "session switch")
 	if err != nil {
 		return err
 	}
@@ -120,14 +128,14 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 			UpdatedAt:           now,
 		}
 		if err := sessionhub.SaveMaterializeTransaction(execution.ConfigDir, transaction); err != nil {
-			return fmt.Errorf("session materialize: save prepared transaction: %w", err)
+			return fmt.Errorf("session switch: save prepared transaction: %w", err)
 		}
 	case err != nil:
-		return fmt.Errorf("session materialize: load transaction: %w", err)
+		return fmt.Errorf("session switch: load transaction: %w", err)
 	default:
 		wasCommitted = transaction.State == sessionhub.MaterializeTransactionCommitted
 		if err := validateMaterializeTransactionForRetry(transaction, execution, binding, previewDigestText); err != nil {
-			return fmt.Errorf("session materialize: transaction no longer matches the plan: %w", err)
+			return fmt.Errorf("session switch: transaction no longer matches the plan: %w", err)
 		}
 	}
 
@@ -144,9 +152,10 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 			},
 			CreatedAt: materializeStableTargetTime(execution.TransactionID),
 		},
-		Preview:       execution.Preview,
-		Binding:       binding,
-		AllowExisting: true,
+		Preview:          execution.Preview,
+		Binding:          binding,
+		CanonicalRecords: canonicalRecords,
+		AllowExisting:    true,
 	}
 	request.AfterTargetVerified = func() error {
 		if transaction.State == sessionhub.MaterializeTransactionCommitted {
@@ -160,6 +169,13 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 			return err
 		}
 		transaction = updated
+		if execution.ApplyEnvironment {
+			status, err := applyMaterializeEnvironment(execution)
+			if err != nil {
+				return err
+			}
+			execution.Report.EnvironmentStatus = status
+		}
 		return nil
 	}
 	request.CommitBinding = func() error {
@@ -168,14 +184,14 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 
 	result, err := syncflow.ApplyMaterialize(ctx, request)
 	if err != nil {
-		return fmt.Errorf("session materialize: %w", err)
+		return fmt.Errorf("session switch: %w", err)
 	}
 	updated, err := transaction.Advance(sessionhub.MaterializeTransactionCommitted, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("session materialize: mark transaction committed: %w", err)
+		return fmt.Errorf("session switch: mark transaction committed: %w", err)
 	}
 	if err := sessionhub.SaveMaterializeTransaction(execution.ConfigDir, updated); err != nil {
-		return fmt.Errorf("session materialize: mark transaction committed: %w", err)
+		return fmt.Errorf("session switch: mark transaction committed: %w", err)
 	}
 
 	report := execution.Report
@@ -189,6 +205,9 @@ func applyMaterializeExecution(ctx context.Context, execution materializeExecuti
 		report.WriteStatus = "recovered-existing-target"
 	default:
 		report.WriteStatus = "created-and-committed"
+	}
+	if execution.Launch {
+		report.LaunchStatus = launchMaterializedSession(execution)
 	}
 	if jsonOutput {
 		return writeMaterializePreviewJSON(output, report)
@@ -218,11 +237,44 @@ func validateMaterializeTransactionForRetry(transaction sessionhub.MaterializeTr
 	return nil
 }
 
+// canonicalizeMaterializeTarget produces the exact byte representation that
+// the subsequent native Replica push will publish. The target file itself is
+// still written and verified using Preview.EncodedRecords, which must remain
+// in the target Agent's native format.
+func canonicalizeMaterializeTarget(execution materializeExecution) ([][]byte, error) {
+	stream, err := syncflow.CanonicalizeSession(
+		adapter.SessionData{Records: execution.Preview.EncodedRecords},
+		adapter.PathSpace{
+			ProjectRoot: execution.ProjectRoot,
+			AgentHome:   execution.Target.Installation.DataDir,
+		},
+		execution.Target.Installation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(stream.Records) == 0 {
+		return nil, errors.New("canonical target output is empty")
+	}
+	return stream.Records, nil
+}
+
+// materializeLocalBinding retains the legacy raw-record helper for tests and
+// callers that only need to derive the target Replica identity. The apply
+// path uses materializeLocalBindingForRecords with canonical records so its
+// durable boundary matches native Replica publication.
 func materializeLocalBinding(execution materializeExecution) (sessionhub.LocalBinding, error) {
+	return materializeLocalBindingForRecords(execution, execution.Preview.EncodedRecords)
+}
+
+func materializeLocalBindingForRecords(execution materializeExecution, records [][]byte) (sessionhub.LocalBinding, error) {
 	if len(execution.Preview.SelectedHeads) == 0 {
 		return sessionhub.LocalBinding{}, errors.New("preview has no selected heads")
 	}
-	digest, err := syncer.DigestRecords(execution.Preview.EncodedRecords)
+	if len(records) == 0 {
+		return sessionhub.LocalBinding{}, errors.New("target records are empty")
+	}
+	digest, err := syncer.DigestRecords(records)
 	if err != nil {
 		return sessionhub.LocalBinding{}, fmt.Errorf("digest target records: %w", err)
 	}
@@ -237,7 +289,7 @@ func materializeLocalBinding(execution materializeExecution) (sessionhub.LocalBi
 	if err != nil {
 		return sessionhub.LocalBinding{}, fmt.Errorf("derive target Replica key: %w", err)
 	}
-	recordCount := uint64(len(execution.Preview.EncodedRecords))
+	recordCount := uint64(len(records))
 	return sessionhub.LocalBinding{
 		Version:         sessionhub.ModelVersion,
 		HubID:           execution.HubID,
@@ -278,7 +330,11 @@ func commitMaterializeBinding(execution materializeExecution, binding sessionhub
 		return err
 	}
 	now := time.Now().UTC().Round(0)
-	projectRecord, err := registry.EnsureProject(execution.IdentifierKey, execution.IdentityKind, execution.IdentityValue, now)
+	hubName := execution.HubName
+	if hubName == "" {
+		hubName = sessionhub.DefaultHubLogicalID
+	}
+	projectRecord, err := registry.EnsureProjectInHub(execution.IdentifierKey, hubName, execution.IdentityKind, execution.IdentityValue, now)
 	if err != nil {
 		return err
 	}

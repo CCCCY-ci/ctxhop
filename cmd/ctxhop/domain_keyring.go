@@ -102,10 +102,9 @@ func openDomainForRead(ctx context.Context, c *config.Config, configDir string, 
 	return openDomainForReadWithSecretReader(ctx, c, configDir, newCommandSecretReader(input), prompt, command)
 }
 
-// openDomainForReadWithSecretReader keeps the buffered input alive for a
-// caller that needs to ask a second confirmation after unlocking the domain.
-// Without this boundary, the passphrase reader can consume a following
-// confirmation line into a discarded bufio buffer.
+// openDomainForReadWithSecretReader keeps the buffered input alive across the
+// complete authenticated read operation. This avoids losing buffered input
+// when a caller performs more than one secret read.
 func openDomainForReadWithSecretReader(ctx context.Context, c *config.Config, configDir string, secretReader *commandSecretReader, prompt io.Writer, command string) (*domainAccess, error) {
 	store, keyfile, err := openDeviceRemote(ctx, c, configDir, command)
 	if err != nil {

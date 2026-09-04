@@ -220,6 +220,10 @@ func readInstallerPayload() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readInstallerPayloadPath(executable)
+}
+
+func readInstallerPayloadPath(executable string) ([]byte, error) {
 	file, err := os.Open(executable)
 	if err != nil {
 		return nil, err

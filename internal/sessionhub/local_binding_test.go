@@ -42,3 +42,43 @@ func TestLoadLocalBindingValidatesLookupIdentityAndMissingState(t *testing.T) {
 		t.Fatalf("unsafe lookup error = %v, want ErrInvalidIdentity", err)
 	}
 }
+
+func TestFindLocalBindingByNativeSession(t *testing.T) {
+	root := t.TempDir()
+	binding := testMaterializedBinding()
+	binding.Origin = BindingOrigin{
+		Kind:      ReplicaOriginSameAgentRestore,
+		BaseHeads: []string{"head"},
+	}
+	if err := SaveLocalBinding(root, binding); err != nil {
+		t.Fatal(err)
+	}
+	found, err := FindLocalBindingByNativeSession(root, binding.HubID, binding.ProjectID, binding.SessionID, binding.Agent, binding.NativeSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.ReplicaID != binding.ReplicaID || found.NativeSessionID != binding.NativeSessionID {
+		t.Fatalf("found binding = %+v, want %+v", found, binding)
+	}
+	if _, err := FindLocalBindingByNativeSession(root, binding.HubID, binding.ProjectID, binding.SessionID, binding.Agent, "other-native"); !errors.Is(err, ErrLocalBindingNotFound) {
+		t.Fatalf("missing native binding error = %v, want ErrLocalBindingNotFound", err)
+	}
+}
+
+func TestFindLocalBindingByNativeSessionRejectsAmbiguousState(t *testing.T) {
+	root := t.TempDir()
+	first := testMaterializedBinding()
+	first.Origin = BindingOrigin{Kind: ReplicaOriginSameAgentRestore, BaseHeads: []string{"head"}}
+	second := first
+	second.ReplicaID = "replica2"
+	if err := SaveLocalBinding(root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveLocalBinding(root, second); err != nil {
+		t.Fatal(err)
+	}
+	_, err := FindLocalBindingByNativeSession(root, first.HubID, first.ProjectID, first.SessionID, first.Agent, first.NativeSessionID)
+	if !errors.Is(err, ErrInvalidModel) {
+		t.Fatalf("ambiguous binding error = %v, want ErrInvalidModel", err)
+	}
+}

@@ -101,10 +101,15 @@ type SessionDescriptor struct {
 type NativeSource struct {
 	Agent            string `json:"agent"`
 	NativeSessionKey string `json:"nativeSessionKey"`
-	DeviceID         string `json:"deviceId"`
-	Generation       uint64 `json:"generation"`
-	NativeFormat     string `json:"nativeFormat"`
-	AgentVersion     string `json:"agentVersion,omitempty"`
+	// NativeSessionID is encrypted recovery metadata. It is never used in an
+	// object path or an unauthenticated diagnostic, but a device that has not
+	// seen the source session locally still needs the Agent-native ID to create
+	// a safe same-Agent restore target.
+	NativeSessionID string `json:"nativeSessionId,omitempty"`
+	DeviceID        string `json:"deviceId"`
+	Generation      uint64 `json:"generation"`
+	NativeFormat    string `json:"nativeFormat"`
+	AgentVersion    string `json:"agentVersion,omitempty"`
 }
 
 // ReplicaOrigin records non-content provenance for a NativeReplica.

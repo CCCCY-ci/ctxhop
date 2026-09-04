@@ -138,7 +138,7 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 		return sessionMigrationReport{}, err
 	}
 	defer access.close()
-	hubScope, projectScope, v2ProjectID, err := sessionHubAndProject(collection.identifierKey, collection.current)
+	hubScope, projectScope, v2ProjectID, err := sessionHubAndProjectInHub(collection.identifierKey, collection.current, collection.hubName)
 	if err != nil {
 		return sessionMigrationReport{}, err
 	}
@@ -182,23 +182,6 @@ func collectSessionMigrationWithPrompt(ctx context.Context, c *config.Config, co
 	report := buildSessionMigrationReport(hubScope, projectScope, candidates, ledgers, corrupt, ledgerWarnings, options)
 	if options.preview || len(candidates) == 0 {
 		return report, nil
-	}
-
-	if options.publishV2 || options.rollback {
-		if !options.yes {
-			var confirmed bool
-			if options.publishV2 {
-				confirmed, err = confirmLegacyMigrationPublish(secretReader.lines, prompt, candidates[0], publishSource)
-			} else {
-				confirmed, err = confirmLegacyMigrationRollback(secretReader.lines, prompt, candidates[0])
-			}
-			if err != nil {
-				return sessionMigrationReport{}, err
-			}
-			if !confirmed {
-				return sessionMigrationReport{}, errors.New("session migrate: cancelled")
-			}
-		}
 	}
 
 	if options.rollback {
@@ -586,7 +569,7 @@ func applyLazyLegacyMigration(configDir string, collection listCollection, hubSc
 	if collection.current.Identity.Kind == project.KindManual {
 		identityKind = sessionhub.ProjectIdentityManual
 	}
-	if _, err := registry.EnsureProject(collection.identifierKey, identityKind, collection.current.Identity.Value, time.Now().UTC()); err != nil {
+	if _, err := registry.EnsureProjectInHub(collection.identifierKey, hubScope.Name, identityKind, collection.current.Identity.Value, time.Now().UTC()); err != nil {
 		return nil, false, false, fmt.Errorf("session migrate: create local Project mapping: %w", err)
 	}
 	beforeRegistry, err := registry.MarshalBinary()

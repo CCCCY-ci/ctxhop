@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 )
 
@@ -17,29 +18,33 @@ func DigestMaterializePreview(preview MaterializePreview) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	wire := struct {
-		Coverage             sessionhub.Coverage        `json:"coverage"`
-		SelectedHeads        []string                   `json:"selectedHeads"`
-		Sources              []MaterializeSourceSummary `json:"sources"`
-		TargetAgent          string                     `json:"targetAgent"`
-		TargetNativeID       string                     `json:"targetNativeId"`
-		SourceViewVersion    int                        `json:"sourceViewVersion"`
-		TargetAdapterVersion string                     `json:"targetAdapterVersion"`
-		SelectedRecordCount  uint64                     `json:"selectedRecordCount"`
-		ContextItems         int                        `json:"contextItems"`
-		Stats                adapter.MaterializeStats   `json:"stats"`
-		EncodedRecords       [][]byte                   `json:"encodedRecords"`
+		Coverage              sessionhub.Coverage        `json:"coverage"`
+		SelectedHeads         []string                   `json:"selectedHeads"`
+		Sources               []MaterializeSourceSummary `json:"sources"`
+		TargetAgent           string                     `json:"targetAgent"`
+		TargetNativeID        string                     `json:"targetNativeId"`
+		SourceViewVersion     int                        `json:"sourceViewVersion"`
+		TargetAdapterVersion  string                     `json:"targetAdapterVersion"`
+		SourceSnapshotDigest  string                     `json:"sourceSnapshotDigest,omitempty"`
+		SelectedRecordCount   uint64                     `json:"selectedRecordCount"`
+		ContextItems          int                        `json:"contextItems"`
+		Stats                 adapter.MaterializeStats   `json:"stats"`
+		EnvironmentComponents []environment.Component    `json:"environmentComponents,omitempty"`
+		EncodedRecords        [][]byte                   `json:"encodedRecords"`
 	}{
-		Coverage:             cloneMaterializeCoverage(preview.Coverage),
-		SelectedHeads:        append([]string(nil), preview.SelectedHeads...),
-		Sources:              append([]MaterializeSourceSummary(nil), preview.Sources...),
-		TargetAgent:          preview.TargetAgent,
-		TargetNativeID:       preview.TargetNativeID,
-		SourceViewVersion:    preview.SourceViewVersion,
-		TargetAdapterVersion: preview.TargetAdapterVersion,
-		SelectedRecordCount:  preview.SelectedRecordCount,
-		ContextItems:         preview.ContextItems,
-		Stats:                preview.Stats,
-		EncodedRecords:       cloneMaterializeRecords(preview.EncodedRecords),
+		Coverage:              cloneMaterializeCoverage(preview.Coverage),
+		SelectedHeads:         append([]string(nil), preview.SelectedHeads...),
+		Sources:               append([]MaterializeSourceSummary(nil), preview.Sources...),
+		TargetAgent:           preview.TargetAgent,
+		TargetNativeID:        preview.TargetNativeID,
+		SourceViewVersion:     preview.SourceViewVersion,
+		TargetAdapterVersion:  preview.TargetAdapterVersion,
+		SourceSnapshotDigest:  preview.SourceSnapshotDigest,
+		SelectedRecordCount:   preview.SelectedRecordCount,
+		ContextItems:          preview.ContextItems,
+		Stats:                 preview.Stats,
+		EnvironmentComponents: append([]environment.Component(nil), preview.EnvironmentComponents...),
+		EncodedRecords:        cloneMaterializeRecords(preview.EncodedRecords),
 	}
 	data, err := json.Marshal(wire)
 	if err != nil {

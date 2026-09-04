@@ -32,13 +32,12 @@ func TestParseMaterializeOptionsAcceptsDocumentedPositionalForm(t *testing.T) {
 	}
 }
 
-func TestParseMaterializeOptionsAcceptsExplicitApply(t *testing.T) {
+func TestParseMaterializeOptionsDefaultsToDirectExecution(t *testing.T) {
 	options, err := parseMaterializeOptions([]string{
 		"logical-session",
 		"--to", "codex",
 		"--context", "causal-head",
 		"--head", "contribution-head",
-		"--apply",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,24 +65,6 @@ func TestParseMaterializeOptionsValidatesContextSelectors(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
-	}
-}
-
-func TestRunSessionMaterializeRequiresExplicitPreviewBeforeConfigAccess(t *testing.T) {
-	_, err := parseMaterializeOptions([]string{"session", "--to", "codex"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = runSessionMaterializeWithStreams([]string{"session", "--to", "codex"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "pass --preview") {
-		t.Fatalf("run error = %v, want explicit preview guard", err)
-	}
-}
-
-func TestRunSessionMaterializeRejectsPreviewAndApplyTogether(t *testing.T) {
-	err := runSessionMaterializeWithStreams([]string{"session", "--to", "codex", "--preview", "--apply"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "exactly one") {
-		t.Fatalf("run error = %v, want exclusive action error", err)
 	}
 }
 

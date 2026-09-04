@@ -17,11 +17,13 @@ import (
 const sessionCommandTimeout = 30 * time.Second
 
 const (
-	sessionActionDiscover = "discover"
-	sessionActionList     = "list"
-	sessionActionMigrate  = "migrate"
-	sessionActionShow     = "show"
-	sessionActionResume   = "resume"
+	sessionActionDiscover  = "discover"
+	sessionActionList      = "list"
+	sessionActionMigrate   = "migrate"
+	sessionActionShow      = "show"
+	sessionActionResume    = "resume"
+	sessionActionAttach    = "attach"
+	sessionActionReconcile = "reconcile"
 )
 
 type sessionOptions struct {
@@ -31,7 +33,10 @@ type sessionOptions struct {
 	preview   bool
 	publishV2 bool
 	rollback  bool
-	yes       bool
+	agent     string
+	nativeID  string
+	asRoot    bool
+	parent    string
 }
 
 type sessionShowReport struct {
@@ -50,6 +55,9 @@ func init() {
 }
 
 func runSession(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveSessionMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runSessionWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
@@ -58,14 +66,14 @@ func runSessionWithIO(args []string, output io.Writer) error {
 }
 
 func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
-	// `session resume` is the v2 spelling of the same operation exposed by the
-	// historical top-level `resume` command. Dispatch before parsing the
+	// `session resume` is the nested spelling of the same operation exposed by
+	// the historical top-level `resume` command. Dispatch before parsing the
 	// metadata-only session subcommands so all resume flags remain owned by one
 	// parser and both entry points have identical safety semantics.
 	if len(args) != 0 && args[0] == sessionActionResume {
-		return runResumeWithStreams(args[1:], input, output, prompt)
+		return runResumeWithStreamsMode(args[1:], input, output, prompt, true)
 	}
-	if len(args) != 0 && args[0] == sessionActionMaterialize {
+	if len(args) != 0 && args[0] == sessionActionSwitch {
 		return runSessionMaterializeWithStreams(args[1:], input, output, prompt)
 	}
 	options, err := parseSessionOptions(args)
@@ -112,6 +120,24 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 			return writeSessionMigrationJSON(output, report)
 		}
 		return writeSessionMigrationText(output, report)
+	case sessionActionAttach:
+		report, err := collectSessionAttach(ctx, c, configDir, ".", options, input, prompt)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeSessionAttachJSON(output, report)
+		}
+		return writeSessionAttachText(output, report)
+	case sessionActionReconcile:
+		report, err := collectSessionReconcile(ctx, c, configDir, ".", options, input, prompt)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeSessionReconcileJSON(output, report)
+		}
+		return writeSessionReconcileText(output, report)
 	case sessionActionList, sessionActionShow:
 		report, err := collectSessionListWithPrompt(ctx, c, configDir, ".", input, prompt)
 		if err != nil {
@@ -131,7 +157,7 @@ func runSessionWithStreams(args []string, input io.Reader, output, prompt io.Wri
 
 func parseSessionOptions(args []string) (sessionOptions, error) {
 	if len(args) == 0 {
-		return sessionOptions{}, errors.New("session: expected discover, list, migrate, show, materialize, or resume")
+		return sessionOptions{}, errors.New("session: expected discover, list, migrate, show, attach, reconcile, switch, or resume")
 	}
 
 	options := sessionOptions{action: args[0]}
@@ -141,9 +167,8 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 	flagArgs := args[1:]
 	if options.action == sessionActionMigrate {
 		flags.BoolVar(&options.preview, "preview", false, "show a read-only migration plan")
-		flags.BoolVar(&options.publishV2, "publish-v2", false, "publish the selected legacy branch as a v2 Replica")
-		flags.BoolVar(&options.rollback, "rollback", false, "stop using the v2 mapping and prefer the v1 compatibility reader")
-		flags.BoolVar(&options.yes, "yes", false, "skip the migration confirmation prompt")
+		flags.BoolVar(&options.publishV2, "publish-v2", false, "publish the selected legacy branch as a Replica")
+		flags.BoolVar(&options.rollback, "rollback", false, "select the legacy compatibility reader")
 	}
 	if options.action == sessionActionShow || options.action == sessionActionMigrate {
 		// The standard flag package stops parsing at the first positional
@@ -151,6 +176,15 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 		// `show <session> --json` (and the corresponding migrate forms) by
 		// moving flags ahead of the selector.
 		flagArgs = reorderSessionShowArgs(flagArgs)
+	}
+	if options.action == sessionActionAttach || options.action == sessionActionReconcile {
+		flags.StringVar(&options.agent, "agent", "", "local Agent owning the native session")
+		flags.StringVar(&options.nativeID, "native", "", "local Agent-native session ID")
+		if options.action == sessionActionAttach {
+			flags.BoolVar(&options.asRoot, "as-root", false, "attach the native session as a new root")
+			flags.StringVar(&options.parent, "parent", "", "attach after this Contribution head")
+		}
+		flagArgs = reorderSessionIdentityArgs(flagArgs)
 	}
 	if err := flags.Parse(flagArgs); err != nil {
 		return sessionOptions{}, fmt.Errorf("session %s: %w", options.action, err)
@@ -181,14 +215,41 @@ func parseSessionOptions(args []string) (sessionOptions, error) {
 		if options.publishV2 && options.rollback {
 			return sessionOptions{}, errors.New("session migrate: --publish-v2 and --rollback cannot be used together")
 		}
-		if options.yes && !options.publishV2 && !options.rollback {
-			return sessionOptions{}, errors.New("session migrate: --yes requires --publish-v2 or --rollback")
+	case sessionActionAttach:
+		if flags.NArg() != 1 {
+			return sessionOptions{}, errors.New("session attach: expected exactly one logical Session ID")
 		}
-		if options.preview && options.yes {
-			return sessionOptions{}, errors.New("session migrate: --yes cannot be used with --preview")
+		options.sessionID = flags.Arg(0)
+		if strings.TrimSpace(options.sessionID) == "" || strings.ContainsRune(options.sessionID, 0) {
+			return sessionOptions{}, errors.New("session attach: Session ID is empty or invalid")
+		}
+		if strings.TrimSpace(options.agent) == "" {
+			return sessionOptions{}, errors.New("session attach: --agent is required")
+		}
+		if strings.TrimSpace(options.nativeID) == "" {
+			return sessionOptions{}, errors.New("session attach: --native is required")
+		}
+		if options.asRoot == (strings.TrimSpace(options.parent) == "") {
+			return sessionOptions{}, errors.New("session attach: choose exactly one of --as-root or --parent")
+		}
+	case sessionActionReconcile:
+		if flags.NArg() != 0 {
+			return sessionOptions{}, fmt.Errorf("session reconcile: unexpected argument %q", flags.Arg(0))
+		}
+		if strings.TrimSpace(options.agent) == "" {
+			return sessionOptions{}, errors.New("session reconcile: --agent is required")
+		}
+		if strings.TrimSpace(options.nativeID) == "" {
+			return sessionOptions{}, errors.New("session reconcile: --native is required")
 		}
 	default:
-		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, migrate, show, materialize, or resume", options.action)
+		return sessionOptions{}, fmt.Errorf("session: unsupported action %q; expected discover, list, migrate, show, attach, reconcile, switch, or resume", options.action)
+	}
+	options.agent = strings.ToLower(strings.TrimSpace(options.agent))
+	options.nativeID = strings.TrimSpace(options.nativeID)
+	options.parent = strings.TrimSpace(options.parent)
+	if strings.ContainsRune(options.agent, 0) || strings.ContainsRune(options.nativeID, 0) || strings.ContainsRune(options.parent, 0) {
+		return sessionOptions{}, errors.New("session: identity contains an invalid character")
 	}
 	return options, nil
 }
@@ -209,12 +270,51 @@ func reorderSessionShowArgs(args []string) []string {
 	return append(flags, positionals...)
 }
 
+// reorderSessionIdentityArgs accepts both documented positional-first and
+// flag-first spellings for attach/reconcile while keeping values attached to
+// their flags. A plain "move every dash-prefixed token" pass would turn
+// `--agent codex <id>` into `--agent <id> codex`, silently binding the wrong
+// native session.
+func reorderSessionIdentityArgs(args []string) []string {
+	valueFlags := map[string]struct{}{
+		"-agent":   {},
+		"--agent":  {},
+		"-native":  {},
+		"--native": {},
+		"-parent":  {},
+		"--parent": {},
+	}
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			positionals = append(positionals, args[index+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		name := arg
+		if equal := strings.IndexByte(name, '='); equal >= 0 {
+			name = name[:equal]
+		}
+		if _, takesValue := valueFlags[name]; takesValue && !strings.ContainsRune(arg, '=') && index+1 < len(args) {
+			index++
+			flags = append(flags, args[index])
+		}
+	}
+	return append(flags, positionals...)
+}
+
 func collectSessionListWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, input io.Reader, prompt io.Writer) (sessionListReport, error) {
 	collection, err := collectListCollection(ctx, c, configDir, projectDir, input, prompt, "session list")
 	if err != nil {
 		return sessionListReport{}, err
 	}
-	hubScope, _, _, err := sessionHubAndProject(collection.identifierKey, collection.current)
+	hubScope, _, _, err := sessionHubAndProjectForConfig(collection.identifierKey, collection.current, c)
 	if err != nil {
 		return sessionListReport{}, err
 	}
@@ -250,7 +350,7 @@ func collectSessionDiscover(ctx context.Context, c *config.Config, configDir, pr
 	if err != nil {
 		return sessionDiscoverReport{}, fmt.Errorf("session discover: load local sync material: %w", err)
 	}
-	hubScope, _, _, err := sessionHubAndProject(secrets.IdentifierKey, current)
+	hubScope, _, _, err := sessionHubAndProjectForConfig(secrets.IdentifierKey, current, c)
 	if err != nil {
 		return sessionDiscoverReport{}, err
 	}
@@ -262,7 +362,7 @@ func collectSessionDiscover(ctx context.Context, c *config.Config, configDir, pr
 	if err != nil {
 		return sessionDiscoverReport{}, fmt.Errorf("session discover: %w", err)
 	}
-	return buildSessionDiscoverReport(secrets.IdentifierKey, current, refs, registry)
+	return buildSessionDiscoverReport(secrets.IdentifierKey, current, configuredProjectHub(c, current.Identity.Value), refs, registry)
 }
 
 func writeSessionListJSON(w io.Writer, report sessionListReport) error {
@@ -324,7 +424,7 @@ func writeSessionShow(w io.Writer, report sessionListReport, sessionID string, j
 				return err
 			}
 			if source.NativeID != "" {
-				if _, err := fmt.Fprintf(w, " native=%s", safeListText(source.NativeID)); err != nil {
+				if _, err := fmt.Fprintf(w, " native=%s", shortNativeSessionID(source.NativeID)); err != nil {
 					return err
 				}
 			}

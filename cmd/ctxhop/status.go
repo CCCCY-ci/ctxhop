@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -87,9 +88,22 @@ func init() {
 }
 
 func runStatus(args []string) error {
+	return runStatusWithStreams(args, os.Stdin, os.Stdout, os.Stderr)
+}
+
+func runStatusWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
 	options, err := parseStatusOptions(args)
 	if err != nil {
 		return err
+	}
+	if output == nil {
+		return errors.New("status: output is required")
+	}
+	if input == nil {
+		return errors.New("status: input is required")
+	}
+	if prompt == nil {
+		return errors.New("status: prompt output is required")
 	}
 
 	dir, err := config.Dir()
@@ -108,16 +122,16 @@ func runStatus(args []string) error {
 	if options.remote {
 		ctx, cancel := context.WithTimeout(context.Background(), statusRemoteTimeout)
 		defer cancel()
-		checked, err := collectRemoteStatus(ctx, c, dir, ".", os.Stdin, os.Stderr)
+		checked, err := collectRemoteStatus(ctx, c, dir, ".", input, prompt)
 		if err != nil {
 			return err
 		}
 		report.Sync = &checked
 	}
 	if options.json {
-		return writeStatusJSON(os.Stdout, report)
+		return writeStatusJSON(output, report)
 	}
-	return writeStatusText(os.Stdout, report)
+	return writeStatusText(output, report)
 }
 
 func parseStatusOptions(args []string) (statusOptions, error) {

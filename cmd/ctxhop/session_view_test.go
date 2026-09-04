@@ -135,6 +135,7 @@ func TestBuildSessionListProjectsRemoteNativeReplicaMetadata(t *testing.T) {
 			Source: sessionhub.NativeSource{
 				Agent:            "codex",
 				NativeSessionKey: "nativekey01",
+				NativeSessionID:  "native-remote-session-that-is-recoverable",
 				DeviceID:         "device02",
 				Generation:       1,
 				NativeFormat:     "codex-jsonl",
@@ -165,7 +166,7 @@ func TestBuildSessionListProjectsRemoteNativeReplicaMetadata(t *testing.T) {
 		t.Fatalf("sources = %+v", report.Sessions[0].Sources)
 	}
 	source := report.Sessions[0].Sources[0]
-	if source.Agent != "codex" || source.NativeSessionKey != "nativekey01" || source.DeviceID != "device02" || !source.Complete || source.RecordCount != 7 {
+	if source.Agent != "codex" || source.NativeID != "native-remote-session-that-is-recoverable" || source.NativeSessionKey != "nativekey01" || source.DeviceID != "device02" || !source.Complete || source.RecordCount != 7 {
 		t.Fatalf("remote Replica source = %+v", source)
 	}
 }
@@ -240,6 +241,62 @@ func TestWriteSessionListTextShowsAgentAndDeviceSource(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output = %q, missing %q", text, want)
 		}
+	}
+}
+
+func TestHumanSessionViewsShortenNativeIDs(t *testing.T) {
+	const nativeID = "native-session-identifier-that-should-not-be-printed-in-full"
+	report := sessionListReport{
+		Scope:   "project",
+		Hub:     sessionHubScope{ID: "hub01", Name: "default"},
+		Project: sessionProjectScope{ID: "project01"},
+		Sessions: []sessionListEntry{{
+			SessionID: "session01",
+			Sources:   []sessionSourceEntry{{Agent: "codex", NativeID: nativeID, DeviceID: "device01", Local: true}},
+		}},
+	}
+
+	var listOutput bytes.Buffer
+	if err := writeSessionListText(&listOutput, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(listOutput.String(), nativeID) {
+		t.Fatalf("list output leaked full native ID: %q", listOutput.String())
+	}
+	if !strings.Contains(listOutput.String(), "codex:…ted-in-full@local") {
+		t.Fatalf("list output did not include the native ID suffix: %q", listOutput.String())
+	}
+
+	var showOutput bytes.Buffer
+	if err := writeSessionShow(&showOutput, report, "session01", false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(showOutput.String(), nativeID) {
+		t.Fatalf("show output leaked full native ID: %q", showOutput.String())
+	}
+	if !strings.Contains(showOutput.String(), "native=…ted-in-full") {
+		t.Fatalf("show output did not include the native ID suffix: %q", showOutput.String())
+	}
+
+	var discoverOutput bytes.Buffer
+	if err := writeSessionDiscoverText(&discoverOutput, sessionDiscoverReport{
+		Scope:          "project",
+		Hub:            report.Hub,
+		Project:        report.Project,
+		NativeSessions: []sessionDiscoverEntry{{Agent: "codex", NativeID: nativeID, State: "unbound"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(discoverOutput.String(), nativeID) {
+		t.Fatalf("discover output leaked full native ID: %q", discoverOutput.String())
+	}
+
+	var jsonOutput bytes.Buffer
+	if err := writeSessionListJSON(&jsonOutput, report); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOutput.String(), nativeID) {
+		t.Fatalf("authorized JSON output lost the full native ID: %q", jsonOutput.String())
 	}
 }
 

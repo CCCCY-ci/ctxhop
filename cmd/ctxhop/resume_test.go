@@ -31,9 +31,6 @@ func TestParseResumeOptionsUsesPreviewAndWorkspaceScopes(t *testing.T) {
 	if !options.preview || !options.workspace || options.session != "native-session" {
 		t.Fatalf("options = %+v", options)
 	}
-	if _, err := parseResumeOptions([]string{"--apply", "native-session"}); err == nil {
-		t.Fatal("resume accepted the removed --apply flag")
-	}
 	options, err = parseResumeOptions([]string{"logical-session", "--agent", " claude-code ", "--replica=replica-1"})
 	if err != nil {
 		t.Fatal(err)

@@ -12,13 +12,14 @@ import (
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
 	"github.com/CCCCY-ci/ctxhop/internal/config"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
 	"github.com/CCCCY-ci/ctxhop/internal/syncflow"
 )
 
 const (
-	sessionActionMaterialize  = "materialize"
+	sessionActionSwitch       = "switch"
 	materializeCommandTimeout = 10 * time.Minute
 	materializeContextCausal  = string(syncflow.MaterializeContextCausalHead)
 	materializeContextAll     = string(syncflow.MaterializeContextAllHeads)
@@ -26,9 +27,13 @@ const (
 )
 
 type materializeOptions struct {
-	json             bool
-	preview          bool
+	json    bool
+	preview bool
+	// apply is derived from preview. There is no public apply flag: a switch
+	// executes by default, while --preview is the explicit read-only mode.
 	apply            bool
+	applyEnvironment bool
+	launch           bool
 	targetAgent      string
 	contextPolicy    string
 	heads            []string
@@ -78,10 +83,13 @@ type materializePreviewReport struct {
 	TargetAgent          string                              `json:"targetAgent"`
 	TargetNativeID       string                              `json:"targetNativeId"`
 	TargetAdapterVersion string                              `json:"targetAdapterVersion"`
+	SourceSnapshotDigest string                              `json:"sourceSnapshotDigest,omitempty"`
 	SelectedRecordCount  uint64                              `json:"selectedRecordCount"`
 	ContextItems         int                                 `json:"contextItems"`
 	Stats                adapter.MaterializeStats            `json:"stats"`
 	WriteStatus          string                              `json:"writeStatus"`
+	EnvironmentStatus    string                              `json:"environmentStatus,omitempty"`
+	LaunchStatus         string                              `json:"launchStatus,omitempty"`
 }
 
 func runSessionMaterializeWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
@@ -90,19 +98,22 @@ func runSessionMaterializeWithStreams(args []string, input io.Reader, output, pr
 		return err
 	}
 	if input == nil {
-		return errors.New("session materialize: input is required")
+		return errors.New("session switch: input is required")
 	}
 	if output == nil {
-		return errors.New("session materialize: output is required")
+		return errors.New("session switch: output is required")
 	}
 	if prompt == nil {
-		return errors.New("session materialize: prompt output is required")
+		return errors.New("session switch: prompt output is required")
 	}
-	if options.preview && options.apply {
-		return errors.New("session materialize: choose exactly one of --preview or --apply")
+	if options.allowUnsupported && !options.preview {
+		return errors.New("session switch: --allow-unsupported is only available for a diagnostic --preview")
 	}
-	if !options.preview && !options.apply {
-		return errors.New("session materialize: pass --preview for a read-only plan or --apply to create a target session")
+	if options.applyEnvironment && !options.apply {
+		return errors.New("session switch: --with-environment requires an executing switch")
+	}
+	if options.launch && !options.apply {
+		return errors.New("session switch: --launch requires an executing switch")
 	}
 
 	configDir, err := config.Dir()
@@ -131,55 +142,66 @@ func runSessionMaterializeWithStreams(args []string, input io.Reader, output, pr
 }
 
 func parseMaterializeOptions(args []string) (materializeOptions, error) {
-	flags := flag.NewFlagSet("session materialize", flag.ContinueOnError)
+	flags := flag.NewFlagSet("session switch", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options materializeOptions
 	var heads materializeHeadFlag
 	flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
-	flags.BoolVar(&options.preview, "preview", false, "show the materialization without changing local files")
-	flags.BoolVar(&options.apply, "apply", false, "create a new target-native session and local binding")
+	flags.BoolVar(&options.preview, "preview", false, "show the switch plan without changing local files")
+	flags.BoolVar(&options.applyEnvironment, "with-environment", false, "include portable environment components in the switch")
+	flags.BoolVar(&options.launch, "launch", false, "launch the target Agent after the switch")
 	flags.StringVar(&options.targetAgent, "to", "", "target Agent, for example codex or claude-code")
 	flags.StringVar(&options.contextPolicy, "context", materializeContextCausal, "context policy: causal-head, all-heads, or agent-only")
 	flags.Var(&heads, "head", "Contribution head; repeat for an explicit head set")
 	flags.StringVar(&options.sourceAgent, "source", "", "source Agent for the agent-only policy")
 	flags.BoolVar(&options.allowUnsupported, "allow-unsupported", false, "allow a diagnostic preview when source records are omitted")
 	if err := flags.Parse(normalizeMaterializeArgs(args)); err != nil {
-		return materializeOptions{}, fmt.Errorf("session materialize: %w", err)
+		return materializeOptions{}, fmt.Errorf("session switch: %w", err)
 	}
+	options.apply = !options.preview
 	if flags.NArg() != 1 {
-		return materializeOptions{}, errors.New("session materialize: expected exactly one logical Session ID")
+		return materializeOptions{}, errors.New("session switch: expected exactly one logical Session ID")
 	}
 	options.sessionID = flags.Arg(0)
 	if strings.TrimSpace(options.sessionID) == "" || strings.ContainsRune(options.sessionID, 0) {
-		return materializeOptions{}, errors.New("session materialize: Session ID is empty or invalid")
+		return materializeOptions{}, errors.New("session switch: Session ID is empty or invalid")
 	}
 	options.targetAgent = strings.TrimSpace(options.targetAgent)
 	if options.targetAgent == "" {
-		return materializeOptions{}, errors.New("session materialize: --to is required")
+		return materializeOptions{}, errors.New("session switch: --to is required")
 	}
 	options.contextPolicy = strings.TrimSpace(options.contextPolicy)
 	if options.contextPolicy == "" {
-		return materializeOptions{}, errors.New("session materialize: --context cannot be empty")
+		return materializeOptions{}, errors.New("session switch: --context cannot be empty")
 	}
 	options.sourceAgent = strings.TrimSpace(options.sourceAgent)
 	options.heads = append([]string(nil), heads...)
 	if options.sourceAgent != "" && options.contextPolicy != materializeContextAgent {
-		return materializeOptions{}, errors.New("session materialize: --source is only valid with --context agent-only")
+		return materializeOptions{}, errors.New("session switch: --source is only valid with --context agent-only")
 	}
 	if len(options.heads) != 0 && options.contextPolicy != materializeContextCausal {
-		return materializeOptions{}, errors.New("session materialize: --head is only valid with --context causal-head")
+		return materializeOptions{}, errors.New("session switch: --head is only valid with --context causal-head")
 	}
 	if options.contextPolicy == materializeContextAgent && options.sourceAgent == "" {
-		return materializeOptions{}, errors.New("session materialize: --source is required with --context agent-only")
+		return materializeOptions{}, errors.New("session switch: --source is required with --context agent-only")
 	}
 	if options.contextPolicy != materializeContextCausal && options.contextPolicy != materializeContextAll && options.contextPolicy != materializeContextAgent {
-		return materializeOptions{}, fmt.Errorf("session materialize: unsupported --context %q", options.contextPolicy)
+		return materializeOptions{}, fmt.Errorf("session switch: unsupported --context %q", options.contextPolicy)
+	}
+	if options.allowUnsupported && !options.preview {
+		return materializeOptions{}, errors.New("session switch: --allow-unsupported is only available for a diagnostic --preview")
+	}
+	if options.applyEnvironment && !options.apply {
+		return materializeOptions{}, errors.New("session switch: --with-environment requires an executing switch")
+	}
+	if options.launch && !options.apply {
+		return materializeOptions{}, errors.New("session switch: --launch requires an executing switch")
 	}
 	return options, nil
 }
 
 // normalizeMaterializeArgs accepts the documented positional-first spelling:
-// `session materialize <session-id> --to codex ...`. The standard flag parser
+// `session switch <session-id> --to codex ...`. The standard flag parser
 // otherwise stops at the Session ID and silently treats the remaining flags as
 // arguments.
 func normalizeMaterializeArgs(args []string) []string {
@@ -224,68 +246,72 @@ func collectMaterializePreviewWithPrompt(ctx context.Context, c *config.Config, 
 }
 
 type materializeExecution struct {
-	Report           materializePreviewReport
-	Preview          syncflow.MaterializePreview
-	Target           adapter.AgentSessions
-	TargetCapability adapter.MaterializeCapability
-	ConfigDir        string
-	ProjectRoot      string
-	IdentityKind     sessionhub.ProjectIdentityKind
-	IdentityValue    string
-	IdentifierKey    []byte
-	LocalDeviceID    string
-	HubID            string
-	ProjectID        string
-	SessionID        string
-	TransactionID    string
+	Report              materializePreviewReport
+	Preview             syncflow.MaterializePreview
+	Target              adapter.AgentSessions
+	TargetCapability    adapter.MaterializeCapability
+	EnvironmentContents []environment.ComponentContent
+	ApplyEnvironment    bool
+	Launch              bool
+	ConfigDir           string
+	ProjectRoot         string
+	IdentityKind        sessionhub.ProjectIdentityKind
+	IdentityValue       string
+	IdentifierKey       []byte
+	HubName             string
+	LocalDeviceID       string
+	HubID               string
+	ProjectID           string
+	SessionID           string
+	TransactionID       string
 }
 
 func collectMaterializeExecutionWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, options materializeOptions, input io.Reader, prompt io.Writer) (materializeExecution, error) {
 	if c == nil {
-		return materializeExecution{}, errors.New("session materialize: configuration is unavailable")
+		return materializeExecution{}, errors.New("session switch: configuration is unavailable")
 	}
 	if ctx == nil {
-		return materializeExecution{}, errors.New("session materialize: context is required")
+		return materializeExecution{}, errors.New("session switch: context is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: %w", err)
 	}
-	if err := devicePullError("session materialize", c); err != nil {
+	if err := devicePullError("session switch", c); err != nil {
 		return materializeExecution{}, err
 	}
 	if err := config.ValidateDeviceID(c.Device.ID); err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: local device identity is invalid: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: local device identity is invalid: %w", err)
 	}
 
 	current, err := resolveCurrentProject(ctx, c, projectDir)
 	if err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: identify the current project: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: identify the current project: %w", err)
 	}
 	if !current.Identity.Stable() {
 		reason := current.Reason
 		if reason == "" {
 			reason = "the current directory has no stable project identity"
 		}
-		return materializeExecution{}, fmt.Errorf("session materialize: %s", reason)
+		return materializeExecution{}, fmt.Errorf("session switch: %s", reason)
 	}
 	switch projectPullMode(c, current.Identity.Value) {
 	case projectModeExcluded:
-		return materializeExecution{}, errors.New("session materialize: project is excluded from synchronization")
+		return materializeExecution{}, errors.New("session switch: project is excluded from synchronization")
 	case projectModePushOnly:
-		return materializeExecution{}, errors.New("session materialize: project is configured as push-only; remote sessions are unavailable")
+		return materializeExecution{}, errors.New("session switch: project is configured as push-only; remote sessions are unavailable")
 	}
 
 	secrets, err := config.LoadSecrets(configDir)
 	if err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: load local sync material: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: load local sync material: %w", err)
 	}
-	hubScope, projectScope, projectID, err := sessionHubAndProject(secrets.IdentifierKey, current)
+	hubScope, projectScope, projectID, err := sessionHubAndProjectForConfig(secrets.IdentifierKey, current, c)
 	if err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: prepare Session Hub identity: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: prepare Session Hub identity: %w", err)
 	}
 	sessionLayout, err := syncer.NewSessionHubLayout(hubScope.ID, projectID, options.sessionID)
 	if err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: invalid logical Session identity: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: invalid logical Session identity: %w", err)
 	}
 	transactionID := ""
 	targetNativeID := ""
@@ -305,19 +331,21 @@ func collectMaterializeExecutionWithPrompt(ctx context.Context, c *config.Config
 		return materializeExecution{}, err
 	}
 
-	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "session materialize")
+	access, err := openDomainForRead(ctx, c, configDir, input, prompt, "session switch")
 	if err != nil {
 		return materializeExecution{}, err
 	}
 	defer access.close()
 
 	preview, err := syncflow.FetchMaterializePreview(ctx, syncflow.RemoteMaterializePreviewRequest{
-		Store:         access.Store,
-		Identities:    access.Identities,
-		Layout:        sessionLayout,
-		ContextPolicy: syncflow.MaterializeContextPolicy(options.contextPolicy),
-		SourceAgent:   options.sourceAgent,
-		Heads:         append([]string(nil), options.heads...),
+		Store:              access.Store,
+		Identities:         access.Identities,
+		IdentifierKey:      append([]byte(nil), secrets.IdentifierKey...),
+		Layout:             sessionLayout,
+		ContextPolicy:      syncflow.MaterializeContextPolicy(options.contextPolicy),
+		SourceAgent:        options.sourceAgent,
+		Heads:              append([]string(nil), options.heads...),
+		IncludeEnvironment: options.applyEnvironment,
 		MaterializePreviewOptions: syncflow.MaterializePreviewOptions{
 			SourceCapabilities: sourceCapabilities,
 			TargetAgent:        options.targetAgent,
@@ -327,11 +355,13 @@ func collectMaterializeExecutionWithPrompt(ctx context.Context, c *config.Config
 				PathSpace: adapter.PathSpace{ProjectRoot: current.Root, AgentHome: target.Installation.DataDir},
 				CreatedAt: targetCreatedAt,
 			},
-			AllowUnsupported: options.allowUnsupported,
+			// Unsupported source records are a preview-only diagnostic mode. Keep
+			// the apply path fail-closed even for callers that bypass parsing.
+			AllowUnsupported: options.allowUnsupported && options.preview,
 		},
 	})
 	if err != nil {
-		return materializeExecution{}, fmt.Errorf("session materialize: %w", err)
+		return materializeExecution{}, fmt.Errorf("session switch: %w", err)
 	}
 	report := materializePreviewReport{
 		Preview:              !options.apply,
@@ -348,40 +378,46 @@ func collectMaterializeExecutionWithPrompt(ctx context.Context, c *config.Config
 		TargetAgent:          preview.TargetAgent,
 		TargetNativeID:       preview.TargetNativeID,
 		TargetAdapterVersion: preview.TargetAdapterVersion,
+		SourceSnapshotDigest: preview.SourceSnapshotDigest,
 		SelectedRecordCount:  preview.SelectedRecordCount,
 		ContextItems:         preview.ContextItems,
 		Stats:                preview.Stats,
 		WriteStatus:          "new-target-session-not-written",
+		EnvironmentStatus:    materializeEnvironmentPreviewStatus(options.applyEnvironment, len(preview.EnvironmentComponents)),
 	}
 	return materializeExecution{
-		Report:           report,
-		Preview:          preview,
-		Target:           target,
-		TargetCapability: targetCapability,
-		ConfigDir:        configDir,
-		ProjectRoot:      current.Root,
-		IdentityKind:     projectIdentityKind(current.Identity.Kind),
-		IdentityValue:    current.Identity.Value,
-		IdentifierKey:    append([]byte(nil), secrets.IdentifierKey...),
-		LocalDeviceID:    c.Device.ID,
-		HubID:            hubScope.ID,
-		ProjectID:        projectScope.ID,
-		SessionID:        options.sessionID,
-		TransactionID:    transactionID,
+		Report:              report,
+		Preview:             preview,
+		Target:              target,
+		TargetCapability:    targetCapability,
+		EnvironmentContents: cloneMaterializeEnvironmentContents(preview.EnvironmentContents),
+		ApplyEnvironment:    options.applyEnvironment,
+		Launch:              options.launch,
+		ConfigDir:           configDir,
+		ProjectRoot:         current.Root,
+		IdentityKind:        projectIdentityKind(current.Identity.Kind),
+		IdentityValue:       current.Identity.Value,
+		IdentifierKey:       append([]byte(nil), secrets.IdentifierKey...),
+		HubName:             hubScope.Name,
+		LocalDeviceID:       c.Device.ID,
+		HubID:               hubScope.ID,
+		ProjectID:           projectScope.ID,
+		SessionID:           options.sessionID,
+		TransactionID:       transactionID,
 	}, nil
 }
 
 func materializeTarget(ctx context.Context, name string) (adapter.AgentSessions, adapter.MaterializeCapability, error) {
 	target, err := adapter.FindInstalled(ctx, name)
 	if errors.Is(err, adapter.ErrNotInstalled) {
-		return adapter.AgentSessions{}, nil, fmt.Errorf("session materialize: target Agent %s is not installed", resumeAgentLabel(name))
+		return adapter.AgentSessions{}, nil, fmt.Errorf("session switch: target Agent %s is not installed", resumeAgentLabel(name))
 	}
 	if err != nil {
-		return adapter.AgentSessions{}, nil, fmt.Errorf("session materialize: inspect target Agent %s: %w", resumeAgentLabel(name), err)
+		return adapter.AgentSessions{}, nil, fmt.Errorf("session switch: inspect target Agent %s: %w", resumeAgentLabel(name), err)
 	}
 	capability, err := adapter.MaterializeFor(target.Layout)
 	if err != nil {
-		return adapter.AgentSessions{}, nil, fmt.Errorf("session materialize: target Agent %q has no materialize capability: %w", name, err)
+		return adapter.AgentSessions{}, nil, fmt.Errorf("session switch: target Agent %q has no switching capability: %w", name, err)
 	}
 	return target, capability, nil
 }
@@ -389,7 +425,7 @@ func materializeTarget(ctx context.Context, name string) (adapter.AgentSessions,
 func materializeSourceCapabilities() (map[string]adapter.MaterializeCapability, error) {
 	layouts, err := adapter.DefaultLayouts()
 	if err != nil {
-		return nil, fmt.Errorf("session materialize: discover built-in Agent capabilities: %w", err)
+		return nil, fmt.Errorf("session switch: discover built-in Agent capabilities: %w", err)
 	}
 	capabilities := make(map[string]adapter.MaterializeCapability, len(layouts))
 	for _, layout := range layouts {
@@ -398,16 +434,26 @@ func materializeSourceCapabilities() (map[string]adapter.MaterializeCapability, 
 			if errors.Is(err, adapter.ErrMaterializeUnsupportedLayout) {
 				continue
 			}
-			return nil, fmt.Errorf("session materialize: inspect %s materialize capability: %w", layout.Name(), err)
+			return nil, fmt.Errorf("session switch: inspect %s switching capability: %w", layout.Name(), err)
 		}
 		capabilities[layout.Name()] = capability
 	}
 	return capabilities, nil
 }
 
+func materializeEnvironmentPreviewStatus(requested bool, count int) string {
+	if !requested {
+		return ""
+	}
+	if count == 0 {
+		return "no safe filtered components found"
+	}
+	return fmt.Sprintf("%d filtered component(s) available", count)
+}
+
 func writeMaterializePreviewJSON(w io.Writer, report materializePreviewReport) error {
 	if w == nil {
-		return errors.New("session materialize: output is required")
+		return errors.New("session switch: output is required")
 	}
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
@@ -416,7 +462,7 @@ func writeMaterializePreviewJSON(w io.Writer, report materializePreviewReport) e
 
 func writeMaterializePreviewText(w io.Writer, report materializePreviewReport) error {
 	if w == nil {
-		return errors.New("session materialize: output is required")
+		return errors.New("session switch: output is required")
 	}
 	if _, err := fmt.Fprintf(w, "scope: %s\n", safeListText(report.Scope)); err != nil {
 		return err
@@ -474,6 +520,21 @@ func writeMaterializePreviewText(w io.Writer, report materializePreviewReport) e
 	}
 	if _, err := fmt.Fprintf(w, "target: agent=%s native=%s adapter=%s\n", safeListText(report.TargetAgent), safeListText(report.TargetNativeID), safeListText(report.TargetAdapterVersion)); err != nil {
 		return err
+	}
+	if report.SourceSnapshotDigest != "" {
+		if _, err := fmt.Fprintf(w, "source-snapshot: %s\n", safeListText(report.SourceSnapshotDigest)); err != nil {
+			return err
+		}
+	}
+	if report.EnvironmentStatus != "" {
+		if _, err := fmt.Fprintf(w, "environment: %s\n", safeListText(report.EnvironmentStatus)); err != nil {
+			return err
+		}
+	}
+	if report.LaunchStatus != "" {
+		if _, err := fmt.Fprintf(w, "launch: %s\n", safeListText(report.LaunchStatus)); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintf(w, "write-status: %s\n", safeListText(report.WriteStatus)); err != nil {
 		return err

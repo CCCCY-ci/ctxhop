@@ -3,12 +3,14 @@ package syncflow
 import (
 	"context"
 	"crypto/ecdh"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 	"github.com/CCCCY-ci/ctxhop/internal/remote"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 	"github.com/CCCCY-ci/ctxhop/internal/syncer"
@@ -47,7 +49,11 @@ const (
 type RemoteMaterializePreviewRequest struct {
 	Store      remote.Remote
 	Identities []*ecdh.PrivateKey
-	Layout     syncer.SessionHubLayout
+	// IdentifierKey is required only when IncludeEnvironment is true. It is
+	// used to derive the opaque Hub-scoped component keys and never leaves the
+	// process.
+	IdentifierKey []byte
+	Layout        syncer.SessionHubLayout
 	// ContextPolicy is optional for backwards compatibility. An empty policy
 	// uses causal-head semantics, with an explicit head preferred and a single
 	// current head selected automatically.
@@ -55,6 +61,11 @@ type RemoteMaterializePreviewRequest struct {
 	// SourceAgent is required by the agent-only policy and is otherwise empty.
 	SourceAgent string
 	Heads       []string
+	// IncludeEnvironment asks the read phase to fetch complete filtered
+	// environment attachments and component bodies for the selected ancestry.
+	// The default remains false so a normal context preview does not download
+	// environment data it cannot apply.
+	IncludeEnvironment bool
 	MaterializePreviewOptions
 }
 
@@ -77,31 +88,11 @@ func FetchMaterializePreview(ctx context.Context, request RemoteMaterializePrevi
 		return MaterializePreview{}, fmt.Errorf("%w: Session layout: %w", ErrMaterializeRemoteRead, err)
 	}
 
-	graph, err := syncer.FetchContributionGraph(ctx, request.Store, request.Layout, request.Identities)
-	if err != nil {
-		return MaterializePreview{}, fmt.Errorf("%w: Contribution graph: %w", ErrMaterializeRemoteRead, err)
-	}
-	heads, err := ResolveMaterializeHeads(graph, request.ContextPolicy, request.Heads, request.SourceAgent)
-	if err != nil {
-		return MaterializePreview{}, fmt.Errorf("%w: %w", ErrMaterializeRemoteRead, err)
-	}
-	coverage, err := graph.Select(heads...)
-	if err != nil {
-		return MaterializePreview{}, fmt.Errorf("%w: select heads: %w", ErrMaterializeRemoteRead, err)
-	}
-	if err := validateRemoteSourceCapabilities(graph, coverage.SelectedIDs, request.SourceCapabilities); err != nil {
-		return MaterializePreview{}, err
-	}
-
-	replicaLayouts, err := selectedReplicaLayouts(request.Layout, graph, coverage.SelectedIDs)
+	first, err := readMaterializeRemoteSnapshot(ctx, request)
 	if err != nil {
 		return MaterializePreview{}, err
 	}
-	replicas, err := fetchSelectedReplicas(ctx, request.Store, request.Identities, replicaLayouts)
-	if err != nil {
-		return MaterializePreview{}, err
-	}
-	selection, err := PlanMaterializeSelection(graph, heads, replicas)
+	selection, err := PlanMaterializeSelection(first.graph, first.heads, first.replicas)
 	if err != nil {
 		return MaterializePreview{}, fmt.Errorf("%w: source selection: %w", ErrMaterializeRemoteRead, err)
 	}
@@ -109,7 +100,156 @@ func FetchMaterializePreview(ctx context.Context, request RemoteMaterializePrevi
 	if err != nil {
 		return MaterializePreview{}, err
 	}
+	if first.environmentContents != nil {
+		preview.EnvironmentContents = cloneEnvironmentContents(first.environmentContents)
+		preview.EnvironmentComponents = environment.ComponentSummaries(first.environmentContents)
+	}
+
+	// A Remote listing is not a transaction. Re-read the authenticated graph
+	// and every selected Replica after planning so an append that lands while
+	// adapters are decoding records cannot be mistaken for a complete plan.
+	second, err := readMaterializeRemoteSnapshot(ctx, request)
+	if err != nil {
+		return MaterializePreview{}, err
+	}
+	if first.digest != second.digest {
+		return MaterializePreview{}, fmt.Errorf("%w: source graph or Replica body changed while planning", ErrMaterializeSnapshotChanged)
+	}
+	preview.SourceSnapshotDigest = hex.EncodeToString(first.digest[:])
+	if err := preview.Validate(); err != nil {
+		return MaterializePreview{}, err
+	}
 	return preview, nil
+}
+
+type materializeRemoteSnapshot struct {
+	graph               *sessionhub.Graph
+	heads               []string
+	coverage            sessionhub.Coverage
+	replicas            map[string]syncer.ReplicaSnapshot
+	environmentContents []environment.ComponentContent
+	digest              [32]byte
+}
+
+func readMaterializeRemoteSnapshot(ctx context.Context, request RemoteMaterializePreviewRequest) (materializeRemoteSnapshot, error) {
+	graph, err := syncer.FetchContributionGraph(ctx, request.Store, request.Layout, request.Identities)
+	if err != nil {
+		return materializeRemoteSnapshot{}, fmt.Errorf("%w: Contribution graph: %w", ErrMaterializeRemoteRead, err)
+	}
+	heads, err := ResolveMaterializeHeads(graph, request.ContextPolicy, request.Heads, request.SourceAgent)
+	if err != nil {
+		return materializeRemoteSnapshot{}, fmt.Errorf("%w: %w", ErrMaterializeRemoteRead, err)
+	}
+	coverage, err := graph.Select(heads...)
+	if err != nil {
+		return materializeRemoteSnapshot{}, fmt.Errorf("%w: select heads: %w", ErrMaterializeRemoteRead, err)
+	}
+	if err := validateRemoteSourceCapabilities(graph, coverage.SelectedIDs, request.SourceCapabilities); err != nil {
+		return materializeRemoteSnapshot{}, err
+	}
+
+	replicaLayouts, err := selectedReplicaLayouts(request.Layout, graph, coverage.SelectedIDs)
+	if err != nil {
+		return materializeRemoteSnapshot{}, err
+	}
+	replicas, err := fetchSelectedReplicas(ctx, request.Store, request.Identities, replicaLayouts)
+	if err != nil {
+		return materializeRemoteSnapshot{}, err
+	}
+	var environmentContents []environment.ComponentContent
+	if request.IncludeEnvironment {
+		environmentContents, err = fetchMaterializeEnvironment(ctx, request, graph, coverage)
+		if err != nil {
+			return materializeRemoteSnapshot{}, err
+		}
+	}
+	digest, err := digestMaterializeRemoteSnapshot(graph, heads, replicas, environmentContents)
+	if err != nil {
+		return materializeRemoteSnapshot{}, fmt.Errorf("%w: digest source snapshot: %w", ErrMaterializeRemoteRead, err)
+	}
+	return materializeRemoteSnapshot{
+		graph:               graph,
+		heads:               append([]string(nil), heads...),
+		coverage:            coverage,
+		replicas:            replicas,
+		environmentContents: cloneEnvironmentContents(environmentContents),
+		digest:              digest,
+	}, nil
+}
+
+func fetchMaterializeEnvironment(ctx context.Context, request RemoteMaterializePreviewRequest, graph *sessionhub.Graph, coverage sessionhub.Coverage) ([]environment.ComponentContent, error) {
+	if len(request.IdentifierKey) == 0 {
+		return nil, fmt.Errorf("%w: environment identity key is required", ErrMaterializeRemoteRead)
+	}
+	environmentLayout, err := syncer.NewEnvironmentHubLayout(request.Layout.HubKey())
+	if err != nil {
+		return nil, fmt.Errorf("%w: environment layout: %w", ErrMaterializeRemoteRead, err)
+	}
+	contents := make([]environment.ComponentContent, 0)
+	seen := make(map[string]string)
+	for _, contributionID := range coverage.SelectedIDs {
+		contribution, ok := graph.Contribution(contributionID)
+		if !ok {
+			return nil, fmt.Errorf("%w: selected Contribution %q is unavailable", ErrMaterializeRemoteRead, contributionID)
+		}
+		for _, environmentID := range contribution.EnvironmentRefs {
+			attachment, err := syncer.FetchEnvironmentAttachment(ctx, request.Store, request.Layout, environmentID, contribution.Source.DeviceID, request.Identities)
+			if err != nil {
+				return nil, fmt.Errorf("%w: environment attachment %q: %w", ErrMaterializeRemoteRead, environmentID, err)
+			}
+			if attachment.EnvironmentID != environmentID || attachment.SessionID != graph.SessionID() || attachment.SourceAgent != contribution.Source.Agent || attachment.ObservedAtContribution != contributionID {
+				return nil, fmt.Errorf("%w: environment attachment %q does not match its Contribution", ErrMaterializeRemoteRead, environmentID)
+			}
+			for _, componentRef := range attachment.Components {
+				componentKey, err := sessionhub.DeriveEnvironmentKey(request.IdentifierKey, request.Layout.HubKey(), componentRef.Fingerprint)
+				if err != nil {
+					return nil, fmt.Errorf("%w: derive environment component %q: %w", ErrMaterializeRemoteRead, componentRef.Name, err)
+				}
+				content, err := syncer.FetchEnvironmentComponent(ctx, request.Store, environmentLayout, componentKey, contribution.Source.DeviceID, request.Identities)
+				if err != nil {
+					return nil, fmt.Errorf("%w: environment component %q: %w", ErrMaterializeRemoteRead, componentRef.Name, err)
+				}
+				if !sameEnvironmentComponentRef(content.Component, componentRef) {
+					return nil, fmt.Errorf("%w: environment component %q does not match its attachment", ErrMaterializeRemoteRead, componentRef.Name)
+				}
+				key := environmentComponentIdentity(content.Component)
+				if previous, exists := seen[key]; exists {
+					if previous != content.Component.Fingerprint {
+						return nil, fmt.Errorf("%w: environment component %q has conflicting bodies", ErrMaterializeRemoteRead, content.Component.Name)
+					}
+					continue
+				}
+				seen[key] = content.Component.Fingerprint
+				contents = append(contents, content)
+			}
+		}
+	}
+	sort.Slice(contents, func(i, j int) bool {
+		return environmentComponentIdentity(contents[i].Component) < environmentComponentIdentity(contents[j].Component)
+	})
+	return contents, nil
+}
+
+func sameEnvironmentComponentRef(component environment.Component, ref sessionhub.EnvironmentComponentRef) bool {
+	return component.Kind == ref.Kind && component.Name == ref.Name && component.Scope == ref.Scope && component.ProjectID == ref.ProjectID && component.Fingerprint == ref.Fingerprint && component.Portability == ref.Portability
+}
+
+func environmentComponentIdentity(component environment.Component) string {
+	return component.Kind + "\x00" + component.Name + "\x00" + component.Scope + "\x00" + component.ProjectID
+}
+
+func cloneEnvironmentContents(contents []environment.ComponentContent) []environment.ComponentContent {
+	if contents == nil {
+		return nil
+	}
+	result := make([]environment.ComponentContent, 0, len(contents))
+	for _, content := range contents {
+		result = append(result, environment.ComponentContent{
+			Component: content.Component,
+			Content:   append([]byte(nil), content.Content...),
+		})
+	}
+	return result
 }
 
 // ResolveMaterializeHeads turns a user-facing context policy into the
@@ -160,16 +300,58 @@ func ResolveMaterializeHeads(graph *sessionhub.Graph, policy MaterializeContextP
 		if err := validateMaterializeAgent(sourceAgent, "source"); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrMaterializeHeadSelection, err)
 		}
-		selected := make([]string, 0)
+		matching := make(map[string]struct{})
 		for _, id := range graph.ContributionIDs() {
 			contribution, ok := graph.Contribution(id)
 			if ok && contribution.Source.Agent == sourceAgent {
+				matching[id] = struct{}{}
+			}
+		}
+		if len(matching) == 0 {
+			return nil, fmt.Errorf("%w: no Contribution from source Agent %q", ErrMaterializeHeadSelection, sourceAgent)
+		}
+
+		// A source Agent may have several Contributions on one causal track.
+		// Passing every matching node as a graph head would select the same
+		// ancestry repeatedly and would make the materialize range planner see
+		// an artificial overlap. Keep only the matching frontier: a matching
+		// Contribution that is an ancestor of another matching Contribution is
+		// represented by that descendant's ancestry automatically.
+		frontier := make(map[string]bool, len(matching))
+		for id := range matching {
+			frontier[id] = true
+		}
+		for id := range matching {
+			contribution, ok := graph.Contribution(id)
+			if !ok {
+				return nil, fmt.Errorf("%w: Contribution %q is unavailable", ErrMaterializeHeadSelection, id)
+			}
+			seen := make(map[string]struct{})
+			stack := append([]string(nil), contribution.Parents...)
+			for len(stack) > 0 {
+				parentID := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				if _, done := seen[parentID]; done {
+					continue
+				}
+				seen[parentID] = struct{}{}
+				if _, isMatching := matching[parentID]; isMatching {
+					frontier[parentID] = false
+				}
+				parent, ok := graph.Contribution(parentID)
+				if !ok {
+					return nil, fmt.Errorf("%w: Contribution %q is unavailable", ErrMaterializeHeadSelection, parentID)
+				}
+				stack = append(stack, parent.Parents...)
+			}
+		}
+		selected := make([]string, 0, len(frontier))
+		for id, isFrontier := range frontier {
+			if isFrontier {
 				selected = append(selected, id)
 			}
 		}
-		if len(selected) == 0 {
-			return nil, fmt.Errorf("%w: no Contribution from source Agent %q", ErrMaterializeHeadSelection, sourceAgent)
-		}
+		sort.Strings(selected)
 		return selected, nil
 
 	default:

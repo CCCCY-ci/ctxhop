@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdh"
@@ -331,27 +330,6 @@ func TestRecordLegacyMigrationPublishProgressIsIdempotent(t *testing.T) {
 	}
 	if secondChanged || !bytes.Equal(first, second) || secondUpdated[candidate.legacyID].Status != sessionhub.MigrationStatusPublished {
 		t.Fatalf("repeat progress changed:%t first:%s second:%s", secondChanged, first, second)
-	}
-}
-
-func TestMigrationConfirmationRequiresAffirmativeAnswer(t *testing.T) {
-	candidate := legacyMigrationCandidate{sessionID: "sessionone", records: 4, refs: []sessionhub.LegacyMigrationRef{{DeviceID: "deviceone"}}}
-	var prompt bytes.Buffer
-	confirmed, err := confirmLegacyMigrationPublish(bufio.NewReader(strings.NewReader("yes\n")), &prompt, candidate, legacyMigrationSource{deviceID: "deviceone"})
-	if err != nil || !confirmed {
-		t.Fatalf("positive confirmation = %t, err=%v", confirmed, err)
-	}
-	if !strings.Contains(prompt.String(), "sessionone") || !strings.Contains(prompt.String(), "v1 data will remain unchanged") {
-		t.Fatalf("publish prompt = %q", prompt.String())
-	}
-
-	prompt.Reset()
-	confirmed, err = confirmLegacyMigrationRollback(bufio.NewReader(strings.NewReader("no\n")), &prompt, candidate)
-	if err != nil || confirmed {
-		t.Fatalf("negative rollback confirmation = %t, err=%v", confirmed, err)
-	}
-	if !strings.Contains(prompt.String(), "v1/v2 remote objects will be kept") {
-		t.Fatalf("rollback prompt = %q", prompt.String())
 	}
 }
 

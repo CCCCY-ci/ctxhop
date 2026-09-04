@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,11 +25,11 @@ func TestParseDeviceManagementOptions(t *testing.T) {
 		t.Fatalf("rename options = %+v", rename)
 	}
 
-	remove, err := parseDeviceOptions([]string{"remove", "--yes", "deviceb"})
+	remove, err := parseDeviceOptions([]string{"remove", "deviceb"})
 	if err != nil {
 		t.Fatalf("remove options: %v", err)
 	}
-	if remove.action != deviceActionRemove || remove.target != "deviceb" || !remove.yes {
+	if remove.action != deviceActionRemove || remove.target != "deviceb" {
 		t.Fatalf("remove options = %+v", remove)
 	}
 }
@@ -62,7 +61,7 @@ func TestMergeDeviceListSortsAndKeepsExplicitRecords(t *testing.T) {
 	}
 }
 
-func TestWriteDeviceListTextAndConfirmRemoval(t *testing.T) {
+func TestWriteDeviceListText(t *testing.T) {
 	lastActive := time.Date(2026, 8, 15, 2, 3, 4, 0, time.UTC)
 	report := deviceListReport{
 		Scope: "remote",
@@ -83,19 +82,4 @@ func TestWriteDeviceListTextAndConfirmRemoval(t *testing.T) {
 		t.Fatalf("text output = %q, want %q", output.String(), want)
 	}
 
-	var prompt bytes.Buffer
-	confirmed, err := confirmDeviceRemoval(strings.NewReader("yes\n"), &prompt, "deviceb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !confirmed || !strings.Contains(prompt.String(), "deviceb") {
-		t.Fatalf("confirmation = %v, prompt = %q", confirmed, prompt.String())
-	}
-	cancelled, err := confirmDeviceRemoval(strings.NewReader("no\n"), &prompt, "deviceb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cancelled {
-		t.Fatal("negative confirmation was accepted")
-	}
 }

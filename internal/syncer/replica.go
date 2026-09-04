@@ -470,6 +470,22 @@ func FetchProjectDescriptor(ctx context.Context, store remote.Remote, layout Rep
 	if err != nil {
 		return sessionhub.ProjectDescriptor{}, err
 	}
+	return fetchProjectDescriptorAt(ctx, store, key, layout.hubKey, layout.projectKey, identities)
+}
+
+// FetchProjectDescriptorForDevice reads a device-owned Project descriptor at
+// the Project level. It is the metadata-only counterpart to
+// PutProjectDescriptorForDevice and lets Hub-level project listing avoid
+// inventing a Session or Replica just to display a Project.
+func FetchProjectDescriptorForDevice(ctx context.Context, store remote.Remote, layout ProjectHubLayout, deviceID string, identities []*ecdh.PrivateKey) (sessionhub.ProjectDescriptor, error) {
+	key, err := layout.DescriptorKey(deviceID)
+	if err != nil {
+		return sessionhub.ProjectDescriptor{}, err
+	}
+	return fetchProjectDescriptorAt(ctx, store, key, layout.hubKey, layout.projectKey, identities)
+}
+
+func fetchProjectDescriptorAt(ctx context.Context, store remote.Remote, key, hubKey, projectKey string, identities []*ecdh.PrivateKey) (sessionhub.ProjectDescriptor, error) {
 	payload, err := fetchReplicaPayload(ctx, store, key, identities, "Project descriptor")
 	if err != nil {
 		return sessionhub.ProjectDescriptor{}, err
@@ -478,7 +494,7 @@ func FetchProjectDescriptor(ctx context.Context, store remote.Remote, layout Rep
 	if err != nil {
 		return sessionhub.ProjectDescriptor{}, fmt.Errorf("syncer: parse v2 Project descriptor: %w", err)
 	}
-	if descriptor.HubID != layout.hubKey || descriptor.ProjectID != layout.projectKey {
+	if descriptor.HubID != hubKey || descriptor.ProjectID != projectKey {
 		return sessionhub.ProjectDescriptor{}, fmt.Errorf("%w: Project descriptor belongs to another namespace", ErrReplicaIdentityMismatch)
 	}
 	return descriptor, nil

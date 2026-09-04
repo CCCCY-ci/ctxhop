@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -273,7 +271,7 @@ func publishLegacyMigrationReplicaStream(ctx context.Context, configDir string, 
 	// Scope descriptors are device-owned and may be created if this project has
 	// never had a v2 writer. Existing scope metadata is reused rather than
 	// rewritten, and none of these operations touch the v1 namespace.
-	if wrote, err := ensureLegacyMigrationScope(ctx, access, layout, collection); err != nil {
+	if wrote, err := ensureLegacyMigrationScope(ctx, access, layout, hubScope.Name, collection); err != nil {
 		return result, fmt.Errorf("session migrate: publish v2 scope descriptors: %w", err)
 	} else if wrote {
 		result.WritesV2 = true
@@ -313,6 +311,7 @@ func publishLegacyMigrationReplicaStream(ctx context.Context, configDir string, 
 		Source: sessionhub.NativeSource{
 			Agent:            source.agent,
 			NativeSessionKey: nativeKey,
+			NativeSessionID:  source.nativeID,
 			DeviceID:         collection.localDeviceID,
 			Generation:       generation,
 			NativeFormat:     "legacy-v1",
@@ -349,15 +348,19 @@ func publishLegacyMigrationReplicaStream(ctx context.Context, configDir string, 
 // descriptors while preserving any metadata already published by this local
 // device. This avoids making a migration retry look like a project metadata
 // update merely because it happened at a later wall-clock time.
-func ensureLegacyMigrationScope(ctx context.Context, access *domainAccess, layout syncer.ReplicaLayout, collection listCollection) (bool, error) {
+func ensureLegacyMigrationScope(ctx context.Context, access *domainAccess, layout syncer.ReplicaLayout, hubName string, collection listCollection) (bool, error) {
 	if access == nil || access.Store == nil || access.Public == nil {
 		return false, errors.New("authenticated domain access is unavailable")
 	}
 	now := time.Now().UTC().Round(0)
+	hubName = strings.TrimSpace(hubName)
+	if hubName == "" {
+		hubName = sessionhub.DefaultHubLogicalID
+	}
 	hub := sessionhub.HubDescriptor{
 		Version:   sessionhub.ModelVersion,
 		HubID:     layout.HubKey(),
-		Name:      sessionhub.DefaultHubLogicalID,
+		Name:      hubName,
 		CreatedAt: now,
 		Lifecycle: sessionhub.HubActive,
 	}
@@ -515,30 +518,6 @@ func legacyMigrationRefForDevice(refs []sessionhub.LegacyMigrationRef, deviceID 
 
 func legacyMigrationDigest(digest [32]byte) string {
 	return fmt.Sprintf("sha256:%x", digest[:])
-}
-
-func confirmLegacyMigrationPublish(input *bufio.Reader, prompt io.Writer, candidate legacyMigrationCandidate, source legacyMigrationSource) (bool, error) {
-	records := candidate.records
-	if ref, ok := legacyMigrationRefForDevice(candidate.refs, source.deviceID); ok {
-		records = ref.RecordCount
-	}
-	answer, err := readCommandSecretReader(input, prompt, "session migrate", fmt.Sprintf(
-		"Publish legacy session %q as a v2 Replica? local branch records=%d total-branches=%d; v1 data will remain unchanged [y/N]: ",
-		candidate.sessionID, records, len(candidate.refs)))
-	if err != nil {
-		return false, fmt.Errorf("session migrate: read publish confirmation: %w", err)
-	}
-	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes"), nil
-}
-
-func confirmLegacyMigrationRollback(input *bufio.Reader, prompt io.Writer, candidate legacyMigrationCandidate) (bool, error) {
-	answer, err := readCommandSecretReader(input, prompt, "session migrate", fmt.Sprintf(
-		"Stop using the v2 mapping for legacy session %q and prefer the v1 compatibility reader? v1/v2 remote objects will be kept [y/N]: ",
-		candidate.sessionID))
-	if err != nil {
-		return false, fmt.Errorf("session migrate: read rollback confirmation: %w", err)
-	}
-	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes"), nil
 }
 
 func loadLegacyMigrationReadMode(configDir, hubID, projectID, legacySessionID string) (sessionhub.MigrationReadMode, error) {

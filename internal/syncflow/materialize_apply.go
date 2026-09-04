@@ -67,6 +67,12 @@ type MaterializeApplyRequest struct {
 	Preview     MaterializePreview
 	Binding     sessionhub.LocalBinding
 
+	// CanonicalRecords are the same records that a native Replica publisher
+	// will derive from Preview.EncodedRecords. The preview remains in target
+	// Agent-native bytes for installation and read-back verification; these
+	// records are only used to validate the durable materialization boundary.
+	CanonicalRecords [][]byte
+
 	// AllowExisting is used only by a recovery retry. An existing target is
 	// accepted only when its complete contents are read back, validated by the
 	// target capability, and byte-for-byte equal to Preview. It is never a
@@ -131,7 +137,13 @@ func ApplyMaterialize(ctx context.Context, request MaterializeApplyRequest) (Mat
 	if request.Preview.TargetNativeID != request.Target.NativeID {
 		return MaterializeApplyResult{}, fmt.Errorf("%w: target native ID differs from the preview", ErrMaterializeApply)
 	}
-	if err := validateMaterializeApplyBinding(request.Preview, request.TargetAgent, request.Binding); err != nil {
+	canonicalRecords := request.CanonicalRecords
+	if len(canonicalRecords) == 0 {
+		// Keep low-level callers and older persisted test fixtures compatible.
+		// The command path always supplies the canonical stream explicitly.
+		canonicalRecords = request.Preview.EncodedRecords
+	}
+	if err := validateMaterializeApplyBinding(request.Preview, request.TargetAgent, request.Binding, canonicalRecords); err != nil {
 		return MaterializeApplyResult{}, fmt.Errorf("%w: binding: %v", ErrMaterializeApply, err)
 	}
 
@@ -213,7 +225,7 @@ func verifyMaterializeTarget(ctx context.Context, request MaterializeApplyReques
 	return nil
 }
 
-func validateMaterializeApplyBinding(preview MaterializePreview, targetAgent string, binding sessionhub.LocalBinding) error {
+func validateMaterializeApplyBinding(preview MaterializePreview, targetAgent string, binding sessionhub.LocalBinding, canonicalRecords [][]byte) error {
 	if err := binding.Validate(); err != nil {
 		return err
 	}
@@ -238,20 +250,20 @@ func validateMaterializeApplyBinding(preview MaterializePreview, targetAgent str
 	if binding.Origin.Converter.TargetAdapterVersion != preview.TargetAdapterVersion {
 		return errors.New("binding target adapter version differs from the preview")
 	}
-	recordDigest, err := syncer.DigestRecords(preview.EncodedRecords)
+	recordDigest, err := syncer.DigestRecords(canonicalRecords)
 	if err != nil {
 		return fmt.Errorf("digest target records: %w", err)
 	}
 	expectedDigest := "sha256:" + fmt.Sprintf("%x", recordDigest[:])
 	boundary := binding.Origin.ImportBoundary
-	if boundary.RecordCount != uint64(len(preview.EncodedRecords)) || boundary.PrefixDigest != expectedDigest {
+	if boundary.RecordCount != uint64(len(canonicalRecords)) || boundary.PrefixDigest != expectedDigest {
 		return errors.New("binding import boundary differs from the target output")
 	}
 	emptyDigest := syncer.EmptyDigest()
 	if binding.ReplicaCursor.RecordCount != 0 || binding.ReplicaCursor.HeadDigest != fmt.Sprintf("%x", emptyDigest[:]) {
 		return errors.New("binding Replica cursor must not claim unpublished target records")
 	}
-	if binding.LocalSnapshot == nil || binding.LocalSnapshot.RecordCount != uint64(len(preview.EncodedRecords)) || binding.LocalSnapshot.HeadDigest != fmt.Sprintf("%x", recordDigest[:]) {
+	if binding.LocalSnapshot == nil || binding.LocalSnapshot.RecordCount != uint64(len(canonicalRecords)) || binding.LocalSnapshot.HeadDigest != fmt.Sprintf("%x", recordDigest[:]) {
 		return errors.New("binding local snapshot differs from the target output")
 	}
 	if binding.ContributionCursor.EndRecord != boundary.RecordCount || binding.ContributionCursor.LastContributionID != "" {

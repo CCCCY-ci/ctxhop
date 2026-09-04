@@ -184,3 +184,54 @@ func TestApplyMaterializeExecutionCommitsLocalStateAndRetriesIdempotently(t *tes
 		t.Fatalf("retry output = %q", secondOutput.String())
 	}
 }
+
+func TestMaterializeBindingUsesReplicaCanonicalBytes(t *testing.T) {
+	const (
+		projectRoot = `C:\project`
+		targetID    = "ctxhop-target"
+	)
+	rawRecords := [][]byte{
+		[]byte(`{"type":"user","cwd":"C:\\project","message":{"role":"user","content":"hello"},"timestamp":"2026-09-04T08:00:01Z"}`),
+	}
+	execution := materializeExecution{
+		Preview: syncflow.MaterializePreview{
+			SelectedHeads:        []string{"head"},
+			TargetAgent:          "claude-code",
+			TargetNativeID:       targetID,
+			SourceViewVersion:    adapter.MaterializeViewVersion,
+			TargetAdapterVersion: adapter.ClaudeMaterializeAdapterVersion,
+			EncodedRecords:       rawRecords,
+		},
+		Target: adapter.AgentSessions{
+			Installation: adapter.Installation{
+				DataDir:       `C:\agent`,
+				Compatibility: adapter.CompatFull,
+			},
+		},
+		ProjectRoot:   projectRoot,
+		IdentifierKey: []byte(strings.Repeat("k", 32)),
+		LocalDeviceID: "device",
+		HubID:         "hub",
+		ProjectID:     "project",
+		SessionID:     "session",
+	}
+
+	canonicalRecords, err := canonicalizeMaterializeTarget(execution)
+	if err != nil {
+		t.Fatalf("canonicalizeMaterializeTarget() error = %v", err)
+	}
+	if len(canonicalRecords) != len(rawRecords) || bytes.Equal(canonicalRecords[0], rawRecords[0]) {
+		t.Fatalf("canonical records = %q, raw = %q; expected a distinct canonical byte stream", canonicalRecords[0], rawRecords[0])
+	}
+
+	binding, err := materializeLocalBindingForRecords(execution, canonicalRecords)
+	if err != nil {
+		t.Fatalf("materializeLocalBindingForRecords() error = %v", err)
+	}
+	if err := syncflow.ValidateMaterializedPushPreflight(binding, canonicalRecords); err != nil {
+		t.Fatalf("canonical materialized preflight error = %v", err)
+	}
+	if err := syncflow.ValidateMaterializedPushPreflight(binding, rawRecords); !errors.Is(err, syncflow.ErrMaterializePrefixRewrite) {
+		t.Fatalf("raw materialized preflight error = %v, want ErrMaterializePrefixRewrite", err)
+	}
+}

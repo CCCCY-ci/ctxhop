@@ -58,7 +58,11 @@ type HubRecord struct {
 // ProjectRecord is one Project and its logical Sessions.
 type ProjectRecord struct {
 	Descriptor ProjectDescriptor `json:"descriptor"`
-	Sessions   []SessionRecord   `json:"sessions"`
+	// Identity is local-only canonical project identity used to resolve an
+	// explicit Hub move after the registry has been rebuilt. It is never part
+	// of the encrypted ProjectDescriptor or any remote object.
+	Identity string          `json:"identity,omitempty"`
+	Sessions []SessionRecord `json:"sessions"`
 }
 
 // SessionRecord is a logical Session and the local source bindings known for
@@ -129,6 +133,122 @@ func NewDefaultRegistry(identifierKey []byte, now time.Time) (Registry, error) {
 	return registry, nil
 }
 
+// EnsureHub returns the named Hub, creating it in memory when it is new. Hub
+// names are local display identities; the keyed HubID is the stable namespace
+// used by Remote object paths. The caller decides when to persist the changed
+// registry.
+func (r *Registry) EnsureHub(identifierKey []byte, name string, now time.Time) (HubRecord, error) {
+	if r == nil {
+		return HubRecord{}, errors.New("sessionhub: registry is required")
+	}
+	if err := r.Validate(); err != nil {
+		return HubRecord{}, err
+	}
+	name = strings.TrimSpace(name)
+	if err := validateIdentityPart(name); err != nil {
+		return HubRecord{}, fmt.Errorf("%w: hub name", ErrInvalidIdentity)
+	}
+	for _, hub := range r.Hubs {
+		if hub.Descriptor.Name == name {
+			return cloneHubRecord(hub), nil
+		}
+	}
+	hubID, err := DeriveHubKey(identifierKey, name)
+	if err != nil {
+		return HubRecord{}, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	hub := HubRecord{Descriptor: HubDescriptor{
+		Version:   ModelVersion,
+		HubID:     hubID,
+		Name:      name,
+		CreatedAt: now.UTC().Round(0),
+		Lifecycle: HubActive,
+	}}
+	r.Hubs = append(r.Hubs, hub)
+	sortRegistry(r)
+	return cloneHubRecord(hub), nil
+}
+
+// MergeHubDescriptor caches an authenticated remote Hub descriptor in the
+// local metadata registry. Remote Hub announcements are device-owned, so a
+// Hub may be seen for the first time on a device that did not create it. The
+// descriptor is still required to match the keyed Hub identity; otherwise a
+// caller could accidentally attach local Projects to an unrelated namespace.
+//
+// The method only changes local metadata. It never publishes the descriptor
+// and it preserves any Projects and Sessions already indexed under the Hub.
+// It returns true when the registry was changed.
+func (r *Registry) MergeHubDescriptor(identifierKey []byte, descriptor HubDescriptor) (bool, error) {
+	if r == nil {
+		return false, errors.New("sessionhub: registry is required")
+	}
+	if err := r.Validate(); err != nil {
+		return false, err
+	}
+	if err := descriptor.Validate(); err != nil {
+		return false, fmt.Errorf("%w: remote Hub descriptor: %v", ErrInvalidModel, err)
+	}
+	derivedID, err := DeriveHubKey(identifierKey, descriptor.Name)
+	if err != nil {
+		return false, err
+	}
+	if derivedID != descriptor.HubID {
+		return false, fmt.Errorf("%w: remote Hub %q does not match its keyed identity", ErrInvalidHierarchy, descriptor.Name)
+	}
+
+	for index, hub := range r.Hubs {
+		if hub.Descriptor.Name == descriptor.Name && hub.Descriptor.HubID != descriptor.HubID {
+			return false, fmt.Errorf("%w: Hub name %q maps to multiple identities", ErrInvalidHierarchy, descriptor.Name)
+		}
+		if hub.Descriptor.HubID != descriptor.HubID {
+			continue
+		}
+		if hub.Descriptor.Name != descriptor.Name {
+			return false, fmt.Errorf("%w: Hub %q has conflicting names", ErrInvalidHierarchy, descriptor.HubID)
+		}
+		// CreatedAt is provenance rather than an ordering input. Independent
+		// device announcements may legitimately have different clocks or may
+		// have created the same logical Hub locally. Keep the earliest valid
+		// value so a stale announcement cannot make the Hub appear newer.
+		changed := false
+		if descriptor.CreatedAt.Before(hub.Descriptor.CreatedAt) {
+			r.Hubs[index].Descriptor.CreatedAt = descriptor.CreatedAt
+			changed = true
+		}
+		// Archived is a one-way lifecycle transition. A stale active
+		// announcement must not silently reopen a locally cached Hub.
+		if hub.Descriptor.Lifecycle == HubActive && descriptor.Lifecycle == HubArchived {
+			r.Hubs[index].Descriptor.Lifecycle = HubArchived
+			changed = true
+		}
+		if changed {
+			return true, r.Validate()
+		}
+		return false, nil
+	}
+
+	r.Hubs = append(r.Hubs, HubRecord{Descriptor: descriptor})
+	sortRegistry(r)
+	if err := r.Validate(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// HubByName returns a detached Hub record by its logical display name.
+func (r Registry) HubByName(name string) (HubRecord, bool) {
+	name = strings.TrimSpace(name)
+	for _, hub := range r.Hubs {
+		if hub.Descriptor.Name == name {
+			return cloneHubRecord(hub), true
+		}
+	}
+	return HubRecord{}, false
+}
+
 // LoadRegistry reads the local metadata registry without creating it.
 func LoadRegistry(dir string) (Registry, error) {
 	if strings.TrimSpace(dir) == "" {
@@ -191,6 +311,9 @@ func (r Registry) Validate() error {
 		for _, project := range hub.Projects {
 			if err := project.Descriptor.Validate(); err != nil {
 				return fmt.Errorf("%w: project: %v", ErrInvalidModel, err)
+			}
+			if project.Identity != "" && (!utf8.ValidString(project.Identity) || strings.ContainsRune(project.Identity, 0)) {
+				return fmt.Errorf("%w: project %q has an invalid local identity", ErrInvalidModel, project.Descriptor.ProjectID)
 			}
 			if project.Descriptor.HubID != hub.Descriptor.HubID {
 				return fmt.Errorf("%w: project %q has the wrong hub", ErrInvalidModel, project.Descriptor.ProjectID)
@@ -258,6 +381,13 @@ func (b NativeSessionBinding) Validate() error {
 // identity, creating it in memory when it is new. The caller decides when to
 // persist the returned registry.
 func (r *Registry) EnsureProject(identifierKey []byte, identityKind ProjectIdentityKind, identity string, now time.Time) (ProjectRecord, error) {
+	return r.EnsureProjectInHub(identifierKey, DefaultHubLogicalID, identityKind, identity, now)
+}
+
+// EnsureProjectInHub returns the Project for a stable identity in the named
+// Hub, creating it in memory when it is new. It is the explicit-Hub variant of
+// EnsureProject used by `project bind --hub` and migration workflows.
+func (r *Registry) EnsureProjectInHub(identifierKey []byte, hubName string, identityKind ProjectIdentityKind, identity string, now time.Time) (ProjectRecord, error) {
 	if r == nil {
 		return ProjectRecord{}, errors.New("sessionhub: registry is required")
 	}
@@ -270,9 +400,19 @@ func (r *Registry) EnsureProject(identifierKey []byte, identityKind ProjectIdent
 	if identityKind != ProjectIdentityRemote && identityKind != ProjectIdentityManual {
 		return ProjectRecord{}, fmt.Errorf("%w: project identity kind", ErrInvalidIdentity)
 	}
-	hubIndex := r.defaultHubIndex()
+	hubName = strings.TrimSpace(hubName)
+	if err := validateIdentityPart(hubName); err != nil {
+		return ProjectRecord{}, fmt.Errorf("%w: hub name", ErrInvalidIdentity)
+	}
+	hubIndex := -1
+	for index, hub := range r.Hubs {
+		if hub.Descriptor.Name == hubName {
+			hubIndex = index
+			break
+		}
+	}
 	if hubIndex < 0 {
-		return ProjectRecord{}, fmt.Errorf("%w: default hub is unavailable", ErrInvalidModel)
+		return ProjectRecord{}, fmt.Errorf("%w: Hub %q is unavailable", ErrInvalidModel, hubName)
 	}
 	hubID := r.Hubs[hubIndex].Descriptor.HubID
 	projectID, err := DeriveProjectKey(identifierKey, hubID, identity)
@@ -280,6 +420,9 @@ func (r *Registry) EnsureProject(identifierKey []byte, identityKind ProjectIdent
 		return ProjectRecord{}, err
 	}
 	if index := projectIndex(r.Hubs[hubIndex], projectID); index >= 0 {
+		if r.Hubs[hubIndex].Projects[index].Identity == "" {
+			r.Hubs[hubIndex].Projects[index].Identity = identity
+		}
 		return cloneProjectRecord(r.Hubs[hubIndex].Projects[index]), nil
 	}
 	if now.IsZero() {
@@ -293,7 +436,7 @@ func (r *Registry) EnsureProject(identifierKey []byte, identityKind ProjectIdent
 		IdentityFingerprint: projectID,
 		CreatedAt:           now.UTC().Round(0),
 		Lifecycle:           ProjectActive,
-	}}
+	}, Identity: identity}
 	r.Hubs[hubIndex].Projects = append(r.Hubs[hubIndex].Projects, project)
 	sortProjects(r.Hubs[hubIndex].Projects)
 	return cloneProjectRecord(project), nil

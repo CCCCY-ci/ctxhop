@@ -2,12 +2,14 @@ package syncflow
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/CCCCY-ci/ctxhop/internal/adapter"
+	"github.com/CCCCY-ci/ctxhop/internal/environment"
 	"github.com/CCCCY-ci/ctxhop/internal/sessionhub"
 )
 
@@ -59,17 +61,20 @@ type MaterializeSourceSummary struct {
 // for a later apply phase but are never written by this package or printed by
 // the command layer.
 type MaterializePreview struct {
-	Coverage             sessionhub.Coverage        `json:"coverage"`
-	SelectedHeads        []string                   `json:"selectedHeads,omitempty"`
-	Sources              []MaterializeSourceSummary `json:"sources"`
-	TargetAgent          string                     `json:"targetAgent"`
-	TargetNativeID       string                     `json:"targetNativeId"`
-	SourceViewVersion    int                        `json:"sourceViewVersion"`
-	TargetAdapterVersion string                     `json:"targetAdapterVersion"`
-	SelectedRecordCount  uint64                     `json:"selectedRecordCount"`
-	ContextItems         int                        `json:"contextItems"`
-	Stats                adapter.MaterializeStats   `json:"stats"`
-	EncodedRecords       [][]byte                   `json:"-"`
+	Coverage              sessionhub.Coverage            `json:"coverage"`
+	SelectedHeads         []string                       `json:"selectedHeads,omitempty"`
+	Sources               []MaterializeSourceSummary     `json:"sources"`
+	TargetAgent           string                         `json:"targetAgent"`
+	TargetNativeID        string                         `json:"targetNativeId"`
+	SourceViewVersion     int                            `json:"sourceViewVersion"`
+	TargetAdapterVersion  string                         `json:"targetAdapterVersion"`
+	SourceSnapshotDigest  string                         `json:"sourceSnapshotDigest,omitempty"`
+	SelectedRecordCount   uint64                         `json:"selectedRecordCount"`
+	ContextItems          int                            `json:"contextItems"`
+	Stats                 adapter.MaterializeStats       `json:"stats"`
+	EnvironmentComponents []environment.Component        `json:"environmentComponents,omitempty"`
+	EncodedRecords        [][]byte                       `json:"-"`
+	EnvironmentContents   []environment.ComponentContent `json:"-"`
 }
 
 // PlanMaterializePreview selects no new data. It decodes every verified
@@ -248,6 +253,12 @@ func (p MaterializePreview) Validate() error {
 	if strings.TrimSpace(p.TargetAdapterVersion) == "" || !utf8.ValidString(p.TargetAdapterVersion) {
 		return fmt.Errorf("%w: target adapter version is invalid", ErrMaterializePreview)
 	}
+	if p.SourceSnapshotDigest != "" {
+		decoded, err := hex.DecodeString(p.SourceSnapshotDigest)
+		if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != p.SourceSnapshotDigest {
+			return fmt.Errorf("%w: source snapshot digest is invalid", ErrMaterializePreview)
+		}
+	}
 	if err := validateMaterializeNativeID(p.TargetNativeID); err != nil {
 		return fmt.Errorf("%w: target session ID: %v", ErrMaterializePreview, err)
 	}
@@ -259,6 +270,19 @@ func (p MaterializePreview) Validate() error {
 	}
 	if err := validateMaterializeStats(p.Stats); err != nil {
 		return fmt.Errorf("%w: %v", ErrMaterializePreview, err)
+	}
+	if len(p.EnvironmentComponents) > environment.MaxComponents || len(p.EnvironmentContents) > environment.MaxComponents {
+		return fmt.Errorf("%w: too many environment components", ErrMaterializePreview)
+	}
+	for _, component := range p.EnvironmentComponents {
+		if err := component.Validate(); err != nil {
+			return fmt.Errorf("%w: environment component: %v", ErrMaterializePreview, err)
+		}
+	}
+	for _, content := range p.EnvironmentContents {
+		if err := content.Validate(); err != nil {
+			return fmt.Errorf("%w: environment component content: %v", ErrMaterializePreview, err)
+		}
 	}
 	var recordCount uint64
 	var contextItemCount int

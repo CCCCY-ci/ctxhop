@@ -56,6 +56,11 @@ type sessionSourceEntry struct {
 	RecordCount      uint64    `json:"recordCount,omitempty"`
 	CreatedAt        time.Time `json:"createdAt,omitempty"`
 	UpdatedAt        time.Time `json:"updatedAt,omitempty"`
+
+	// legacyID is retained only for interactive compatibility routing. It is
+	// deliberately not part of the JSON/text projection: v1 IDs are an
+	// implementation detail and the logical Session ID is the public selector.
+	legacyID string
 }
 
 type sessionDiscoverReport struct {
@@ -78,6 +83,7 @@ type sessionDiscoverEntry struct {
 type sessionProjectionSource struct {
 	agent       string
 	nativeID    string
+	legacyID    string
 	nativeKey   string
 	replicaID   string
 	generation  uint64
@@ -101,8 +107,14 @@ func loadSessionRegistryForRead(configDir string, identifierKey []byte, hubID st
 	if err != nil {
 		return sessionhub.Registry{}, err
 	}
-	hub, ok := registry.DefaultHub()
-	if !ok || hub.Descriptor.HubID != hubID {
+	var ok bool
+	for _, candidate := range registry.Hubs {
+		if candidate.Descriptor.HubID == hubID {
+			ok = true
+			break
+		}
+	}
+	if !ok {
 		return sessionhub.Registry{}, errors.New("session: local Session Hub registry belongs to another sync domain")
 	}
 	return registry, nil
@@ -139,13 +151,17 @@ func ensureDefaultSessionRegistry(configDir string, identifierKey []byte) error 
 // for this compatibility phase; this sidecar makes the Project → Session
 // relationship explicit without copying any native records.
 func registerPushedSessions(configDir string, identifierKey []byte, deviceID string, identity project.Identity, pushed []pushedNativeSession) error {
+	return registerPushedSessionsInHub(configDir, identifierKey, deviceID, sessionhub.DefaultHubLogicalID, identity, pushed)
+}
+
+func registerPushedSessionsInHub(configDir string, identifierKey []byte, deviceID, hubName string, identity project.Identity, pushed []pushedNativeSession) error {
 	if len(pushed) == 0 {
 		return nil
 	}
 	if err := config.ValidateDeviceID(deviceID); err != nil {
 		return fmt.Errorf("session: local device identity is invalid: %w", err)
 	}
-	hubID, err := sessionhub.DeriveHubKey(identifierKey, sessionhub.DefaultHubLogicalID)
+	hubID, err := sessionhub.DeriveHubKey(identifierKey, hubName)
 	if err != nil {
 		return err
 	}
@@ -156,7 +172,7 @@ func registerPushedSessions(configDir string, identifierKey []byte, deviceID str
 	if err != nil {
 		return err
 	}
-	hub, ok := registry.DefaultHub()
+	hub, ok := registry.HubByName(hubName)
 	if !ok || hub.Descriptor.HubID != hubID {
 		return errors.New("session: local Session Hub registry belongs to another sync domain")
 	}
@@ -164,7 +180,7 @@ func registerPushedSessions(configDir string, identifierKey []byte, deviceID str
 	if identity.Kind == project.KindManual {
 		identityKind = sessionhub.ProjectIdentityManual
 	}
-	projectRecord, err := registry.EnsureProject(identifierKey, identityKind, identity.Value, time.Now().UTC())
+	projectRecord, err := registry.EnsureProjectInHub(identifierKey, hubName, identityKind, identity.Value, time.Now().UTC())
 	if err != nil {
 		return err
 	}
@@ -186,10 +202,69 @@ func registerPushedSessions(configDir string, identifierKey []byte, deviceID str
 }
 
 func sessionHubAndProject(identifierKey []byte, current project.Project) (sessionHubScope, sessionProjectScope, string, error) {
+	return sessionHubAndProjectInHub(identifierKey, current, sessionhub.DefaultHubLogicalID)
+}
+
+func configuredSessionHub(c *config.Config) string {
+	if c == nil || strings.TrimSpace(c.CurrentHub) == "" {
+		return sessionhub.DefaultHubLogicalID
+	}
+	return strings.TrimSpace(c.CurrentHub)
+}
+
+// configuredProjectHub resolves the explicit project-to-Hub assignment first
+// and falls back to the process-wide current Hub for older configurations.
+// This keeps the common one-Hub workflow unchanged while allowing two local
+// projects to live in different Session Hubs without silently mixing their
+// remote sessions.
+func configuredProjectHub(c *config.Config, identity string) string {
+	if c != nil {
+		if hub := strings.TrimSpace(c.Projects.HubByIdentity[strings.TrimSpace(identity)]); hub != "" {
+			return hub
+		}
+	}
+	return configuredSessionHub(c)
+}
+
+func setConfiguredProjectHub(c *config.Config, identity, hubName string) error {
+	if c == nil {
+		return errors.New("session: configuration is unavailable")
+	}
+	identity = strings.TrimSpace(identity)
+	hubName = strings.TrimSpace(hubName)
+	if identity == "" || hubName == "" {
+		return errors.New("session: project identity and Hub name are required")
+	}
+	if c.Projects.HubByIdentity == nil {
+		c.Projects.HubByIdentity = make(map[string]string)
+	}
+	c.Projects.HubByIdentity[identity] = hubName
+	return nil
+}
+
+func clearConfiguredProjectHub(c *config.Config, identity string) {
+	if c == nil || c.Projects.HubByIdentity == nil {
+		return
+	}
+	delete(c.Projects.HubByIdentity, strings.TrimSpace(identity))
+	if len(c.Projects.HubByIdentity) == 0 {
+		c.Projects.HubByIdentity = nil
+	}
+}
+
+func sessionHubAndProjectForConfig(identifierKey []byte, current project.Project, c *config.Config) (sessionHubScope, sessionProjectScope, string, error) {
+	return sessionHubAndProjectInHub(identifierKey, current, configuredProjectHub(c, current.Identity.Value))
+}
+
+func sessionHubAndProjectInHub(identifierKey []byte, current project.Project, hubName string) (sessionHubScope, sessionProjectScope, string, error) {
 	if !current.Identity.Stable() {
 		return sessionHubScope{}, sessionProjectScope{}, "", errors.New("session: project identity is unstable")
 	}
-	hubID, err := sessionhub.DeriveHubKey(identifierKey, sessionhub.DefaultHubLogicalID)
+	hubName = strings.TrimSpace(hubName)
+	if hubName == "" {
+		hubName = sessionhub.DefaultHubLogicalID
+	}
+	hubID, err := sessionhub.DeriveHubKey(identifierKey, hubName)
 	if err != nil {
 		return sessionHubScope{}, sessionProjectScope{}, "", err
 	}
@@ -201,18 +276,18 @@ func sessionHubAndProject(identifierKey []byte, current project.Project) (sessio
 	if current.Identity.Kind == project.KindManual {
 		identityKind = string(sessionhub.ProjectIdentityManual)
 	}
-	return sessionHubScope{ID: hubID, Name: sessionhub.DefaultHubLogicalID}, sessionProjectScope{
+	return sessionHubScope{ID: hubID, Name: hubName}, sessionProjectScope{
 		ID:           projectID,
 		IdentityKind: identityKind,
 	}, projectID, nil
 }
 
 func buildSessionList(collection listCollection, registry sessionhub.Registry) (sessionListReport, error) {
-	hubScope, projectScope, v2ProjectID, err := sessionHubAndProject(collection.identifierKey, collection.current)
+	hubScope, projectScope, v2ProjectID, err := sessionHubAndProjectInHub(collection.identifierKey, collection.current, collection.hubName)
 	if err != nil {
 		return sessionListReport{}, err
 	}
-	if hub, ok := registry.DefaultHub(); ok {
+	if hub, ok := registry.HubByName(collection.hubName); ok {
 		hubScope = sessionHubScope{ID: hub.Descriptor.HubID, Name: hub.Descriptor.Name}
 	}
 	builder := sessionProjectionBuilder{
@@ -278,6 +353,7 @@ func (b *sessionProjectionBuilder) addRegisteredSessions() {
 			b.addSource(record.Descriptor.SessionID, sessionProjectionSource{
 				agent:     source.Agent,
 				nativeID:  source.NativeSessionID,
+				legacyID:  source.LegacySessionID,
 				nativeKey: nativeKey,
 				deviceID:  b.localDevice,
 				local:     true,
@@ -305,6 +381,7 @@ func (b *sessionProjectionBuilder) addRemoteReplicas(group syncer.ProjectReplica
 		}
 		source := sessionProjectionSource{
 			agent:      agent,
+			nativeID:   safeListText(descriptor.Source.NativeSessionID),
 			nativeKey:  nativeKey,
 			replicaID:  descriptor.ReplicaID,
 			generation: descriptor.Source.Generation,
@@ -328,6 +405,7 @@ func (b *sessionProjectionBuilder) addRemoteReplicas(group syncer.ProjectReplica
 func (b *sessionProjectionBuilder) addRemote(legacyID string, device syncer.MetadataRef) {
 	source := sessionProjectionSource{
 		agent:       "unknown",
+		legacyID:    legacyID,
 		deviceID:    device.DeviceID,
 		recordCount: device.Metadata.RecordCount,
 	}
@@ -356,6 +434,7 @@ func (b *sessionProjectionBuilder) addLocal(ref adapter.SessionRef) {
 	source := sessionProjectionSource{
 		agent:     agent,
 		nativeID:  nativeID,
+		legacyID:  legacyID,
 		nativeKey: nativeKey,
 		deviceID:  b.localDevice,
 		title:     safeListText(ref.Title),
@@ -456,6 +535,9 @@ func (b *sessionProjectionBuilder) addSource(sessionID string, source sessionPro
 		if existing.NativeSessionKey == "" {
 			existing.NativeSessionKey = source.nativeKey
 		}
+		if existing.legacyID == "" {
+			existing.legacyID = source.legacyID
+		}
 		if source.replicaID != "" {
 			existing.ReplicaID = source.replicaID
 		}
@@ -485,6 +567,7 @@ func (b *sessionProjectionBuilder) addSource(sessionID string, source sessionPro
 		RecordCount:      source.recordCount,
 		CreatedAt:        source.createdAt.UTC(),
 		UpdatedAt:        source.updatedAt.UTC(),
+		legacyID:         source.legacyID,
 	})
 }
 
@@ -521,12 +604,12 @@ func sortSessionSources(sources []sessionSourceEntry) {
 	})
 }
 
-func buildSessionDiscoverReport(identifierKey []byte, current project.Project, refs []adapter.SessionRef, registry sessionhub.Registry) (sessionDiscoverReport, error) {
-	hubScope, projectScope, v2ProjectID, err := sessionHubAndProject(identifierKey, current)
+func buildSessionDiscoverReport(identifierKey []byte, current project.Project, hubName string, refs []adapter.SessionRef, registry sessionhub.Registry) (sessionDiscoverReport, error) {
+	hubScope, projectScope, v2ProjectID, err := sessionHubAndProjectInHub(identifierKey, current, hubName)
 	if err != nil {
 		return sessionDiscoverReport{}, err
 	}
-	if hub, ok := registry.DefaultHub(); ok {
+	if hub, ok := registry.HubByName(hubName); ok {
 		hubScope = sessionHubScope{ID: hub.Descriptor.HubID, Name: hub.Descriptor.Name}
 	}
 	entries := make([]sessionDiscoverEntry, 0, len(refs))
@@ -577,7 +660,7 @@ func sessionDeviceLabel(source sessionSourceEntry) string {
 func sessionSourceLabel(source sessionSourceEntry) string {
 	label := source.Agent
 	if source.NativeID != "" {
-		label += ":" + source.NativeID
+		label += ":" + shortNativeSessionID(source.NativeID)
 	} else if source.NativeSessionKey != "" {
 		key := source.NativeSessionKey
 		if len(key) > 12 {
@@ -586,6 +669,20 @@ func sessionSourceLabel(source sessionSourceEntry) string {
 		label += ":key-" + key
 	}
 	return label + "@" + sessionDeviceLabel(source)
+}
+
+// shortNativeSessionID keeps human-readable metadata views useful without
+// exposing a full Agent-native identifier in routine terminal output. The
+// complete value remains available through authorized JSON output when a
+// caller needs it for an explicit local operation.
+func shortNativeSessionID(value string) string {
+	value = safeListText(value)
+	const maxRunes = 12
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return "…" + string(runes[len(runes)-(maxRunes-1):])
 }
 
 func writeSessionListText(w io.Writer, report sessionListReport) error {
@@ -643,7 +740,7 @@ func writeSessionDiscoverText(w io.Writer, report sessionDiscoverReport) error {
 		return err
 	}
 	for _, entry := range report.NativeSessions {
-		if _, err := fmt.Fprintf(w, "- %s/%s state=%s", safeListText(entry.Agent), safeListText(entry.NativeID), safeListText(entry.State)); err != nil {
+		if _, err := fmt.Fprintf(w, "- %s/%s state=%s", safeListText(entry.Agent), shortNativeSessionID(entry.NativeID), safeListText(entry.State)); err != nil {
 			return err
 		}
 		if entry.SessionID != "" {

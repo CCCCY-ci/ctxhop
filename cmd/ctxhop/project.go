@@ -25,28 +25,38 @@ const (
 	projectActionMode     = "mode"
 	projectActionList     = "list"
 	projectActionDiscover = "discover"
+	projectActionMove     = "move"
 
 	projectModeNormal = "normal"
 )
 
 type projectOptions struct {
-	action   string
-	mode     string
-	path     string
-	identity string
-	name     string
-	json     bool
+	action    string
+	mode      string
+	path      string
+	identity  string
+	name      string
+	hub       string
+	projectID string
+	json      bool
 }
 
 type projectListReport struct {
 	Scope    string             `json:"scope"`
+	Hub      sessionHubScope    `json:"hub,omitempty"`
 	Projects []projectListEntry `json:"projects"`
 }
 
 type projectListEntry struct {
-	Identity string   `json:"identity"`
-	Mode     string   `json:"mode"`
-	Roots    []string `json:"roots"`
+	ProjectID string   `json:"projectId,omitempty"`
+	Identity  string   `json:"identity"`
+	Mode      string   `json:"mode"`
+	Roots     []string `json:"roots"`
+	Hub       string   `json:"hub,omitempty"`
+	Lifecycle string   `json:"lifecycle,omitempty"`
+	Remote    bool     `json:"remote,omitempty"`
+	Devices   int      `json:"devices,omitempty"`
+	Sessions  int      `json:"sessions,omitempty"`
 }
 
 type projectDiscoverReport struct {
@@ -71,6 +81,9 @@ func init() {
 }
 
 func runProject(args []string) error {
+	if len(args) == 0 && isInteractiveTerminal(os.Stdin, os.Stdout) {
+		return runInteractiveProjectMenu(os.Stdin, os.Stdout, os.Stderr)
+	}
 	return runProjectWithStreams(args, os.Stdin, os.Stdout, os.Stdout)
 }
 
@@ -110,7 +123,15 @@ func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Wri
 		}
 		return writeProjectDiscoverText(output, report)
 	case projectActionList:
-		report := collectProjectList(c)
+		var report projectListReport
+		if options.hub != "" {
+			report, err = collectProjectHubList(ctx, c, configDir, options.hub, input, prompt)
+			if err != nil {
+				return err
+			}
+		} else {
+			report = collectProjectList(c)
+		}
 		if options.json {
 			return writeProjectListJSON(output, report)
 		}
@@ -120,16 +141,38 @@ func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Wri
 		if err != nil {
 			return err
 		}
+		hubName := configuredProjectHub(c, identity)
+		if options.hub != "" {
+			hubName = options.hub
+		}
 		changed, err := bindProject(c, identity, root)
 		if err != nil {
 			return err
 		}
+		resolvedHubName, registry, err := prepareProjectHubBinding(c, configDir, identity, hubName)
+		if err != nil {
+			return err
+		}
+		hubName = resolvedHubName
+		previousHub := strings.TrimSpace(c.Projects.HubByIdentity[identity])
+		if err := setConfiguredProjectHub(c, identity, hubName); err != nil {
+			return err
+		}
+		assignmentChanged := previousHub != hubName
 		if changed {
 			if err := c.Save(configDir); err != nil {
 				return fmt.Errorf("project bind: save configuration: %w", err)
 			}
 		}
-		return writeProjectMutation(output, projectActionBind, identity, root, !changed)
+		if assignmentChanged && !changed {
+			if err := c.Save(configDir); err != nil {
+				return fmt.Errorf("project bind: save configuration: %w", err)
+			}
+		}
+		if err := savePreparedProjectHubRegistry(configDir, registry); err != nil {
+			return err
+		}
+		return writeProjectMutationWithHub(output, projectActionBind, identity, root, hubName, !changed && !assignmentChanged)
 	case projectActionUnbind:
 		identity, root, err := resolveProjectUnbind(ctx, options)
 		if err != nil {
@@ -138,6 +181,9 @@ func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Wri
 		removed, err := unbindProject(c, identity, root)
 		if err != nil {
 			return err
+		}
+		if identity != "" && !projectIdentityBound(c, identity) {
+			clearConfiguredProjectHub(c, identity)
 		}
 		if err := c.Save(configDir); err != nil {
 			return fmt.Errorf("project unbind: save configuration: %w", err)
@@ -158,6 +204,15 @@ func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Wri
 			}
 		}
 		return writeProjectMode(output, identity, options.mode, !changed)
+	case projectActionMove:
+		report, err := collectProjectMove(ctx, c, configDir, options, input, prompt)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeProjectMoveJSON(output, report)
+		}
+		return writeProjectMoveText(output, report)
 	default:
 		return fmt.Errorf("project: unsupported action %q", options.action)
 	}
@@ -165,7 +220,7 @@ func runProjectWithStreams(args []string, input io.Reader, output, prompt io.Wri
 
 func parseProjectOptions(args []string) (projectOptions, error) {
 	if len(args) == 0 {
-		return projectOptions{}, errors.New("project: expected bind, unbind, mode, list, or discover")
+		return projectOptions{}, errors.New("project: expected bind, unbind, mode, list, discover, or move")
 	}
 
 	switch args[0] {
@@ -177,6 +232,7 @@ func parseProjectOptions(args []string) (projectOptions, error) {
 		flags.StringVar(&options.path, "path", ".", "project directory to bind")
 		flags.StringVar(&options.identity, "identity", "", "use this stable project identity")
 		flags.StringVar(&options.name, "name", "", "create a manual project identity with this name")
+		flags.StringVar(&options.hub, "hub", "", "Session Hub name or ID")
 		if err := flags.Parse(args[1:]); err != nil {
 			return projectOptions{}, fmt.Errorf("project bind: %w", err)
 		}
@@ -253,11 +309,36 @@ func parseProjectOptions(args []string) (projectOptions, error) {
 		flags := flag.NewFlagSet("project list", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
+		flags.StringVar(&options.hub, "hub", "", "Session Hub name or ID")
 		if err := flags.Parse(args[1:]); err != nil {
 			return projectOptions{}, fmt.Errorf("project list: %w", err)
 		}
 		if flags.NArg() != 0 {
 			return projectOptions{}, fmt.Errorf("project list: unexpected argument %q", flags.Arg(0))
+		}
+		return options, nil
+
+	case projectActionMove:
+		var options projectOptions
+		options.action = projectActionMove
+		flags := flag.NewFlagSet("project move", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		flags.StringVar(&options.hub, "to", "", "destination Session Hub name or ID")
+		flags.BoolVar(&options.json, "json", false, "write machine-readable JSON")
+		moveArgs := reorderProjectMoveArgs(args[1:])
+		if err := flags.Parse(moveArgs); err != nil {
+			return projectOptions{}, fmt.Errorf("project move: %w", err)
+		}
+		if flags.NArg() != 1 {
+			return projectOptions{}, errors.New("project move: expected exactly one Project ID")
+		}
+		options.projectID = strings.TrimSpace(flags.Arg(0))
+		if options.projectID == "" || strings.ContainsRune(options.projectID, 0) {
+			return projectOptions{}, errors.New("project move: Project ID is empty or invalid")
+		}
+		options.hub = strings.TrimSpace(options.hub)
+		if options.hub == "" || strings.ContainsRune(options.hub, 0) {
+			return projectOptions{}, errors.New("project move: --to is required")
 		}
 		return options, nil
 
@@ -276,7 +357,7 @@ func parseProjectOptions(args []string) (projectOptions, error) {
 		return options, nil
 
 	default:
-		return projectOptions{}, fmt.Errorf("project: unknown action %q; expected bind, unbind, mode, list, or discover", args[0])
+		return projectOptions{}, fmt.Errorf("project: unknown action %q; expected bind, unbind, mode, list, discover, or move", args[0])
 	}
 }
 
@@ -585,10 +666,37 @@ func writeProjectListText(w io.Writer, report projectListReport) error {
 	if _, err := fmt.Fprintf(w, "scope: %s\n", report.Scope); err != nil {
 		return err
 	}
+	if report.Hub.Name != "" {
+		if _, err := fmt.Fprintf(w, "hub: %s (%s)\n", safeListText(report.Hub.Name), safeListText(report.Hub.ID)); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "projects: %d\n", len(report.Projects)); err != nil {
 		return err
 	}
 	for _, entry := range report.Projects {
+		if report.Scope == "hub" {
+			if _, err := fmt.Fprintf(w, "- project=%s", safeListText(entry.ProjectID)); err != nil {
+				return err
+			}
+			if entry.Identity != "" {
+				if _, err := fmt.Fprintf(w, " identity=%s", safeListText(entry.Identity)); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintf(w, " lifecycle=%s remote=%t devices=%d sessions=%d mode=%s", safeListText(entry.Lifecycle), entry.Remote, entry.Devices, entry.Sessions, safeListText(entry.Mode)); err != nil {
+				return err
+			}
+			if len(entry.Roots) != 0 {
+				if _, err := fmt.Fprintf(w, " roots=%s", strings.Join(entry.Roots, ",")); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
+			continue
+		}
 		roots := "none"
 		if len(entry.Roots) > 0 {
 			roots = strings.Join(entry.Roots, ",")
@@ -613,6 +721,26 @@ func writeProjectMutation(w io.Writer, action, identity, root string, unchanged 
 	}
 	_, err := fmt.Fprintf(w, "root: %s\n", root)
 	return err
+}
+
+func writeProjectMutationWithHub(w io.Writer, action, identity, root, hubName string, unchanged bool) error {
+	if err := writeProjectMutation(w, action, identity, root, unchanged); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(w, "hub: %s\n", safeListText(hubName))
+	return err
+}
+
+func projectIdentityBound(c *config.Config, identity string) bool {
+	if c == nil {
+		return false
+	}
+	for _, binding := range c.Projects.Bindings {
+		if binding.Identity == identity {
+			return true
+		}
+	}
+	return false
 }
 
 func writeProjectUnbind(w io.Writer, removed int) error {

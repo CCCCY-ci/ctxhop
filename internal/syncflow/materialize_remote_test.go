@@ -162,7 +162,7 @@ func TestResolveMaterializeHeadsSupportsPoliciesDeterministically(t *testing.T) 
 		t.Fatalf("all heads = %v, err=%v", all, err)
 	}
 	agentOnly, err := ResolveMaterializeHeads(graph, MaterializeContextAgentOnly, nil, "claude-code")
-	if err != nil || len(agentOnly) != 2 || agentOnly[0] != "a" || agentOnly[1] != "c" {
+	if err != nil || len(agentOnly) != 1 || agentOnly[0] != "c" {
 		t.Fatalf("agent-only heads = %v, err=%v", agentOnly, err)
 	}
 	if _, err := ResolveMaterializeHeads(graph, MaterializeContextCausalHead, nil, ""); !errors.Is(err, ErrMaterializeHeadSelection) {

@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +57,11 @@ type resumeReport struct {
 	Sources         []string                  `json:"sources"`
 	OmittedAgents   []string                  `json:"omittedAgents,omitempty"`
 	OmittedReplicas []string                  `json:"omittedReplicas,omitempty"`
+	SelectedHeads   []string                  `json:"selectedHeads,omitempty"`
+	OmittedHeads    []string                  `json:"omittedHeads,omitempty"`
+	IncludedByAgent map[string]uint64         `json:"includedContributionsByAgent,omitempty"`
+	OmittedByAgent  map[string]uint64         `json:"omittedContributionsByAgent,omitempty"`
+	UnreadableHeads []string                  `json:"unreadableHeads,omitempty"`
 	Environment     *environmentPreviewReport `json:"environment,omitempty"`
 	WorkspaceState  *projectStateReport       `json:"workspaceState,omitempty"`
 }
@@ -84,6 +88,14 @@ func runResumeWithIO(args []string, input io.Reader, output io.Writer) error {
 }
 
 func runResumeWithStreams(args []string, input io.Reader, output, prompt io.Writer) error {
+	return runResumeWithStreamsMode(args, input, output, prompt, false)
+}
+
+// runResumeWithStreamsMode keeps the historical top-level `resume` command
+// compatible with v1 while allowing `session resume` to be an unambiguous
+// Session Hub v2 operation. The latter must not silently fall back to a v1
+// summary when its logical Session has no legacy metadata.
+func runResumeWithStreamsMode(args []string, input io.Reader, output, prompt io.Writer, forceNative bool) error {
 	options, err := parseResumeOptions(args)
 	if err != nil {
 		return err
@@ -111,7 +123,7 @@ func runResumeWithStreams(args []string, input io.Reader, output, prompt io.Writ
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resumeTimeout)
 	defer cancel()
-	report, err := collectResumeWithPrompt(ctx, c, configDir, ".", options, input, output, prompt)
+	report, err := collectResumeWithPromptMode(ctx, c, configDir, ".", options, input, output, prompt, forceNative)
 	if err != nil {
 		return err
 	}
@@ -212,6 +224,10 @@ func collectResume(ctx context.Context, c *config.Config, configDir, projectDir 
 }
 
 func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, projectDir string, options resumeOptions, input io.Reader, output, prompt io.Writer) (resumeReport, error) {
+	return collectResumeWithPromptMode(ctx, c, configDir, projectDir, options, input, output, prompt, false)
+}
+
+func collectResumeWithPromptMode(ctx context.Context, c *config.Config, configDir, projectDir string, options resumeOptions, input io.Reader, output, prompt io.Writer, forceNative bool) (resumeReport, error) {
 	if c == nil {
 		return resumeReport{}, errors.New("resume: configuration is unavailable")
 	}
@@ -253,8 +269,8 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	if err != nil {
 		return resumeReport{}, fmt.Errorf("resume: derive project identity: %w", err)
 	}
-	prompter := &resumePrompter{reader: bufio.NewReader(input), output: output}
-	access, err := openDomainForRead(ctx, c, configDir, prompter.reader, prompter.output, "resume")
+	prompter := newResumePrompter(input, prompt)
+	access, err := openDomainForRead(ctx, c, configDir, prompter.secretInput(), prompter.output, "resume")
 	if err != nil {
 		return resumeReport{}, err
 	}
@@ -262,7 +278,7 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	store := access.Store
 	identities := access.Identities
 	groups, err := syncer.FetchProjectMetadataWithIdentitiesAndDevices(ctx, store, projectID, identities, access.allowedDevices())
-	nativeSelector := options.agent != "" || options.replica != ""
+	nativeSelector := forceNative || options.agent != "" || options.replica != ""
 	if err != nil && !errors.Is(err, syncer.ErrNoRemoteMetadata) {
 		return resumeReport{}, fmt.Errorf("resume: read encrypted session metadata: %w", err)
 	}
@@ -273,7 +289,8 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 
 	var selection resumeSelection
 	if nativeSelector {
-		selection, err = selectNativeResume(ctx, configDir, current, secrets.IdentifierKey, groups, options, prompter, access)
+		hubName := configuredProjectHub(c, current.Identity.Value)
+		selection, err = selectNativeResume(ctx, configDir, current, hubName, secrets.IdentifierKey, groups, options, prompter, access)
 	} else {
 		var candidate resumeCandidate
 		candidate, err = chooseResumeCandidate(groups, projectID, secrets.IdentifierKey, options.session, prompter)
@@ -315,7 +332,10 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 	installation := agent.Installation
 	plan := selection.Plan
 	fingerprint := resumeFingerprint(candidate.Group, plan)
-	if fingerprint == nil {
+	// A pure v2 NativeReplica is source-native session data, not a legacy v1
+	// workspace snapshot. It remains resumable without inventing a workspace
+	// fingerprint; the apply layer will mark that preflight as not checked.
+	if fingerprint == nil && selection.ReplicaID == "" {
 		return resumeReport{}, errors.New("resume: selected session has no matching workspace fingerprint; push it again from the source device")
 	}
 	if selection.LogicalSession != "" {
@@ -331,26 +351,32 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 			}
 		}
 	}
-	localState, err := newEnvironmentContext(c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, configDir, current.Root, groups, access)
-	if err != nil {
-		return resumeReport{}, fmt.Errorf("resume: prepare environment context: %w", err)
-	}
-	environmentSession := findEnvironmentSession(localState.List.Sessions, candidate.Group.SessionID)
-	if environmentSession == nil {
-		return resumeReport{}, errors.New("resume: selected session has no environment metadata")
-	}
-	environmentReport := buildEnvironmentPreviewReport(ctx, localState, environmentSession)
-	if !options.preview && environmentReportHasConflict(environmentReport) {
-		return resumeReport{}, errors.New("resume: environment conflicts require manual resolution")
-	}
-
+	var localState environmentContext
+	var environmentSession *listSession
+	var environmentReport *environmentPreviewReport
 	var workspaceInspection *projectStateInspection
-	if options.workspace {
-		inspection, inspectErr := inspectProjectState(ctx, localState, environmentSession)
-		if inspectErr != nil {
-			return resumeReport{}, fmt.Errorf("resume: inspect workspace: %w", inspectErr)
+	if fingerprint != nil {
+		localState, err = newEnvironmentContext(c.Device.ID, secrets.IdentifierKey, projectID, current.Identity.Value, configDir, current.Root, groups, access)
+		if err != nil {
+			return resumeReport{}, fmt.Errorf("resume: prepare environment context: %w", err)
 		}
-		workspaceInspection = &inspection
+		environmentSession = findEnvironmentSession(localState.List.Sessions, candidate.Group.SessionID)
+		if environmentSession == nil {
+			return resumeReport{}, errors.New("resume: selected session has no environment metadata")
+		}
+		environmentPreview := buildEnvironmentPreviewReport(ctx, localState, environmentSession)
+		environmentReport = &environmentPreview
+		if !options.preview && environmentReportHasConflict(environmentPreview) {
+			return resumeReport{}, errors.New("resume: environment conflicts require manual resolution")
+		}
+
+		if options.workspace {
+			inspection, inspectErr := inspectProjectState(ctx, localState, environmentSession)
+			if inspectErr != nil {
+				return resumeReport{}, fmt.Errorf("resume: inspect workspace: %w", inspectErr)
+			}
+			workspaceInspection = &inspection
+		}
 	}
 
 	baseReport := resumeReport{
@@ -364,15 +390,24 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		LocalRecords:    selection.LocalState.LocalRecords,
 		AppendRecords:   selection.LocalState.AppendRecords,
 		Title:           safeListText(candidate.Summary.Title),
-		Environment:     &environmentReport,
+		Environment:     environmentReport,
 		OmittedAgents:   append([]string(nil), selection.OmittedAgents...),
 		OmittedReplicas: append([]string(nil), selection.OmittedReplicas...),
+		SelectedHeads:   append([]string(nil), selection.SelectedHeads...),
+		OmittedHeads:    append([]string(nil), selection.OmittedHeads...),
+		IncludedByAgent: cloneResumeCounts(selection.IncludedByAgent),
+		OmittedByAgent:  cloneResumeCounts(selection.OmittedByAgent),
+		UnreadableHeads: append([]string(nil), selection.UnreadableHeads...),
 	}
 	if workspaceInspection != nil {
 		baseReport.WorkspaceState = &workspaceInspection.Report
 	}
 
 	if options.preview {
+		if fingerprint == nil {
+			baseReport.Workspace = "not-checked"
+			return baseReport, nil
+		}
 		workspaceReport, compareErr := project.Compare(ctx, current.Root, *fingerprint)
 		if compareErr != nil {
 			return resumeReport{}, fmt.Errorf("resume: preview workspace check failed: %w", compareErr)
@@ -382,43 +417,50 @@ func collectResumeWithPrompt(ctx context.Context, c *config.Config, configDir, p
 		return baseReport, nil
 	}
 
-	if workspaceInspection != nil {
-		if err := applyProjectState(ctx, localState, environmentSession, workspaceInspection); err != nil {
-			return resumeReport{}, fmt.Errorf("resume: restore workspace: %w", err)
-		}
-	}
-	if err := applyEnvironmentComponents(ctx, localState, environmentSession, &environmentReport); err != nil {
-		return resumeReport{}, fmt.Errorf("resume: restore environment: %w", err)
-	}
-
 	result, err := syncflow.ApplyRestore(ctx, layout, current.Root, candidate.Summary.NativeID, plan, syncflow.RestoreApplyOptions{
 		Fingerprint:            fingerprint,
 		AllowLimited:           options.allowLimited,
 		AllowDivergent:         options.allowDivergent,
-		InjectWorkspaceContext: !options.noWorkspaceContext,
+		InjectWorkspaceContext: !options.noWorkspaceContext && fingerprint != nil,
 		Agent:                  layout.Name(),
 		AgentHome:              installation.DataDir,
 		ReplaceExisting:        options.replaceExisting,
+		SkipWorkspacePreflight: fingerprint == nil && selection.ReplicaID != "",
 	})
 	if err != nil {
 		return resumeReport{}, safeResumeApplyError(err)
-	}
-	if err := recordResumeStats(ctx, configDir, c.Device.ID, plan.Devices); err != nil {
-		return resumeReport{}, fmt.Errorf("resume: restore completed but local statistics could not be saved: %w", err)
-	}
-	if err := saveResumeObservedTips(ctx, configDir, projectID, candidate.Group.SessionID, c.Device.ID, candidate.Group.Devices, plan.Devices); err != nil {
-		return resumeReport{}, fmt.Errorf("resume: restore completed but pull state could not be saved: %w", err)
 	}
 	if selection.LogicalSession != "" {
 		if err := saveNativeResumeState(configDir, secrets.IdentifierKey, current, c.Device.ID, selection); err != nil {
 			return resumeReport{}, fmt.Errorf("resume: restore completed but Session Hub binding could not be saved: %w", err)
 		}
+	} else {
+		if err := recordResumeStats(ctx, configDir, c.Device.ID, plan.Devices); err != nil {
+			return resumeReport{}, fmt.Errorf("resume: restore completed but local statistics could not be saved: %w", err)
+		}
+		if err := saveResumeObservedTips(ctx, configDir, projectID, candidate.Group.SessionID, c.Device.ID, candidate.Group.Devices, plan.Devices); err != nil {
+			return resumeReport{}, fmt.Errorf("resume: restore completed but pull state could not be saved: %w", err)
+		}
+	}
+	if workspaceInspection != nil {
+		if err := applyProjectState(ctx, localState, environmentSession, workspaceInspection); err != nil {
+			return resumeReport{}, fmt.Errorf("resume: target session was restored, but workspace restore failed: %w", err)
+		}
+	}
+	if environmentSession != nil && environmentReport != nil {
+		if err := applyEnvironmentComponents(ctx, localState, environmentSession, environmentReport); err != nil {
+			return resumeReport{}, fmt.Errorf("resume: target session was restored, but environment restore failed: %w", err)
+		}
 	}
 	sources := append([]string(nil), plan.Devices...)
 	sort.Strings(sources)
-	baseReport.Environment = &environmentReport
-	baseReport.Workspace = result.Workspace.Verdict.String()
-	baseReport.Differences = len(result.Workspace.Files)
+	baseReport.Environment = environmentReport
+	if fingerprint == nil {
+		baseReport.Workspace = "not-checked"
+	} else {
+		baseReport.Workspace = result.Workspace.Verdict.String()
+		baseReport.Differences = len(result.Workspace.Files)
+	}
 	baseReport.Replaced = result.Replaced
 	baseReport.Merged = result.Merged
 	baseReport.ContextInjected = result.ContextInjected
@@ -494,6 +536,12 @@ func chooseResumeCandidate(groups []syncer.ProjectMetadataRef, projectID string,
 			candidates = append(candidates, resumeCandidate{Group: group, Summary: summary})
 		}
 	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Summary.UpdatedAt.Equal(candidates[j].Summary.UpdatedAt) {
+			return candidates[i].Group.SessionID < candidates[j].Group.SessionID
+		}
+		return candidates[i].Summary.UpdatedAt.After(candidates[j].Summary.UpdatedAt)
+	})
 	if requested != "" {
 		for _, candidate := range candidates {
 			if candidate.Summary.NativeID == requested || candidate.Group.SessionID == requested {
@@ -517,26 +565,16 @@ func chooseResumeCandidate(groups []syncer.ProjectMetadataRef, projectID string,
 	if len(candidates) == 0 {
 		return resumeCandidate{}, errors.New("resume: remote sessions have no supported listing metadata")
 	}
-	if prompter == nil {
-		return resumeCandidate{}, errors.New("resume: interactive session selection is unavailable")
-	}
-	if _, err := fmt.Fprintln(prompter.output, "Available sessions:"); err != nil {
-		return resumeCandidate{}, err
-	}
-	for i, candidate := range candidates {
-		if _, err := fmt.Fprintf(prompter.output, "  %d. %s [%s]\n", i+1, safeListText(candidate.Summary.Title), safeListText(candidate.Summary.NativeID)); err != nil {
-			return resumeCandidate{}, err
-		}
-	}
-	value, err := prompter.line("Select session number: ")
+	selectedID, err := prompter.pickSession(resumePickerItems(candidates))
 	if err != nil {
 		return resumeCandidate{}, err
 	}
-	choice, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || choice < 1 || choice > len(candidates) {
-		return resumeCandidate{}, errors.New("resume: session selection is invalid")
+	for _, candidate := range candidates {
+		if candidate.Group.SessionID == selectedID {
+			return candidate, nil
+		}
 	}
-	return candidates[choice-1], nil
+	return resumeCandidate{}, errors.New("resume: selected session is no longer available")
 }
 
 func bestResumeSummary(group syncer.ProjectMetadataRef) (syncflow.SessionSummary, bool) {
@@ -645,6 +683,17 @@ func writeResumeJSON(w io.Writer, report resumeReport) error {
 	return encoder.Encode(report)
 }
 
+func cloneResumeCounts(values map[string]uint64) map[string]uint64 {
+	if len(values) == 0 {
+		return nil
+	}
+	copyValues := make(map[string]uint64, len(values))
+	for key, value := range values {
+		copyValues[key] = value
+	}
+	return copyValues
+}
+
 func writeResumeText(w io.Writer, report resumeReport) error {
 	label := "resumed"
 	if report.Preview {
@@ -702,6 +751,31 @@ func writeResumeText(w io.Writer, report resumeReport) error {
 			return err
 		}
 	}
+	if len(report.SelectedHeads) != 0 {
+		if _, err := fmt.Fprintf(w, "selected heads: %s\n", safeListText(strings.Join(report.SelectedHeads, ","))); err != nil {
+			return err
+		}
+	}
+	if len(report.OmittedHeads) != 0 {
+		if _, err := fmt.Fprintf(w, "omitted heads: %s\n", safeListText(strings.Join(report.OmittedHeads, ","))); err != nil {
+			return err
+		}
+	}
+	if len(report.IncludedByAgent) != 0 {
+		if _, err := fmt.Fprintf(w, "included contributions: %s\n", safeListText(formatResumeCounts(report.IncludedByAgent))); err != nil {
+			return err
+		}
+	}
+	if len(report.OmittedByAgent) != 0 {
+		if _, err := fmt.Fprintf(w, "omitted contributions: %s\n", safeListText(formatResumeCounts(report.OmittedByAgent))); err != nil {
+			return err
+		}
+	}
+	if len(report.UnreadableHeads) != 0 {
+		if _, err := fmt.Fprintf(w, "unreadable heads: %s\n", safeListText(strings.Join(report.UnreadableHeads, ","))); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(w, "workspace: %s", report.Workspace); err != nil {
 		return err
 	}
@@ -750,9 +824,44 @@ func writeResumeText(w io.Writer, report resumeReport) error {
 	return nil
 }
 
+func formatResumeCounts(values map[string]uint64) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+fmt.Sprint(values[key]))
+	}
+	return strings.Join(parts, ",")
+}
+
 type resumePrompter struct {
+	input  io.Reader
 	reader *bufio.Reader
 	output io.Writer
+}
+
+func newResumePrompter(input io.Reader, output io.Writer) *resumePrompter {
+	return &resumePrompter{input: input, reader: bufio.NewReader(input), output: output}
+}
+
+func (p *resumePrompter) secretInput() io.Reader {
+	if p == nil {
+		return nil
+	}
+	if _, ok := terminalInput(p.input); ok {
+		return p.input
+	}
+	return p.reader
+}
+
+func (p *resumePrompter) pickSession(items []sessionPickerItem) (string, error) {
+	if p == nil {
+		return "", errors.New("resume: interactive session selection is unavailable; specify a session ID")
+	}
+	return runSessionPicker(p.input, p.output, items)
 }
 
 func (p *resumePrompter) secret(prompt string) (string, error) {
@@ -767,6 +876,9 @@ func (p *resumePrompter) secret(prompt string) (string, error) {
 }
 
 func (p *resumePrompter) line(prompt string) (string, error) {
+	if p == nil || p.reader == nil {
+		return "", errors.New("resume: input is required")
+	}
 	if _, err := fmt.Fprint(p.output, prompt); err != nil {
 		return "", err
 	}
