@@ -22,6 +22,7 @@
 /AGENTS.md
 /.agents/
 /docs/
+/UI_REVIEW_BACKLOG.md
 # Keep only the build and release entry points versioned. Ad-hoc local scripts
 # remain ignored.
 scripts/*
