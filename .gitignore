@@ -17,7 +17,11 @@
 !.github/
 !.github/workflows/
 !.github/workflows/*.yml
-docs/
+# Local agent instructions and project notes are kept on the developer
+# workspace and are never part of the repository.
+/AGENTS.md
+/.agents/
+/docs/
 # Keep only the build and release entry points versioned. Ad-hoc local scripts
 # remain ignored.
 scripts/*
